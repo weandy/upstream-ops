@@ -149,6 +149,9 @@ func TestPelicanDetectorExtractionAndValidation(t *testing.T) {
 	if res.Status != storage.IntelligenceStatusNormal {
 		t.Fatalf("expected normal, got %+v", res)
 	}
+	if len(stubSVG.reqs) != 1 || stubSVG.reqs[0].MaxTokens != 4096 {
+		t.Fatalf("expected default pelican max_tokens=4096 for upstream compatibility, got %+v", stubSVG.reqs)
+	}
 	if !strings.Contains(res.ArtifactSVG, "<svg") || !strings.Contains(strings.ToLower(res.ArtifactSVG), "<!doctype html>") {
 		t.Fatalf("expected wrapped HTML containing svg, got %q", res.ArtifactSVG)
 	}

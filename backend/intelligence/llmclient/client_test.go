@@ -256,6 +256,10 @@ func TestStreamTruncationAndHTTPErrorClassification(t *testing.T) {
 		t.Run(fmt.Sprintf("http_%d", tc.status), func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tc.status)
+				if tc.status == 502 {
+					_, _ = w.Write([]byte(`{"title":"Error 502: Bad gateway","detail":"origin overloaded"}`))
+					return
+				}
 				_, _ = w.Write([]byte(`{"error":{"message":"upstream error"}}`))
 			}))
 			defer srv.Close()

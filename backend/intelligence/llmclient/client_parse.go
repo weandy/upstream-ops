@@ -519,6 +519,18 @@ func extractNestedError(obj map[string]any, fallback string) string {
 	if msg := strings.TrimSpace(asString(obj["message"])); msg != "" {
 		return msg
 	}
+	// 兼容 RFC 7807 / Cloudflare 错误体（title + detail）。
+	title := strings.TrimSpace(asString(obj["title"]))
+	detail := strings.TrimSpace(asString(obj["detail"]))
+	if title != "" && detail != "" {
+		return title + " - " + detail
+	}
+	if title != "" {
+		return title
+	}
+	if detail != "" {
+		return detail
+	}
 	return fallback
 }
 

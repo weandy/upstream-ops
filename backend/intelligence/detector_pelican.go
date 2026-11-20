@@ -29,7 +29,8 @@ var (
 )
 
 type pelicanParams struct {
-	Variant string `json:"variant,omitempty"` // original | all-in-one
+	Variant   string `json:"variant,omitempty"` // original | all-in-one
+	MaxTokens int    `json:"max_tokens,omitempty"`
 }
 
 // PelicanDetector 「画鹈鹕」SVG 空间推理与视觉直观检测插件。
@@ -59,6 +60,13 @@ func (PelicanDetector) Meta() DetectorMeta {
 				Options:     []string{"original", "all-in-one"},
 				Description: "original 为经典鹈鹕骑自行车动画；all-in-one 为复杂多元素场景 SVG。",
 			},
+			{
+				Key:         "max_tokens",
+				Label:       "最大输出 Token",
+				Type:        "number",
+				Default:     4096,
+				Description: "默认 4096（兼容绝大多数中转站上限），如上游支持更高上限可按需调大。",
+			},
 		},
 	}
 }
@@ -74,14 +82,18 @@ func (PelicanDetector) ValidateParams(rawJSON string) error {
 	}
 	switch strings.ToLower(strings.TrimSpace(p.Variant)) {
 	case "", "original", "all-in-one":
-		return nil
 	default:
 		return fmt.Errorf("unsupported pelican variant %q (want original or all-in-one)", p.Variant)
 	}
+	if p.MaxTokens < 0 || p.MaxTokens > 32768 {
+		return errors.New("max_tokens must be between 0 and 32768")
+	}
+	return nil
 }
 
 func (PelicanDetector) Run(ctx context.Context, client LLMClient, req DetectorRunRequest) (*DetectorRunResult, error) {
 	variant := "original"
+	maxTokens := 4096
 	if raw := strings.TrimSpace(req.ParamsJSON); raw != "" && raw != "{}" {
 		var p pelicanParams
 		if err := json.Unmarshal([]byte(raw), &p); err != nil {
@@ -89,6 +101,9 @@ func (PelicanDetector) Run(ctx context.Context, client LLMClient, req DetectorRu
 		}
 		if v := strings.ToLower(strings.TrimSpace(p.Variant)); v != "" {
 			variant = v
+		}
+		if p.MaxTokens > 0 {
+			maxTokens = p.MaxTokens
 		}
 	}
 
@@ -99,7 +114,7 @@ func (PelicanDetector) Run(ctx context.Context, client LLMClient, req DetectorRu
 		llmReq.Prompt = pelicanPromptOriginal
 	}
 	if llmReq.MaxTokens <= 0 {
-		llmReq.MaxTokens = 8192
+		llmReq.MaxTokens = maxTokens
 	}
 	if llmReq.Timeout <= 0 {
 		llmReq.Timeout = 180 * time.Second
