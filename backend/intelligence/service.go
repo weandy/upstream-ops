@@ -59,6 +59,9 @@ type TargetOverview struct {
 	DetectorConfig []storage.ProbeDetectorConfig `json:"detector_configs"`
 }
 
+// ResultHook 单次检测完成并落库后的扩展回调（Phase 3 告警状态机由此挂载）。
+type ResultHook func(ctx context.Context, target *storage.ProbeTarget, cfg *storage.ProbeDetectorConfig, res *DetectorRunResult)
+
 // Service 外挂式监测核心领域服务。
 type Service struct {
 	Targets    *storage.ProbeTargets
@@ -69,15 +72,23 @@ type Service struct {
 	ChannelAPI ChannelKeyManager
 	Cipher     *crypto.Cipher
 	Client     LLMClient
+	Registry   *Registry
 	Log        *slog.Logger
 
-	mu             sync.RWMutex
-	proxyConfig    config.ProxyConfig
-	upstreamConfig config.UpstreamConfig
-	keyLocks       sync.Map
+	mu                  sync.RWMutex
+	proxyConfig         config.ProxyConfig
+	upstreamConfig      config.UpstreamConfig
+	keyLocks            sync.Map
+	targetDetectorLocks sync.Map
+	inflight            inflightGroup
+	resultHook          ResultHook
+
+	runnerMu     sync.Mutex
+	runnerCancel context.CancelFunc
+	runnerWG     sync.WaitGroup
 }
 
-// NewService 构造监测核心服务。
+// NewService 构造监测核心服务，并自动注册全部内置监测插件。
 func NewService(
 	db *gorm.DB,
 	cipher *crypto.Cipher,
@@ -88,6 +99,12 @@ func NewService(
 	if client == nil {
 		client = llmclient.New()
 	}
+	reg := NewRegistry()
+	_ = reg.Register(NewLivenessDetector())
+	_ = reg.Register(NewCandyDetector())
+	_ = reg.Register(NewPelicanDetector())
+	_ = reg.Register(NewCustomPromptDetector())
+
 	return &Service{
 		Targets:        storage.NewProbeTargets(db),
 		Configs:        storage.NewProbeDetectorConfigs(db),
@@ -97,6 +114,7 @@ func NewService(
 		ChannelAPI:     channelAPI,
 		Cipher:         cipher,
 		Client:         client,
+		Registry:       reg,
 		Log:            log,
 		upstreamConfig: config.UpstreamConfig{}.WithDefaults(),
 	}
