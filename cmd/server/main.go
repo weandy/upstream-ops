@@ -135,6 +135,8 @@ func main() {
 	intelligenceSvc := intelligence.NewService(db, cipher, channelSvc, llmclient.New(), log)
 	intelligenceSvc.UpdateProxyConfig(cfg.Proxy)
 	intelligenceSvc.UpdateUpstreamConfig(cfg.Upstream)
+	intelAlerter := intelligence.NewAlerter(intelligenceSvc.Liveness, intelligenceSvc.Runs, dispatcher, log)
+	intelligenceSvc.SetResultHook(intelAlerter.HandleResult)
 	intelligenceSvc.Start(intelligence.DefaultRunnerTickInterval, intelligence.DefaultRunnerConcurrency)
 	defer intelligenceSvc.Stop()
 
