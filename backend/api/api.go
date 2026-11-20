@@ -13,6 +13,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/channel"
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/crypto"
+	embedsvc "github.com/bejix/upstream-ops/backend/embed"
 	"github.com/bejix/upstream-ops/backend/gateway"
 	"github.com/bejix/upstream-ops/backend/intelligence"
 	"github.com/bejix/upstream-ops/backend/notify"
@@ -71,6 +72,7 @@ type Deps struct {
 	GatewayUsage  *storage.GatewayUsageLogs
 	ModelPrices   *storage.ModelPriceOverrides
 	Intelligence  *intelligence.Service
+	Embed         *embedsvc.Service
 	Log           *slog.Logger
 
 	// Frontend 可选：传入嵌入的前端 dist 文件系统。nil 表示不挂载（本地开发用 vite dev server）。
@@ -101,6 +103,11 @@ func Register(r *gin.Engine, d *Deps) {
 		}
 	}
 
+	// 公开外部嵌入页面（/embed*）与公开只读状态 API（/api/public/status），免管理端鉴权。
+	if d.Embed != nil {
+		d.Embed.RegisterPublic(r)
+	}
+
 	api := r.Group("/api")
 	if d.Runtime != nil {
 		api.Use(d.Runtime.AuthMiddleware())
@@ -118,6 +125,7 @@ func Register(r *gin.Engine, d *Deps) {
 		registerSettings(api, d)
 		registerGatewayAdmin(api, d)
 		registerIntelligence(api, d)
+		registerEmbedSites(api, d)
 	}
 
 	if d.Frontend != nil {
@@ -139,10 +147,11 @@ func registerFrontend(r *gin.Engine, dist fs.FS) {
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 
-		// 永远不让 SPA fallback 覆盖 API / 健康检查 / 公开转发路径。
-		// /gateway 是前端管理页，必须允许 SPA fallback。
+		// 永远不让 SPA fallback 覆盖 API / 健康检查 / 公开转发 / 外部嵌入路径。
+		// /gateway、/intelligence、/embed-admin 是前端管理页，必须允许 SPA fallback。
 		if strings.HasPrefix(path, "/api/") || path == "/healthz" ||
-			strings.HasPrefix(path, "/v1/") || path == "/v1" {
+			strings.HasPrefix(path, "/v1/") || path == "/v1" ||
+			path == "/embed" || strings.HasPrefix(path, "/embed/") {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}

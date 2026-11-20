@@ -17,6 +17,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/channel"
 	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/bejix/upstream-ops/backend/crypto"
+	embedsvc "github.com/bejix/upstream-ops/backend/embed"
 	"github.com/bejix/upstream-ops/backend/gateway"
 	"github.com/bejix/upstream-ops/backend/intelligence"
 	"github.com/bejix/upstream-ops/backend/intelligence/llmclient"
@@ -142,6 +143,7 @@ func main() {
 	intelligenceSvc.SetResultHook(intelAlerter.HandleResult)
 	intelligenceSvc.Start(time.Duration(intelCfg.TickIntervalSeconds)*time.Second, intelCfg.Concurrency)
 	defer intelligenceSvc.Stop()
+	embedSvc := embedsvc.NewService(db, intelligenceSvc)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
 		s := scheduler.New(scfg, monitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, gatewaySvc, pcfg, log)
@@ -208,6 +210,7 @@ func main() {
 		GatewayUsage:  gatewayUsage,
 		ModelPrices:   modelPrices,
 		Intelligence:  intelligenceSvc,
+		Embed:         embedSvc,
 		Log:           log,
 		Frontend:      frontendFS,
 	})
