@@ -142,6 +142,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&GatewayProvider{},
 		&GatewayUsageLog{},
 		&ModelPriceOverride{},
+		&ProbeTarget{},
+		&ProbeDetectorConfig{},
+		&ProbeLivenessSample{},
+		&ProbeIntelligenceRun{},
+		&EmbedSite{},
 	); err != nil {
 		return err
 	}
