@@ -18,6 +18,8 @@ import (
 	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/bejix/upstream-ops/backend/crypto"
 	"github.com/bejix/upstream-ops/backend/gateway"
+	"github.com/bejix/upstream-ops/backend/intelligence"
+	"github.com/bejix/upstream-ops/backend/intelligence/llmclient"
 	"github.com/bejix/upstream-ops/backend/logger"
 	"github.com/bejix/upstream-ops/backend/monitor"
 	"github.com/bejix/upstream-ops/backend/notify"
@@ -130,6 +132,9 @@ func main() {
 	})
 	dispatcher.UpdateProxyConfig(cfg.Proxy)
 	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, channelSvc, dispatcher, log)
+	intelligenceSvc := intelligence.NewService(db, cipher, channelSvc, llmclient.New(), log)
+	intelligenceSvc.UpdateProxyConfig(cfg.Proxy)
+	intelligenceSvc.UpdateUpstreamConfig(cfg.Upstream)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
 		return scheduler.New(scfg, monitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, gatewaySvc, pcfg, log)
@@ -192,6 +197,7 @@ func main() {
 		GatewayKeys:   gatewayKeys,
 		GatewayUsage:  gatewayUsage,
 		ModelPrices:   modelPrices,
+		Intelligence:  intelligenceSvc,
 		Log:           log,
 		Frontend:      frontendFS,
 	})
