@@ -49,8 +49,9 @@ web/dist/*
 Thumbs.db
 
 # Docker volumes
-data/
+/data/
 postgres-data/
+!backend/intelligence/lmfpd/data/
 
 # Claude / AI tooling
 .claude/
