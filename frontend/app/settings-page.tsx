@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   Bell,
+  BrainCircuit,
   Clock3,
   MonitorCog,
   KeyRound,
@@ -42,6 +43,7 @@ import type {
   NotificationChannelType,
   SystemConfig,
   SystemGatewayConfig,
+  SystemIntelligenceConfig,
 } from "@/lib/api-types";
 import { decimal, money, relativeTime } from "@/lib/format";
 import {
@@ -70,6 +72,12 @@ const defaultGatewayConfig: SystemGatewayConfig = {
   streamKeepaliveSeconds: 15,
   streamIdleTimeoutSeconds: 120,
   streamMaxLineBytes: 8 * 1024 * 1024,
+};
+
+const defaultIntelligenceConfig: SystemIntelligenceConfig = {
+  lmfpdDataDir: "./data/lmfpd",
+  tickIntervalSeconds: 10,
+  concurrency: 3,
 };
 
 function patchGateway(
@@ -128,7 +136,25 @@ export default function SettingsPage() {
       const cfg = query.data.config;
       setForm({
         ...cfg,
+        scheduler: {
+          ...cfg.scheduler,
+          retention: {
+            ...cfg.scheduler.retention,
+            probeLivenessDays: cfg.scheduler.retention.probeLivenessDays ?? 14,
+            probeIntelligenceRunsDays:
+              cfg.scheduler.retention.probeIntelligenceRunsDays ?? 90,
+          },
+        },
+        notifications: {
+          ...cfg.notifications,
+          intelligenceAlertCooldownMinutes:
+            cfg.notifications.intelligenceAlertCooldownMinutes ?? 120,
+        },
         gateway: { ...defaultGatewayConfig, ...(cfg.gateway ?? {}) },
+        intelligence: {
+          ...defaultIntelligenceConfig,
+          ...(cfg.intelligence ?? {}),
+        },
       });
     }
   }, [query.data]);
@@ -718,6 +744,62 @@ export default function SettingsPage() {
                     }
                   />
                 </Field>
+                <Field
+                  label="测活样本保留天数"
+                  description="主动测活时间序列样本的留存时长，默认 14 天，0 表示不清理。"
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    value={String(
+                      form.scheduler.retention.probeLivenessDays ?? 14,
+                    )}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                retention: {
+                                  ...prev.scheduler.retention,
+                                  probeLivenessDays: num(e.target.value),
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
+                <Field
+                  label="智力检测记录保留天数"
+                  description="Candy、lmfpd、Pelican 等历史记录的留存时长，默认 90 天，0 表示不清理。"
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    value={String(
+                      form.scheduler.retention.probeIntelligenceRunsDays ?? 90,
+                    )}
+                    onChange={(e) =>
+                      setForm((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              scheduler: {
+                                ...prev.scheduler,
+                                retention: {
+                                  ...prev.scheduler.retention,
+                                  probeIntelligenceRunsDays: num(e.target.value),
+                                },
+                              },
+                            }
+                          : prev,
+                      )
+                    }
+                  />
+                </Field>
               </div>
             </SectionCard>
           </div>
@@ -879,6 +961,33 @@ export default function SettingsPage() {
                             notifications: {
                               ...prev.notifications,
                               subscriptionAlertCooldownMinutes: num(e.target.value),
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+              <Field
+                label="测活/智力告警冷却分钟"
+                description="同一目标同类降智或测活告警的抑制时间，默认 120 分钟。"
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  value={String(
+                    form.notifications.intelligenceAlertCooldownMinutes ?? 120,
+                  )}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            notifications: {
+                              ...prev.notifications,
+                              intelligenceAlertCooldownMinutes: num(
+                                e.target.value,
+                              ),
                             },
                           }
                         : prev,
@@ -1149,6 +1258,93 @@ export default function SettingsPage() {
                   onChange={(e) =>
                     setForm((prev) =>
                       patchGateway(prev, "usageErrorHeadersJSONBytes", num(e.target.value)),
+                    )
+                  }
+                />
+              </Field>
+            </div>
+          </SectionCard>
+
+          <SectionCard
+            icon={<BrainCircuit className="size-4 text-emerald-600" />}
+            title="模型智力监测"
+            description="配置独立测活/降智监测调度器与外挂 lmfpd 数字指纹参考库目录（优先外挂目录，缺失自动回退内置库）。"
+          >
+            <div className="grid gap-4 md:grid-cols-3">
+              <Field
+                label="外挂 lmfpd 参考库目录"
+                description="存放 shared_detector.bin、models.json、enrollment-suite.json，应用后热重载。"
+              >
+                <Input
+                  value={
+                    form.intelligence?.lmfpdDataDir ??
+                    defaultIntelligenceConfig.lmfpdDataDir
+                  }
+                  placeholder="./data/lmfpd"
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            intelligence: {
+                              ...(prev.intelligence ?? defaultIntelligenceConfig),
+                              lmfpdDataDir: e.target.value,
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+              <Field
+                label="调度扫描间隔（秒）"
+                description="后台检查到期探测任务的周期，默认 10 秒（重启后生效）。"
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  value={String(
+                    form.intelligence?.tickIntervalSeconds ??
+                      defaultIntelligenceConfig.tickIntervalSeconds,
+                  )}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            intelligence: {
+                              ...(prev.intelligence ?? defaultIntelligenceConfig),
+                              tickIntervalSeconds: num(e.target.value),
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+              <Field
+                label="并发执行上限"
+                description="单实例同时运行的探测 Worker 数，默认 3（上限 32，重启后生效）。"
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  max={32}
+                  value={String(
+                    form.intelligence?.concurrency ??
+                      defaultIntelligenceConfig.concurrency,
+                  )}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            intelligence: {
+                              ...(prev.intelligence ?? defaultIntelligenceConfig),
+                              concurrency: num(e.target.value),
+                            },
+                          }
+                        : prev,
                     )
                   }
                 />

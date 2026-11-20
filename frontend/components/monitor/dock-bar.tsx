@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import {
   Bell,
+  BrainCircuit,
   LayoutDashboard,
   Network,
+  PanelTop,
   Plus,
   Settings,
   ShieldCheck,
@@ -171,6 +173,18 @@ export function DockBar() {
       label: "通知渠道",
       path: "/notifications",
       gradient: "from-amber-300 via-orange-500 to-rose-500",
+    },
+    {
+      icon: BrainCircuit,
+      label: "智力监测",
+      path: "/intelligence",
+      gradient: "from-teal-400 via-emerald-500 to-green-600",
+    },
+    {
+      icon: PanelTop,
+      label: "外部嵌入",
+      path: "/embed-admin",
+      gradient: "from-cyan-400 via-sky-500 to-indigo-600",
     },
     {
       icon: Network,

@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
 import {
   Activity,
+  BrainCircuit,
   Github,
   Home,
   LogOut,
   Menu,
   Moon,
   Network,
+  PanelTop,
   RefreshCw,
   Settings,
   Sun,
@@ -38,6 +40,7 @@ import { toast } from "sonner"
 
 export function MonitorHeader() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { theme, setTheme } = useTheme()
   const { username, authDisabled, logout } = useAuth()
   const refresh = useTriggerRefresh()
@@ -205,7 +208,15 @@ export function MonitorHeader() {
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => navigate("/")}>
                 <Home className="size-4" />
-                主页
+                运维监控
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => navigate("/intelligence")}>
+                <BrainCircuit className="size-4" />
+                智力监测
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => navigate("/embed-admin")}>
+                <PanelTop className="size-4" />
+                外部嵌入
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => navigate("/gateway")}>
                 <Network className="size-4" />
@@ -243,21 +254,64 @@ export function MonitorHeader() {
           </DropdownMenu>
 
           {/* desktop: full action row */}
-          <div className="hidden items-center gap-1.5 sm:flex sm:gap-3">
+          <div className="hidden items-center gap-1.5 sm:flex sm:gap-2.5">
             <Tooltip delayDuration={200}>
               <TooltipTrigger asChild>
                 <Button
                   variant="outline"
                   size="icon"
                   onClick={() => navigate("/")}
-                  className="size-8 border-border bg-background text-foreground hover:bg-muted"
-                  aria-label="主页"
+                  className={cn(
+                    "size-8 border-border bg-background text-foreground hover:bg-muted",
+                    location.pathname === "/" && "border-foreground/30 bg-muted",
+                  )}
+                  aria-label="运维监控"
                 >
                   <Home className="size-3.5" />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
-                {"主页"}
+                {"运维监控"}
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip delayDuration={200}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => navigate("/intelligence")}
+                  className={cn(
+                    "size-8 border-border bg-background text-foreground hover:bg-muted",
+                    location.pathname === "/intelligence" && "border-foreground/30 bg-muted",
+                  )}
+                  aria-label="智力监测"
+                >
+                  <BrainCircuit className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {"智力监测"}
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip delayDuration={200}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => navigate("/embed-admin")}
+                  className={cn(
+                    "size-8 border-border bg-background text-foreground hover:bg-muted",
+                    location.pathname === "/embed-admin" && "border-foreground/30 bg-muted",
+                  )}
+                  aria-label="外部嵌入"
+                >
+                  <PanelTop className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {"外部嵌入"}
               </TooltipContent>
             </Tooltip>
 
@@ -267,7 +321,10 @@ export function MonitorHeader() {
                   variant="outline"
                   size="icon"
                   onClick={() => navigate("/gateway")}
-                  className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                  className={cn(
+                    "size-8 border-border bg-background text-foreground hover:bg-muted",
+                    location.pathname === "/gateway" && "border-foreground/30 bg-muted",
+                  )}
                   aria-label="请求网关"
                 >
                   <Network className="size-3.5" />
@@ -284,7 +341,10 @@ export function MonitorHeader() {
                   variant="outline"
                   size="icon"
                   onClick={() => navigate("/settings")}
-                  className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                  className={cn(
+                    "size-8 border-border bg-background text-foreground hover:bg-muted",
+                    location.pathname === "/settings" && "border-foreground/30 bg-muted",
+                  )}
                   aria-label="系统设置"
                 >
                   <Settings className="size-3.5" />
