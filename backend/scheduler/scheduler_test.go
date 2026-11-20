@@ -110,3 +110,39 @@ func TestRunRatesTriggersGatewayResort(t *testing.T) {
 		t.Fatalf("gateway resort calls = %d, want 1", gatewayResort.called)
 	}
 }
+
+func TestRunRetentionDeletesProbeSamplesAndRuns(t *testing.T) {
+	db := openTestDB(t)
+	liveness := storage.NewProbeLivenessSamples(db)
+	runs := storage.NewProbeIntelligenceRuns(db)
+
+	now := time.Now().UTC()
+	_ = liveness.Append(&storage.ProbeLivenessSample{TargetID: 1, ModelName: "m", Success: true, ObservedAt: now.AddDate(0, 0, -20)})
+	_ = liveness.Append(&storage.ProbeLivenessSample{TargetID: 1, ModelName: "m", Success: true, ObservedAt: now.Add(-time.Hour)})
+
+	_ = runs.Append(&storage.ProbeIntelligenceRun{RunUUID: "old-1", TargetID: 1, DetectorKey: "candy", Status: storage.IntelligenceStatusNormal, ObservedAt: now.AddDate(0, 0, -100)})
+	_ = runs.Append(&storage.ProbeIntelligenceRun{RunUUID: "new-1", TargetID: 1, DetectorKey: "candy", Status: storage.IntelligenceStatusNormal, ObservedAt: now.Add(-time.Hour)})
+
+	s := New(
+		config.SchedulerConfig{
+			Retention: config.RetentionConfig{
+				ProbeLivenessDays:         14,
+				ProbeIntelligenceRunsDays: 90,
+			},
+		},
+		nil, nil, nil, nil, nil, nil, nil, nil,
+		config.ProxyConfig{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+	)
+	s.SetIntelligenceRepos(liveness, runs)
+	s.runRetention()
+
+	remSamples, err := liveness.ListRecentByTarget(1, 10)
+	if err != nil || len(remSamples) != 1 {
+		t.Fatalf("expected 1 remaining liveness sample, got %d err=%v", len(remSamples), err)
+	}
+	remRuns, err := runs.ListByTargetAndDetector(1, "candy", 10)
+	if err != nil || len(remRuns) != 1 || remRuns[0].RunUUID != "new-1" {
+		t.Fatalf("expected 1 remaining intelligence run, got %+v err=%v", remRuns, err)
+	}
+}

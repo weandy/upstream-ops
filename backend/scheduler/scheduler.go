@@ -27,6 +27,8 @@ type Scheduler struct {
 	captchas      *storage.Captchas
 	cipher        *crypto.Cipher
 	gatewayResort gatewayRateResortService
+	probeLiveness *storage.ProbeLivenessSamples
+	probeRuns     *storage.ProbeIntelligenceRuns
 	proxy         config.ProxyConfig
 }
 
@@ -63,6 +65,12 @@ func New(
 		gatewayResort: gatewayResort,
 		proxy:         proxy,
 	}
+}
+
+// SetIntelligenceRepos 注入主动测活样本与智力监测记录仓储，用于定时清理过期数据。
+func (s *Scheduler) SetIntelligenceRepos(liveness *storage.ProbeLivenessSamples, runs *storage.ProbeIntelligenceRuns) {
+	s.probeLiveness = liveness
+	s.probeRuns = runs
 }
 
 // Start 注册 cron 任务并启动。
@@ -126,7 +134,9 @@ func (s *Scheduler) hasRetention() bool {
 	return r.MonitorLogsDays > 0 ||
 		r.BalanceSnapshotsDays > 0 ||
 		r.NotificationLogsDays > 0 ||
-		r.AnnouncementsDays > 0
+		r.AnnouncementsDays > 0 ||
+		r.ProbeLivenessDays > 0 ||
+		r.ProbeIntelligenceRunsDays > 0
 }
 
 // runRetention 按配置删除过期历史。任一表失败不影响其它，全部错误写日志。
@@ -178,6 +188,26 @@ func (s *Scheduler) runRetention() {
 			s.log.Warn("retention announcements failed", "err", err)
 		} else if n > 0 {
 			s.log.Info("retention announcements deleted", "rows", n, "before", cutoff)
+		}
+	}
+
+	if r.ProbeLivenessDays > 0 && s.probeLiveness != nil {
+		cutoff := now.AddDate(0, 0, -r.ProbeLivenessDays)
+		n, err := s.probeLiveness.DeleteBefore(cutoff)
+		if err != nil {
+			s.log.Warn("retention probe_liveness_samples failed", "err", err)
+		} else if n > 0 {
+			s.log.Info("retention probe_liveness_samples deleted", "rows", n, "before", cutoff)
+		}
+	}
+
+	if r.ProbeIntelligenceRunsDays > 0 && s.probeRuns != nil {
+		cutoff := now.AddDate(0, 0, -r.ProbeIntelligenceRunsDays)
+		n, err := s.probeRuns.DeleteBefore(cutoff)
+		if err != nil {
+			s.log.Warn("retention probe_intelligence_runs failed", "err", err)
+		} else if n > 0 {
+			s.log.Info("retention probe_intelligence_runs deleted", "rows", n, "before", cutoff)
 		}
 	}
 }

@@ -128,20 +128,25 @@ func main() {
 		SubscriptionMonthlyRemainingThresholdPct: cfg.Notifications.SubscriptionMonthlyRemainingThresholdPct,
 		SubscriptionExpiryThreshold:              time.Duration(cfg.Notifications.SubscriptionExpiryThresholdHours) * time.Hour,
 		SubscriptionAlertCooldown:                time.Duration(cfg.Notifications.SubscriptionAlertCooldownMinutes) * time.Minute,
+		IntelligenceAlertCooldown:                time.Duration(cfg.Notifications.IntelligenceAlertCooldownMinutes) * time.Minute,
 		SendMaxAttempts:                          cfg.Notifications.SendMaxAttempts,
 	})
 	dispatcher.UpdateProxyConfig(cfg.Proxy)
 	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, channelSvc, dispatcher, log)
+	intelCfg := cfg.Intelligence.WithDefaults()
 	intelligenceSvc := intelligence.NewService(db, cipher, channelSvc, llmclient.New(), log)
 	intelligenceSvc.UpdateProxyConfig(cfg.Proxy)
 	intelligenceSvc.UpdateUpstreamConfig(cfg.Upstream)
+	intelligenceSvc.SetLMFPDDataDir(intelCfg.LMFPDDataDir)
 	intelAlerter := intelligence.NewAlerter(intelligenceSvc.Liveness, intelligenceSvc.Runs, dispatcher, log)
 	intelligenceSvc.SetResultHook(intelAlerter.HandleResult)
-	intelligenceSvc.Start(intelligence.DefaultRunnerTickInterval, intelligence.DefaultRunnerConcurrency)
+	intelligenceSvc.Start(time.Duration(intelCfg.TickIntervalSeconds)*time.Second, intelCfg.Concurrency)
 	defer intelligenceSvc.Stop()
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
-		return scheduler.New(scfg, monitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, gatewaySvc, pcfg, log)
+		s := scheduler.New(scfg, monitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, gatewaySvc, pcfg, log)
+		s.SetIntelligenceRepos(intelligenceSvc.Liveness, intelligenceSvc.Runs)
+		return s
 	}
 	sch := schedulerFactory(cfg.Scheduler, cfg.Proxy)
 	if err := sch.Start(); err != nil {
@@ -164,6 +169,7 @@ func main() {
 		cfg.Gateway,
 		schedulerFactory,
 	)
+	runtimeMgr.SetIntelligenceService(intelligenceSvc)
 
 	gin.SetMode(cfg.Server.Mode)
 	router := gin.New()
