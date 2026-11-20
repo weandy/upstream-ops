@@ -15,6 +15,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/crypto"
 	"github.com/bejix/upstream-ops/backend/intelligence/llmclient"
+	"github.com/bejix/upstream-ops/backend/intelligence/lmfpd"
 	"github.com/bejix/upstream-ops/backend/storage"
 	"gorm.io/gorm"
 )
@@ -76,6 +77,7 @@ type Service struct {
 	Cipher     *crypto.Cipher
 	Client     LLMClient
 	Registry   *Registry
+	LMFPD      *lmfpd.Manager
 	Log        *slog.Logger
 
 	mu                  sync.RWMutex
@@ -102,9 +104,11 @@ func NewService(
 	if client == nil {
 		client = llmclient.New()
 	}
+	lmfpdMgr := lmfpd.NewManager("./data/lmfpd")
 	reg := NewRegistry()
 	_ = reg.Register(NewLivenessDetector())
 	_ = reg.Register(NewCandyDetector())
+	_ = reg.Register(NewLMFPDDetector(lmfpdMgr))
 	_ = reg.Register(NewPelicanDetector())
 	_ = reg.Register(NewCustomPromptDetector())
 
@@ -118,8 +122,16 @@ func NewService(
 		Cipher:         cipher,
 		Client:         client,
 		Registry:       reg,
+		LMFPD:          lmfpdMgr,
 		Log:            log,
 		upstreamConfig: config.UpstreamConfig{}.WithDefaults(),
+	}
+}
+
+// SetLMFPDDataDir 更新外挂指纹库目录（优先加载外挂目录，缺失时自动回退内置默认库）。
+func (s *Service) SetLMFPDDataDir(dir string) {
+	if s.LMFPD != nil {
+		s.LMFPD.SetDataDir(dir)
 	}
 }
 
