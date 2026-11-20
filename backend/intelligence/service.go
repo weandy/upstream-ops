@@ -50,13 +50,16 @@ type TargetInput struct {
 	Notes            string `json:"notes"`
 }
 
-// TargetOverview 单目标实时总览（24h 性能 + 90 分钟趋势 + 最近采样 + 检测器配置）。
+// TargetOverview 单目标实时总览（24h 性能 + 90 分钟趋势 + 最近采样 + 检测器配置与最新智力检测结果）。
 type TargetOverview struct {
-	Target         *storage.ProbeTarget          `json:"target"`
-	Performance    PerformanceSummary            `json:"performance"`
-	Trend          []AvailabilityBucket          `json:"trend"`
-	RecentSamples  []storage.ProbeLivenessSample `json:"recent_samples"`
-	DetectorConfig []storage.ProbeDetectorConfig `json:"detector_configs"`
+	Target          *storage.ProbeTarget                    `json:"target"`
+	Performance     PerformanceSummary                      `json:"performance"`
+	Trend           []AvailabilityBucket                    `json:"trend"`
+	RecentSamples   []storage.ProbeLivenessSample           `json:"recent_samples"`
+	DetectorConfig  []storage.ProbeDetectorConfig           `json:"detector_configs"`
+	LatestRuns      map[string]storage.ProbeIntelligenceRun `json:"latest_runs"`
+	CandyPassed24h  int                                     `json:"candy_passed_24h"`
+	CandyChecked24h int                                     `json:"candy_checked_24h"`
 }
 
 // ResultHook 单次检测完成并落库后的扩展回调（Phase 3 告警状态机由此挂载）。
@@ -517,12 +520,38 @@ func (s *Service) GetTargetOverview(targetID uint) (*TargetOverview, error) {
 	if err != nil {
 		return nil, err
 	}
+	latestRuns := make(map[string]storage.ProbeIntelligenceRun)
+	for _, meta := range s.Registry.ListMeta() {
+		if meta.Category == DetectorCategoryLiveness {
+			continue
+		}
+		runs, err := s.Runs.ListByTargetAndDetector(target.ID, meta.Key, 1)
+		if err == nil && len(runs) > 0 {
+			latestRuns[meta.Key] = runs[0]
+		}
+	}
+	candy24h, err := s.Runs.ListByTargetAndDetectorSince(target.ID, DetectorKeyCandy, now.Add(-24*time.Hour))
+	var candyPassed, candyChecked int
+	if err == nil {
+		for _, r := range candy24h {
+			if r.Status == storage.IntelligenceStatusError {
+				continue
+			}
+			candyChecked++
+			if r.Status == storage.IntelligenceStatusNormal {
+				candyPassed++
+			}
+		}
+	}
 	return &TargetOverview{
-		Target:         target,
-		Performance:    perf,
-		Trend:          trend,
-		RecentSamples:  recent,
-		DetectorConfig: cfgs,
+		Target:          target,
+		Performance:     perf,
+		Trend:           trend,
+		RecentSamples:   recent,
+		DetectorConfig:  cfgs,
+		LatestRuns:      latestRuns,
+		CandyPassed24h:  candyPassed,
+		CandyChecked24h: candyChecked,
 	}, nil
 }
 

@@ -135,6 +135,8 @@ func main() {
 	intelligenceSvc := intelligence.NewService(db, cipher, channelSvc, llmclient.New(), log)
 	intelligenceSvc.UpdateProxyConfig(cfg.Proxy)
 	intelligenceSvc.UpdateUpstreamConfig(cfg.Upstream)
+	intelligenceSvc.Start(intelligence.DefaultRunnerTickInterval, intelligence.DefaultRunnerConcurrency)
+	defer intelligenceSvc.Stop()
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
 		return scheduler.New(scfg, monitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, gatewaySvc, pcfg, log)
