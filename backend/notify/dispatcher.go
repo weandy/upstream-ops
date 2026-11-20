@@ -178,6 +178,8 @@ func (d *Dispatcher) suppress(msg Message) bool {
 		cooldown = policy.BalanceLowCooldown
 	case storage.EventSubscriptionDailyLow, storage.EventSubscriptionWeeklyLow, storage.EventSubscriptionMonthlyLow, storage.EventSubscriptionExpiring:
 		cooldown = policy.SubscriptionAlertCooldown
+	case storage.EventProbeDown, storage.EventIntelligenceSuspected, storage.EventIntelligenceError:
+		cooldown = policy.IntelligenceAlertCooldown
 	default:
 		return false
 	}

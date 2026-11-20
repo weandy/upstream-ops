@@ -15,6 +15,7 @@ type settingsConfigView struct {
 	Proxy         config.ProxyConfig         `json:"proxy"`
 	Upstream      config.UpstreamConfig      `json:"upstream"`
 	Gateway       config.GatewayConfig       `json:"gateway"`
+	Intelligence  config.IntelligenceConfig  `json:"intelligence"`
 }
 
 type settingsConfigInput struct {
@@ -25,6 +26,7 @@ type settingsConfigInput struct {
 	Proxy         config.ProxyConfig         `json:"proxy"`
 	Upstream      config.UpstreamConfig      `json:"upstream"`
 	Gateway       config.GatewayConfig       `json:"gateway"`
+	Intelligence  config.IntelligenceConfig  `json:"intelligence"`
 }
 
 func registerSettings(g *gin.RouterGroup, d *Deps) {
@@ -52,6 +54,7 @@ func getSettingsConfig(c *gin.Context, d *Deps) {
 				Proxy:         cfg.Proxy,
 				Upstream:      cfg.Upstream.WithDefaults(),
 				Gateway:       cfg.Gateway.WithDefaults(),
+				Intelligence:  cfg.Intelligence.WithDefaults(),
 			},
 		},
 	})
@@ -79,6 +82,9 @@ func saveSettingsConfig(c *gin.Context, d *Deps) {
 	cfg.Proxy = in.Proxy
 	cfg.Upstream = in.Upstream.WithDefaults()
 	cfg.Gateway = in.Gateway.WithDefaults()
+	if in.Intelligence.LMFPDDataDir != "" || in.Intelligence.TickIntervalSeconds > 0 || in.Intelligence.Concurrency > 0 {
+		cfg.Intelligence = in.Intelligence.WithDefaults()
+	}
 
 	if err := config.Save(path, cfg); err != nil {
 		fail(c, http.StatusInternalServerError, err)

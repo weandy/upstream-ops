@@ -11,6 +11,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/channel"
 	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/bejix/upstream-ops/backend/gateway"
+	"github.com/bejix/upstream-ops/backend/intelligence"
 	"github.com/bejix/upstream-ops/backend/notify"
 	"github.com/bejix/upstream-ops/backend/scheduler"
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,7 @@ type Manager struct {
 	dispatcher       *notify.Dispatcher
 	channelSvc       *channel.Service
 	gatewaySvc       *gateway.Service
+	intelligenceSvc  *intelligence.Service
 	schedulerFactory SchedulerFactory
 	auth             *auth.Service
 	scheduler        *scheduler.Scheduler
@@ -67,6 +69,13 @@ func New(
 		upstreamConfig:   upstreamConfig.WithDefaults(),
 		gatewayConfig:    gatewayConfig.WithDefaults(),
 	}
+}
+
+// SetIntelligenceService 绑定外挂式监测服务，用于热重载代理、上游和外挂指纹库目录配置。
+func (m *Manager) SetIntelligenceService(svc *intelligence.Service) {
+	m.mu.Lock()
+	m.intelligenceSvc = svc
+	m.mu.Unlock()
 }
 
 func (m *Manager) ConfigPath() string {
@@ -130,6 +139,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	dispatcher := m.dispatcher
 	channelSvc := m.channelSvc
 	gatewaySvc := m.gatewaySvc
+	intelligenceSvc := m.intelligenceSvc
 	factory := m.schedulerFactory
 	oldScheduler := m.scheduler
 	m.mu.RUnlock()
@@ -154,6 +164,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 			SubscriptionMonthlyRemainingThresholdPct: cfg.Notifications.SubscriptionMonthlyRemainingThresholdPct,
 			SubscriptionExpiryThreshold:              time.Duration(cfg.Notifications.SubscriptionExpiryThresholdHours) * time.Hour,
 			SubscriptionAlertCooldown:                time.Duration(cfg.Notifications.SubscriptionAlertCooldownMinutes) * time.Minute,
+			IntelligenceAlertCooldown:                time.Duration(cfg.Notifications.IntelligenceAlertCooldownMinutes) * time.Minute,
 			SendMaxAttempts:                          cfg.Notifications.SendMaxAttempts,
 		})
 		dispatcher.UpdateProxyConfig(cfg.Proxy)
@@ -168,6 +179,12 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 		gatewaySvc.UpdateUpstreamConfig(cfg.Upstream)
 		gatewaySvc.UpdateGatewayConfig(gwCfg)
 		gatewaySvc.UpdatePricingConfig(cfg.Pricing)
+	}
+	if intelligenceSvc != nil {
+		intelCfg := cfg.Intelligence.WithDefaults()
+		intelligenceSvc.UpdateProxyConfig(cfg.Proxy)
+		intelligenceSvc.UpdateUpstreamConfig(cfg.Upstream)
+		intelligenceSvc.SetLMFPDDataDir(intelCfg.LMFPDDataDir)
 	}
 
 	newScheduler := factory(cfg.Scheduler, cfg.Proxy)

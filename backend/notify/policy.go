@@ -22,6 +22,7 @@ type Policy struct {
 	SubscriptionMonthlyRemainingThresholdPct float64
 	SubscriptionExpiryThreshold              time.Duration
 	SubscriptionAlertCooldown                time.Duration
+	IntelligenceAlertCooldown                time.Duration
 	SendMaxAttempts                          int
 }
 

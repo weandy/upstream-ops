@@ -268,6 +268,10 @@ const (
 	EventSubscriptionWeeklyLow          NotificationEvent = "subscription_weekly_remaining_low"
 	EventSubscriptionMonthlyLow         NotificationEvent = "subscription_monthly_remaining_low"
 	EventSubscriptionExpiring           NotificationEvent = "subscription_expiring"
+	EventProbeDown                      NotificationEvent = "probe_down"
+	EventProbeRecovered                 NotificationEvent = "probe_recovered"
+	EventIntelligenceSuspected          NotificationEvent = "intelligence_suspected"
+	EventIntelligenceError              NotificationEvent = "intelligence_error"
 )
 
 // NotificationLog 通知发送记录。

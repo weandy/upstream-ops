@@ -25,6 +25,7 @@ type Config struct {
 	Upstream      UpstreamConfig      `mapstructure:"upstream" yaml:"upstream" json:"upstream"`
 	Gateway       GatewayConfig       `mapstructure:"gateway" yaml:"gateway" json:"gateway"`
 	Pricing       PricingConfig       `mapstructure:"pricing" yaml:"pricing" json:"pricing"`
+	Intelligence  IntelligenceConfig  `mapstructure:"intelligence" yaml:"intelligence" json:"intelligence"`
 	Log           LogConfig           `mapstructure:"log" yaml:"log" json:"log"`
 }
 
@@ -98,11 +99,13 @@ type SchedulerConfig struct {
 // 字段为 0 表示该表不清理，永久保留（默认 rate_change_logs 永远保留，是核心业务数据）。
 // Cron 为空时不启动清理任务。
 type RetentionConfig struct {
-	Cron                 string `mapstructure:"cron" yaml:"cron" json:"cron"`
-	MonitorLogsDays      int    `mapstructure:"monitorLogsDays" yaml:"monitorLogsDays" json:"monitorLogsDays"`
-	BalanceSnapshotsDays int    `mapstructure:"balanceSnapshotsDays" yaml:"balanceSnapshotsDays" json:"balanceSnapshotsDays"`
-	NotificationLogsDays int    `mapstructure:"notificationLogsDays" yaml:"notificationLogsDays" json:"notificationLogsDays"`
-	AnnouncementsDays    int    `mapstructure:"announcementsDays" yaml:"announcementsDays" json:"announcementsDays"`
+	Cron                      string `mapstructure:"cron" yaml:"cron" json:"cron"`
+	MonitorLogsDays           int    `mapstructure:"monitorLogsDays" yaml:"monitorLogsDays" json:"monitorLogsDays"`
+	BalanceSnapshotsDays      int    `mapstructure:"balanceSnapshotsDays" yaml:"balanceSnapshotsDays" json:"balanceSnapshotsDays"`
+	NotificationLogsDays      int    `mapstructure:"notificationLogsDays" yaml:"notificationLogsDays" json:"notificationLogsDays"`
+	AnnouncementsDays         int    `mapstructure:"announcementsDays" yaml:"announcementsDays" json:"announcementsDays"`
+	ProbeLivenessDays         int    `mapstructure:"probeLivenessDays" yaml:"probeLivenessDays" json:"probeLivenessDays"`
+	ProbeIntelligenceRunsDays int    `mapstructure:"probeIntelligenceRunsDays" yaml:"probeIntelligenceRunsDays" json:"probeIntelligenceRunsDays"`
 }
 
 // NotificationsConfig 通知去抖策略。所有字段都是"少烦我"取向，默认不丢消息只合并。
@@ -122,6 +125,7 @@ type NotificationsConfig struct {
 	SubscriptionMonthlyRemainingThresholdPct float64 `mapstructure:"subscriptionMonthlyRemainingThresholdPct" yaml:"subscriptionMonthlyRemainingThresholdPct" json:"subscriptionMonthlyRemainingThresholdPct"`
 	SubscriptionExpiryThresholdHours         int     `mapstructure:"subscriptionExpiryThresholdHours" yaml:"subscriptionExpiryThresholdHours" json:"subscriptionExpiryThresholdHours"`
 	SubscriptionAlertCooldownMinutes         int     `mapstructure:"subscriptionAlertCooldownMinutes" yaml:"subscriptionAlertCooldownMinutes" json:"subscriptionAlertCooldownMinutes"`
+	IntelligenceAlertCooldownMinutes         int     `mapstructure:"intelligenceAlertCooldownMinutes" yaml:"intelligenceAlertCooldownMinutes" json:"intelligenceAlertCooldownMinutes"`
 	SendMaxAttempts                          int     `mapstructure:"sendMaxAttempts" yaml:"sendMaxAttempts" json:"sendMaxAttempts"`
 }
 
@@ -310,6 +314,29 @@ type LogConfig struct {
 	Format string `mapstructure:"format" yaml:"format" json:"format"`
 }
 
+// IntelligenceConfig 外挂式主动测活与模型智力监测运行时配置。
+type IntelligenceConfig struct {
+	LMFPDDataDir        string `mapstructure:"lmfpdDataDir" yaml:"lmfpdDataDir" json:"lmfpdDataDir"`
+	TickIntervalSeconds int    `mapstructure:"tickIntervalSeconds" yaml:"tickIntervalSeconds" json:"tickIntervalSeconds"`
+	Concurrency         int    `mapstructure:"concurrency" yaml:"concurrency" json:"concurrency"`
+}
+
+func (c IntelligenceConfig) WithDefaults() IntelligenceConfig {
+	if strings.TrimSpace(c.LMFPDDataDir) == "" {
+		c.LMFPDDataDir = "./data/lmfpd"
+	}
+	if c.TickIntervalSeconds <= 0 {
+		c.TickIntervalSeconds = 10
+	}
+	if c.Concurrency <= 0 {
+		c.Concurrency = 3
+	}
+	if c.Concurrency > 32 {
+		c.Concurrency = 32
+	}
+	return c
+}
+
 // Load 读取 config.yaml（可选）+ APP_SECRET / * 环境变量覆盖。
 //
 // 关键映射：
@@ -393,6 +420,7 @@ func load(path string, withEnv bool) (*Config, string, error) {
 	cfg.Upstream = cfg.Upstream.WithDefaults()
 	cfg.Gateway = cfg.Gateway.WithDefaults()
 	cfg.Pricing = cfg.Pricing.WithDefaults()
+	cfg.Intelligence = cfg.Intelligence.WithDefaults()
 	return cfg, v.ConfigFileUsed(), nil
 }
 
@@ -467,6 +495,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.retention.balanceSnapshotsDays", 90)
 	v.SetDefault("scheduler.retention.notificationLogsDays", 90)
 	v.SetDefault("scheduler.retention.announcementsDays", 90)
+	v.SetDefault("scheduler.retention.probeLivenessDays", 14)
+	v.SetDefault("scheduler.retention.probeIntelligenceRunsDays", 90)
 
 	v.SetDefault("auth.enabled", false)
 	v.SetDefault("auth.username", "admin")
@@ -481,6 +511,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("notifications.subscriptionMonthlyRemainingThresholdPct", 0)
 	v.SetDefault("notifications.subscriptionExpiryThresholdHours", 0)
 	v.SetDefault("notifications.subscriptionAlertCooldownMinutes", 1440)
+	v.SetDefault("notifications.intelligenceAlertCooldownMinutes", 120)
 	v.SetDefault("notifications.sendMaxAttempts", 3)
 
 	v.SetDefault("proxy.protocol", "http")
@@ -510,6 +541,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("gateway.streamKeepaliveSeconds", DefaultGatewayStreamKeepaliveSeconds)
 	v.SetDefault("gateway.streamIdleTimeoutSeconds", DefaultGatewayStreamIdleTimeoutSeconds)
 	v.SetDefault("gateway.streamMaxLineBytes", DefaultGatewayStreamMaxLineBytes)
+
+	v.SetDefault("intelligence.lmfpdDataDir", "./data/lmfpd")
+	v.SetDefault("intelligence.tickIntervalSeconds", 10)
+	v.SetDefault("intelligence.concurrency", 3)
 
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")
