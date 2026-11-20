@@ -40,6 +40,10 @@ export type NotificationEvent =
   | "subscription_weekly_remaining_low"
   | "subscription_monthly_remaining_low"
   | "subscription_expiring"
+  | "probe_down"
+  | "probe_recovered"
+  | "intelligence_suspected"
+  | "intelligence_error"
 
 export interface Channel {
   id: number
@@ -259,6 +263,8 @@ export interface SystemSchedulerRetentionConfig {
   balanceSnapshotsDays: number
   notificationLogsDays: number
   announcementsDays: number
+  probeLivenessDays?: number
+  probeIntelligenceRunsDays?: number
 }
 
 export interface SystemSchedulerConfig {
@@ -276,6 +282,7 @@ export interface SystemNotificationsConfig {
   subscriptionMonthlyRemainingThresholdPct: number
   subscriptionExpiryThresholdHours: number
   subscriptionAlertCooldownMinutes: number
+  intelligenceAlertCooldownMinutes?: number
   sendMaxAttempts: number
 }
 
@@ -310,6 +317,12 @@ export interface SystemGatewayConfig {
   streamMaxLineBytes: number
 }
 
+export interface SystemIntelligenceConfig {
+  lmfpdDataDir: string
+  tickIntervalSeconds: number
+  concurrency: number
+}
+
 export interface SystemConfig {
   app: AppConfig
   auth: SystemAuthConfig
@@ -318,6 +331,7 @@ export interface SystemConfig {
   proxy: SystemProxyConfig
   upstream: SystemUpstreamConfig
   gateway: SystemGatewayConfig
+  intelligence?: SystemIntelligenceConfig
 }
 
 export interface SystemConfigResponse {
@@ -915,4 +929,226 @@ export interface ModelDefaultPrice {
   output_price_per_token: number
   cache_creation_price_per_token: number
   cache_read_price_per_token: number
+}
+
+// ---------- Intelligence & External Embed ----------
+
+export type ProbeSourceKind = "channel" | "direct"
+export type ProbeAPIKeySource = "manual" | "auto_channel_key"
+export type ProbeProtocol = "openai_chat" | "openai_responses" | "anthropic"
+export type ProbeAuthStyle = "bearer" | "x-api-key" | "both"
+export type ProbeFamily = "claude" | "codex" | "grok" | "domestic" | "other"
+export type IntelligenceStatus = "normal" | "suspected" | "error"
+export type EmbedTheme = "paper" | "light" | "dark"
+
+export interface DetectorParamField {
+  key: string
+  label: string
+  type: "string" | "number" | "boolean" | "select" | "textarea"
+  required?: boolean
+  default?: unknown
+  options?: string[]
+  description?: string
+}
+
+export interface DetectorMeta {
+  key: string
+  name: string
+  category: "liveness" | "intelligence"
+  description: string
+  default_interval_seconds: number
+  default_timeout_seconds: number
+  default_alert_threshold: number
+  supports_embed: boolean
+  supports_reasoning: boolean
+  params_schema?: DetectorParamField[]
+}
+
+export interface ProbeTarget {
+  id: number
+  name: string
+  slug: string
+  family: ProbeFamily
+  source_kind: ProbeSourceKind
+  channel_id: number
+  source_group_id?: number | null
+  source_group_name?: string
+  base_url: string
+  api_key_source: ProbeAPIKeySource
+  api_key_id?: number
+  api_key_name?: string
+  api_key_hint: string
+  protocol: ProbeProtocol
+  auth_style: ProbeAuthStyle
+  proxy_enabled: boolean
+  user_agent: string
+  extra_headers_json?: string
+  sort_order: number
+  enabled: boolean
+  embed_visible: boolean
+  notes?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ProbeTargetInput {
+  name: string
+  slug?: string
+  family: ProbeFamily
+  source_kind: ProbeSourceKind
+  channel_id?: number
+  source_group_id?: number | null
+  source_group_name?: string
+  base_url?: string
+  api_key_source: ProbeAPIKeySource
+  api_key?: string
+  protocol: ProbeProtocol
+  auth_style: ProbeAuthStyle
+  proxy_enabled: boolean
+  user_agent?: string
+  extra_headers_json?: string
+  sort_order: number
+  enabled: boolean
+  embed_visible: boolean
+  notes?: string
+}
+
+export interface ProbeDetectorConfig {
+  id: number
+  target_id: number
+  detector_key: string
+  enabled: boolean
+  model_name: string
+  reasoning_effort: string
+  interval_seconds: number
+  timeout_seconds: number
+  alert_enabled: boolean
+  alert_threshold: number
+  params_json?: string
+  embed_visible: boolean
+  last_run_at?: string | null
+  next_run_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DetectorConfigInput {
+  detector_key: string
+  enabled: boolean
+  model_name: string
+  reasoning_effort: string
+  interval_seconds: number
+  timeout_seconds: number
+  alert_enabled: boolean
+  alert_threshold: number
+  params_json: string
+  embed_visible: boolean
+}
+
+export interface ProbeLivenessSample {
+  id: number
+  target_id: number
+  model_name: string
+  success: boolean
+  http_status: number
+  error_class: string
+  error_message?: string
+  first_token_ms: number
+  latency_ms: number
+  output_tokens: number
+  tps: number
+  observed_at: string
+}
+
+export interface ProbePerformanceSummary {
+  window: string
+  sample_count: number
+  success_count: number
+  success_rate: number
+  avg_first_token_ms: number
+  avg_latency_ms: number
+  tps: number
+}
+
+export interface AvailabilityBucket {
+  timestamp: string
+  sample_count: number
+  success_count: number
+  success_rate: number
+  tone: "ok" | "warn" | "down" | "none"
+}
+
+export interface ProbeIntelligenceRun {
+  id: number
+  run_uuid: string
+  target_id: number
+  detector_key: string
+  model_name: string
+  reasoning_effort?: string
+  status: IntelligenceStatus
+  summary: string
+  claimed_rank?: number
+  top_candidate?: string
+  latency_ms: number
+  first_token_ms: number
+  output_tokens: number
+  detail_json?: string
+  artifact_svg?: string
+  error_message?: string
+  shared_cache_key?: string
+  reused_from_run_id?: number | null
+  observed_at: string
+}
+
+export interface TargetOverview {
+  target: ProbeTarget
+  performance: ProbePerformanceSummary
+  trend: AvailabilityBucket[]
+  recent_samples: ProbeLivenessSample[]
+  detector_configs: ProbeDetectorConfig[]
+  latest_runs: Record<string, ProbeIntelligenceRun>
+  candy_passed_24h: number
+  candy_checked_24h: number
+}
+
+export interface DetectorRunResult {
+  status: IntelligenceStatus
+  summary: string
+  claimed_rank?: number
+  top_candidate?: string
+  first_token_ms: number
+  latency_ms: number
+  output_tokens: number
+  detail_json?: string
+  error_message?: string
+  liveness_sample?: ProbeLivenessSample
+}
+
+export interface EmbedSite {
+  id: number
+  slug: string
+  title: string
+  eyebrow: string
+  enabled: boolean
+  refresh_seconds: number
+  allowed_origins: string[]
+  cors_origins: string[]
+  theme: EmbedTheme
+  target_ids: number[]
+  show_identity_column: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface EmbedSiteInput {
+  slug: string
+  title: string
+  eyebrow: string
+  enabled: boolean
+  refresh_seconds: number
+  allowed_origins: string[]
+  cors_origins: string[]
+  theme: EmbedTheme
+  target_ids: number[]
+  show_identity_column: boolean
 }

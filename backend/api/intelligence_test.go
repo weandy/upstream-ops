@@ -205,10 +205,16 @@ func TestIntelligencePluginWorkflowAndArtifactSandboxAPI(t *testing.T) {
 		t.Fatalf("expected svg html body, got %s", rec.Body.String())
 	}
 
-	// 7. 读取 Overview，应包含 latest_runs（candy 与 pelican）与 candy_24h 计数。
+	// 7. 读取 Overview 与批量 Overviews，均应包含 latest_runs（candy 与 pelican）与 candy_24h 计数。
 	rec = httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/intelligence/targets/1/overview", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"latest_runs"`) || !strings.Contains(rec.Body.String(), `"candy_passed_24h":1`) {
 		t.Fatalf("GET overview missing latest_runs/candy_24h: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/intelligence/overviews", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"candy_passed_24h":1`) {
+		t.Fatalf("GET overviews failed: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

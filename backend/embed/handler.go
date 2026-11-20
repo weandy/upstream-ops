@@ -101,7 +101,7 @@ func (s *Service) handlePelicanArtifact(c *gin.Context) {
 		s.renderEmbedError(c, err)
 		return
 	}
-	ApplyPelicanSandboxHeaders(c)
+	ApplyPelicanSandboxHeaders(c, site.AllowedOrigins)
 	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(doc))
 }
 

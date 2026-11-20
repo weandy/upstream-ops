@@ -81,8 +81,13 @@ func normalizeOrigin(raw string, allowSubdomainWildcard bool) (string, error) {
 	return strings.ToLower(scheme + "://" + u.Host), nil
 }
 
-// BuildEmbedCSP 生成严格零脚本 + 动态 frame-ancestors 白名单的 Content-Security-Policy。
-func BuildEmbedCSP(allowedOrigins []string) string {
+// BuildPelicanSandboxCSP 生成单张 Pelican SVG 隔离端点的强沙箱 CSP，并附带与站点一致的 frame-ancestors 祖先链白名单。
+func BuildPelicanSandboxCSP(allowedOrigins []string) string {
+	ancestors := buildFrameAncestors(allowedOrigins)
+	return PelicanSandboxCSP + "; frame-ancestors " + strings.Join(ancestors, " ")
+}
+
+func buildFrameAncestors(allowedOrigins []string) []string {
 	ancestors := []string{"'self'"}
 	seen := map[string]struct{}{"'self'": {}}
 	for _, origin := range allowedOrigins {
@@ -96,6 +101,12 @@ func BuildEmbedCSP(allowedOrigins []string) string {
 		seen[norm] = struct{}{}
 		ancestors = append(ancestors, norm)
 	}
+	return ancestors
+}
+
+// BuildEmbedCSP 生成严格零脚本 + 动态 frame-ancestors 白名单的 Content-Security-Policy。
+func BuildEmbedCSP(allowedOrigins []string) string {
+	ancestors := buildFrameAncestors(allowedOrigins)
 	return "default-src 'none'; style-src 'unsafe-inline'; frame-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors " + strings.Join(ancestors, " ")
 }
 
@@ -108,36 +119,53 @@ func ApplyEmbedHeaders(c *gin.Context, allowedOrigins []string) {
 	c.Header("Content-Security-Policy", BuildEmbedCSP(allowedOrigins))
 }
 
-// ApplyPelicanSandboxHeaders 为单张 Pelican SVG 隔离端点写入最高级别沙箱头。
-func ApplyPelicanSandboxHeaders(c *gin.Context) {
+// ApplyPelicanSandboxHeaders 为单张 Pelican SVG 隔离端点写入最高级别沙箱头（保留祖先链白名单防盗链且兼容外层跨域嵌入）。
+func ApplyPelicanSandboxHeaders(c *gin.Context, allowedOrigins []string) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("Pragma", "no-cache")
 	c.Header("X-Content-Type-Options", "nosniff")
 	c.Header("Referrer-Policy", "no-referrer")
-	c.Header("Content-Security-Policy", PelicanSandboxCSP)
+	c.Header("Content-Security-Policy", BuildPelicanSandboxCSP(allowedOrigins))
 }
 
-// MatchCORSOrigin 判断请求 Origin 是否命中公开接口允许的 CORS 列表。
+// MatchCORSOrigin 判断请求 Origin 是否命中公开接口允许的 CORS 列表（支持精确匹配、子域通配符如 https://*.example.com 及 *）。
 func MatchCORSOrigin(reqOrigin string, allowed []string) (string, bool) {
-	req := strings.ToLower(strings.TrimRight(strings.TrimSpace(reqOrigin), "/"))
-	if req == "" || len(allowed) == 0 {
+	reqNorm, err := normalizeOrigin(strings.TrimSpace(reqOrigin), false)
+	if err != nil || len(allowed) == 0 {
 		return "", false
 	}
 	hasStar := false
 	for _, item := range allowed {
-		s := strings.TrimSpace(item)
+		s := strings.ToLower(strings.TrimRight(strings.TrimSpace(item), "/"))
 		if s == "*" {
 			hasStar = true
 			continue
 		}
-		if strings.ToLower(strings.TrimRight(s, "/")) == req {
-			return reqOrigin, true
+		if s == reqNorm {
+			return reqNorm, true
+		}
+		if matchWildcardOrigin(reqNorm, s) {
+			return reqNorm, true
 		}
 	}
 	if hasStar {
 		return "*", true
 	}
 	return "", false
+}
+
+func matchWildcardOrigin(reqOrigin, pattern string) bool {
+	if !strings.Contains(pattern, "://*.") {
+		return false
+	}
+	pParts := strings.SplitN(pattern, "://*.", 2)
+	rParts := strings.SplitN(reqOrigin, "://", 2)
+	if len(pParts) != 2 || len(rParts) != 2 || pParts[0] != rParts[0] {
+		return false
+	}
+	suffix := "." + pParts[1]
+	host := rParts[1]
+	return len(host) > len(suffix) && strings.HasSuffix(host, suffix)
 }
 
 // ApplyCORSHeaders 为公开只读 JSON API 写入精确的 CORS 响应头。

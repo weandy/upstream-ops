@@ -129,6 +129,16 @@ const notificationEventOptions: Array<{ id: string; label: string; events: Notif
       "subscription_expiring",
     ],
   },
+  {
+    id: "probe_liveness",
+    label: "测活掉线/恢复",
+    events: ["probe_down", "probe_recovered"],
+  },
+  {
+    id: "intelligence_alert",
+    label: "模型降智/探测异常",
+    events: ["intelligence_suspected", "intelligence_error"],
+  },
 ]
 
 const allNotificationEvents = Array.from(

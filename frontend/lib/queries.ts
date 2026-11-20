@@ -14,12 +14,16 @@ import type {
   ChannelPage,
   CostTrendPoint,
   DashboardSummary,
+  DetectorMeta,
+  EmbedSite,
   GatewayUsageStats,
   NotificationChannel,
   NotificationLogPage,
+  ProbeTarget,
   RateChangeLogPage,
   RateSnapshot,
   SystemConfigResponse,
+  TargetOverview,
   UpstreamAnnouncementPage,
 } from "@/lib/api-types"
 
@@ -315,4 +319,20 @@ export function useCaptchaConfigs(enabled = true) {
 
 export function useSystemConfig() {
   return useApi<SystemConfigResponse>("/settings/config")
+}
+
+export function useIntelligenceDetectors() {
+  return useApi<DetectorMeta[]>("/intelligence/detectors", false)
+}
+
+export function useIntelligenceTargets() {
+  return useApi<ProbeTarget[]>("/intelligence/targets")
+}
+
+export function useIntelligenceOverviews() {
+  return useApi<TargetOverview[]>("/intelligence/overviews")
+}
+
+export function useEmbedSites() {
+  return useApi<EmbedSite[]>("/embed-sites")
 }

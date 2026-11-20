@@ -185,6 +185,9 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 		intelligenceSvc.UpdateProxyConfig(cfg.Proxy)
 		intelligenceSvc.UpdateUpstreamConfig(cfg.Upstream)
 		intelligenceSvc.SetLMFPDDataDir(intelCfg.LMFPDDataDir)
+		if err := intelligenceSvc.ReloadLMFPD(); err != nil && m.log != nil {
+			m.log.Warn("reload lmfpd reference bank failed, fallback active", "dir", intelCfg.LMFPDDataDir, "err", err)
+		}
 	}
 
 	newScheduler := factory(cfg.Scheduler, cfg.Proxy)
@@ -204,7 +207,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 		oldScheduler.Stop()
 	}
 
-	sections := []string{"app", "auth", "scheduler", "notifications", "retention", "proxy", "upstream", "gateway", "pricing"}
+	sections := []string{"app", "auth", "scheduler", "notifications", "retention", "proxy", "upstream", "gateway", "pricing", "intelligence"}
 	if m.log != nil {
 		m.log.Info("runtime config applied",
 			"sections", sections,
@@ -214,7 +217,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 
 	return &ApplyResult{
 		AppliedSections: sections,
-		Message:         "app、auth、scheduler、notifications、retention、proxy、upstream、gateway 已立即生效",
+		Message:         "app、auth、scheduler、notifications、retention、proxy、upstream、gateway、intelligence 已立即生效",
 	}, nil
 }
 

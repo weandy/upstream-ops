@@ -22,6 +22,15 @@ func registerIntelligence(g *gin.RouterGroup, d *Deps) {
 		c.JSON(http.StatusOK, gin.H{"data": d.Intelligence.ListDetectorMetas()})
 	})
 
+	ig.GET("/overviews", func(c *gin.Context) {
+		list, err := d.Intelligence.ListTargetOverviews()
+		if err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": list})
+	})
+
 	ig.GET("/targets", func(c *gin.Context) {
 		list, err := d.Intelligence.ListTargets()
 		if err != nil {

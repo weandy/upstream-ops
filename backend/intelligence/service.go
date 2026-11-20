@@ -135,6 +135,15 @@ func (s *Service) SetLMFPDDataDir(dir string) {
 	}
 }
 
+// ReloadLMFPD 强制重新加载当前目录的指纹参考库（支持同目录替换文件后免重启热生效）。
+func (s *Service) ReloadLMFPD() error {
+	if s.LMFPD == nil {
+		return nil
+	}
+	_, err := s.LMFPD.Reload()
+	return err
+}
+
 func (s *Service) UpdateProxyConfig(cfg config.ProxyConfig) {
 	s.mu.Lock()
 	s.proxyConfig = cfg
@@ -512,13 +521,34 @@ func (s *Service) RunLivenessNow(ctx context.Context, targetID uint, modelOverri
 	return sample, nil
 }
 
+// ListTargetOverviews 批量汇总所有监测目标的 24h 性能、90 分钟趋势与最新检测状态（消除前端 N+1 请求）。
+func (s *Service) ListTargetOverviews() ([]TargetOverview, error) {
+	targets, err := s.Targets.List()
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	out := make([]TargetOverview, 0, len(targets))
+	for i := range targets {
+		ov, err := s.buildTargetOverview(&targets[i], now)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *ov)
+	}
+	return out, nil
+}
+
 // GetTargetOverview 获取单目标的 24h 性能汇总、90 分钟趋势、最近采样及检测器配置。
 func (s *Service) GetTargetOverview(targetID uint) (*TargetOverview, error) {
 	target, err := s.Targets.FindByID(targetID)
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
+	return s.buildTargetOverview(target, time.Now().UTC())
+}
+
+func (s *Service) buildTargetOverview(target *storage.ProbeTarget, now time.Time) (*TargetOverview, error) {
 	samples24h, err := s.Liveness.ListByTargetSince(target.ID, now.Add(-24*time.Hour))
 	if err != nil {
 		return nil, err

@@ -3,9 +3,11 @@
 import { Fragment, useEffect, useState } from "react"
 import { toast } from "sonner"
 import {
+  Activity,
   AlertTriangle,
   ArrowUpRight,
   Bell,
+  BrainCircuit,
   Clock3,
   RefreshCw,
   KeyRound,
@@ -64,6 +66,10 @@ const eventMeta: Record<NotificationEvent, { icon: LucideIcon; cls: string }> = 
   subscription_weekly_remaining_low: { icon: AlertTriangle, cls: "text-warning" },
   subscription_monthly_remaining_low: { icon: AlertTriangle, cls: "text-warning" },
   subscription_expiring: { icon: Clock3, cls: "text-warning" },
+  probe_down: { icon: ShieldX, cls: "text-danger" },
+  probe_recovered: { icon: Activity, cls: "text-success" },
+  intelligence_suspected: { icon: BrainCircuit, cls: "text-warning" },
+  intelligence_error: { icon: AlertTriangle, cls: "text-danger" },
 }
 
 const FEED_PREVIEW_SIZE = 10
