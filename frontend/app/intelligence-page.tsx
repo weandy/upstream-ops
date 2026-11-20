@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { toast } from "sonner"
 import {
   Activity,
@@ -25,7 +25,7 @@ import { formatDurationMS, relativeTime } from "@/lib/format"
 import {
   useChannels,
   useIntelligenceDetectors,
-  useIntelligenceTargets,
+  useIntelligenceOverviews,
 } from "@/lib/queries"
 import type {
   DetectorRunResult,
@@ -47,13 +47,11 @@ import { HistoryDrawer } from "@/components/intelligence/history-drawer"
 import { cn } from "@/lib/utils"
 
 export default function IntelligencePage() {
-  const targetsQuery = useIntelligenceTargets()
+  const overviewsQuery = useIntelligenceOverviews()
   const detectorsQuery = useIntelligenceDetectors()
   const channelsQuery = useChannels()
   const { confirm, dialog: confirmDialog } = useConfirm()
 
-  const [overviews, setOverviews] = useState<Record<number, TargetOverview>>({})
-  const [loadingOverviews, setLoadingOverviews] = useState(false)
   const [search, setSearch] = useState("")
   const [familyFilter, setFamilyFilter] = useState<ProbeFamily | "all">("all")
   const [onlyAlert, setOnlyAlert] = useState(false)
@@ -69,7 +67,22 @@ export default function IntelligencePage() {
   }>({ target: null, tab: "liveness" })
   const [runningTargetID, setRunningTargetID] = useState<number | null>(null)
 
-  const targets = useMemo(() => targetsQuery.data ?? [], [targetsQuery.data])
+  const overviewList = useMemo(
+    () => overviewsQuery.data ?? [],
+    [overviewsQuery.data],
+  )
+  const targets = useMemo(
+    () => overviewList.map((ov) => ov.target),
+    [overviewList],
+  )
+  const overviews = useMemo(() => {
+    const map: Record<number, TargetOverview> = {}
+    for (const ov of overviewList) {
+      map[ov.target.id] = ov
+    }
+    return map
+  }, [overviewList])
+  const loadingOverviews = overviewsQuery.loading
   const detectors = useMemo(
     () => detectorsQuery.data ?? [],
     [detectorsQuery.data],
@@ -81,39 +94,6 @@ export default function IntelligencePage() {
     }
     return map
   }, [channelsQuery.data])
-
-  const loadOverviews = useCallback(async (list: ProbeTarget[]) => {
-    if (list.length === 0) {
-      setOverviews({})
-      return
-    }
-    setLoadingOverviews(true)
-    try {
-      const entries = await Promise.all(
-        list.map(async (t) => {
-          try {
-            const ov = await apiFetch<TargetOverview>(
-              `/intelligence/targets/${t.id}/overview`,
-            )
-            return [t.id, ov] as const
-          } catch {
-            return null
-          }
-        }),
-      )
-      const next: Record<number, TargetOverview> = {}
-      for (const item of entries) {
-        if (item) next[item[0]] = item[1]
-      }
-      setOverviews(next)
-    } finally {
-      setLoadingOverviews(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void loadOverviews(targets)
-  }, [targets, loadOverviews])
 
   const kpi = useMemo(() => {
     let enabledCount = 0
@@ -191,7 +171,7 @@ export default function IntelligencePage() {
           )
         }
       }
-      await loadOverviews(targets)
+      overviewsQuery.refetch()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "触发检测失败")
     } finally {
@@ -213,15 +193,14 @@ export default function IntelligencePage() {
         method: "DELETE",
       })
       toast.success(`已删除监测目标 ${target.name}`)
-      targetsQuery.refetch()
+      overviewsQuery.refetch()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "删除失败")
     }
   }
 
   function handleRefreshAll() {
-    targetsQuery.refetch()
-    void loadOverviews(targets)
+    overviewsQuery.refetch()
   }
 
   return (
@@ -348,7 +327,7 @@ export default function IntelligencePage() {
       </div>
 
       {/* 目标列表 */}
-      {targetsQuery.loading && targets.length === 0 ? (
+      {overviewsQuery.loading && targets.length === 0 ? (
         <Card className="border-border shadow-none">
           <CardContent className="flex items-center justify-center py-14 text-sm text-muted-foreground">
             <Loader2 className="mr-2 size-4 animate-spin" />
@@ -695,7 +674,7 @@ export default function IntelligencePage() {
         onOpenChange={setFormOpen}
         target={editingTarget}
         onSaved={() => {
-          targetsQuery.refetch()
+          overviewsQuery.refetch()
         }}
       />
 
@@ -707,8 +686,7 @@ export default function IntelligencePage() {
         target={detectorsTarget}
         detectors={detectors}
         onSaved={() => {
-          targetsQuery.refetch()
-          void loadOverviews(targets)
+          overviewsQuery.refetch()
         }}
       />
 
@@ -720,7 +698,7 @@ export default function IntelligencePage() {
         target={historyState.target}
         initialTab={historyState.tab}
         onChanged={() => {
-          void loadOverviews(targets)
+          overviewsQuery.refetch()
         }}
       />
 

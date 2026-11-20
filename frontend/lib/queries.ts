@@ -23,6 +23,7 @@ import type {
   RateChangeLogPage,
   RateSnapshot,
   SystemConfigResponse,
+  TargetOverview,
   UpstreamAnnouncementPage,
 } from "@/lib/api-types"
 
@@ -326,6 +327,10 @@ export function useIntelligenceDetectors() {
 
 export function useIntelligenceTargets() {
   return useApi<ProbeTarget[]>("/intelligence/targets")
+}
+
+export function useIntelligenceOverviews() {
+  return useApi<TargetOverview[]>("/intelligence/overviews")
 }
 
 export function useEmbedSites() {

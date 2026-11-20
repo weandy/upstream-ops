@@ -125,11 +125,13 @@ export function TargetFormDialog({
   const [loadingGroups, setLoadingGroups] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [ensuringKey, setEnsuringKey] = useState(false)
+  const [keyHint, setKeyHint] = useState(target?.api_key_hint || "")
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (open) {
       setForm(initialForm(target))
+      setKeyHint(target?.api_key_hint || "")
       setError(null)
     }
   }, [open, target])
@@ -165,6 +167,7 @@ export function TargetFormDialog({
         `/intelligence/targets/${target.id}/ensure-key`,
         { method: "POST" },
       )
+      setKeyHint(updated.api_key_hint || "")
       toast.success(`已托管上游专用 Key：${updated.api_key_hint || updated.api_key_name}`)
       onSaved(updated)
     } catch (err) {
@@ -546,8 +549,8 @@ export function TargetFormDialog({
                   <Label>托管状态</Label>
                   <div className="flex items-center gap-2">
                     <span className="truncate text-xs text-muted-foreground">
-                      {target?.api_key_hint
-                        ? `已托管 ${target.api_key_hint}`
+                      {keyHint
+                        ? `已托管 ${keyHint}`
                         : "保存后可一键在渠道创建专用监测 Key"}
                     </span>
                     {isEdit ? (

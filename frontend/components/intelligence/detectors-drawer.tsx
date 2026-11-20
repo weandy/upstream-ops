@@ -410,7 +410,11 @@ export function DetectorsDrawer({
                         />
                         {models.length > 0 ? (
                           <Select
-                            value=""
+                            value={
+                              models.includes(row.model_name)
+                                ? row.model_name
+                                : ""
+                            }
                             onValueChange={(v) =>
                               updateRow(meta.key, { model_name: v })
                             }

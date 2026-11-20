@@ -157,8 +157,9 @@ func TestEmbedSSROverviewSubpagesXSSAndZeroScript(t *testing.T) {
 	if recPelican.Code != http.StatusOK {
 		t.Fatalf("pelican artifact status=%d", recPelican.Code)
 	}
-	if recPelican.Header().Get("Content-Security-Policy") != PelicanSandboxCSP {
-		t.Fatalf("unexpected pelican CSP: %q", recPelican.Header().Get("Content-Security-Policy"))
+	wantPelicanCSP := BuildPelicanSandboxCSP([]string{"https://ooioo.work"})
+	if recPelican.Header().Get("Content-Security-Policy") != wantPelicanCSP {
+		t.Fatalf("unexpected pelican CSP: got %q want %q", recPelican.Header().Get("Content-Security-Policy"), wantPelicanCSP)
 	}
 	if !strings.Contains(recPelican.Body.String(), "<svg") {
 		t.Fatalf("pelican body missing svg")

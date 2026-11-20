@@ -74,6 +74,12 @@ func TestSecurityOriginSanitizeAndCSP(t *testing.T) {
 	if got, ok := MatchCORSOrigin("https://ooioo.work", valid); !ok || got != "https://ooioo.work" {
 		t.Fatalf("expected CORS match, got (%q, %v)", got, ok)
 	}
+	if got, ok := MatchCORSOrigin("https://sub.example.com:8443", valid); !ok || got != "https://sub.example.com:8443" {
+		t.Fatalf("expected wildcard subdomain CORS match, got (%q, %v)", got, ok)
+	}
+	if _, ok := MatchCORSOrigin("https://evil-example.com:8443", valid); ok {
+		t.Fatalf("unexpected wildcard CORS match for non-subdomain")
+	}
 	if _, ok := MatchCORSOrigin("https://attacker.com", valid); ok {
 		t.Fatalf("unexpected CORS match for attacker origin")
 	}
