@@ -18,7 +18,7 @@
 
 ### 1.2 关键约束与工程原则
 - **数据库策略**：默认 **SQLite（WAL 模式，纯 Go 无 CGO `glebarez/sqlite`）**单机零依赖启动；所有新增表结构和查询严格遵循 GORM 跨方言标准 SQL，确保后续平滑兼容 MySQL 与 **PostgreSQL**（预留 `DBDriverPostgres` 扩展位）。
-- **KISS 与低侵入**：不破坏 `upstream-ops` 现有测试与核心模块；原 `backend/gateway` 保留代码不暴力删除，仅新增配置项 `gateway.enabled`（纯运维模式下默认隐藏前端主导航入口，降低心智负担）。
+- **KISS 与低侵入**：不破坏 `upstream-ops` 现有测试与核心模块；完整保留原 `backend/gateway` 后端代码与前端 `/gateway` 导航入口（不做删减或隐藏，便于后续按需使用）。
 - **绝对不耦合转发网关**：监测引擎独立维护自己的目标表 `probe_targets` 与多协议流式客户端 `backend/intelligence/llmclient`，不要求用户先创建 `GatewayGroup`/`GatewayRoute`。
 - **安全边界**：外部 `/embed` 与 AI 生成的 Pelican SVG 必须执行零 JS + 严格 CSP + 双层 `<iframe sandbox="">` 隔离，杜绝 XSS 和凭据泄漏。
 - **Git 与测试纪律**：每个开发阶段走独立特性分支 + TDD（先写单元测试/Mock 测试，再写实现），全量测试与前端构建通过后再合并主干。
@@ -132,7 +132,7 @@ flowchart TB
 | `enabled` | `bool` index | 该检测项是否开启 |
 | `model_name` | `varchar(256)` | 本项测试使用的模型 ID（如 `claude-opus-4-6`、`gpt-5.3-codex`） |
 | `reasoning_effort` | `varchar(32)` | `omit` / `none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
-| `interval_seconds` | `int` | 定时执行间隔（秒），如 `liveness` 默认 120s，`candy` 默认 3600s，`lmfpd` 默认 10800s |
+| `interval_seconds` | `int` | 定时执行间隔（秒），如 `liveness` 默认 180s（3 分钟），`candy` 默认 3600s，`lmfpd` 默认 10800s |
 | `timeout_seconds` | `int` | 单次超时（秒），默认按插件设定（如测活 30s、画鹈鹕 120s） |
 | `alert_enabled` | `bool` | 异常时是否推送通知 |
 | `alert_threshold` | `int` | 连续异常 N 次触发告警（默认 `liveness=3`, `candy=3`, `lmfpd=2`） |
@@ -313,7 +313,7 @@ type Detector interface {
 - `GET / POST / PUT / DELETE /api/embed-sites` — 外部嵌入站点配置 CRUD
 
 #### 前端新增页面与导航调整
-- 顶部导航（`monitor-header.tsx`）：`运维监控 (/)`、`智力监测 (/intelligence)`、`外部嵌入 (/embed-admin)`、`系统设置 (/settings)`（原 `/gateway` 仅当 `config.gateway.enabled=true` 时显示入口，保持纯运维模式界面清爽）。
+- 顶部导航（`monitor-header.tsx`）：保留原有入口并新增两项——`运维监控 (/)`、`智力监测 (/intelligence)`、`外部嵌入 (/embed-admin)`、`请求网关 (/gateway)`、`系统设置 (/settings)`。
 - **`/intelligence` 智力监测面板**：
   - 顶部总览 KPI（监测目标数、24h 平均可用率、正常/疑似降智目标数）+ 全部目标状态列表（带 90 分钟迷你可用率条、TTFT/TPS、模型检测徽章、手动「立即测」按钮）；
   - 目标编辑抽屉：选择来源（已有监控渠道+分组 / 直连端点）、一键托管 Key、协议与代理设置；
@@ -360,16 +360,17 @@ type Detector interface {
 | **Phase 0**<br>基线与配置整理 | `main`（已完成克隆与 tag） | 1. 克隆 `bejix/upstream-ops`、重命名 `upstream` 并禁推、打基准 tag；<br>2. 确认基线 `go test ./...` 全绿；<br>3. 落盘架构设计文档并提交。 | `git status` 干净，原项目全量测试通过。 |
 | **Phase 1**<br>存储层 + 三协议流式客户端 + 主动测活 | `feat/phase1-probe-liveness` | 1. 新增 5 张 GORM 模型与 `AutoMigrate` + 仓储层 (`storage/intelligence.go`, `storage/embed.go`)；<br>2. 实现 `backend/intelligence/llmclient`（Chat/Responses/Anthropic 流式解析、TTFT/TPS、剥离思考链）；<br>3. 实现 `ProbeTarget` CRUD + 自动托管渠道 Key；<br>4. 实现 `liveness` 主动测活插件 + 90 分钟桶/24h 性能聚合 API。 | 新增存储/客户端/测活单测全通过；可通过 API 创建目标并跑通主动测活与指标聚合。 |
 | **Phase 2**<br>插拔式引擎 + Candy / Pelican / CustomPrompt | `feat/phase2-intelligence-plugins` | 1. 实现 `Detector` 插件接口与 `Registry`；<br>2. 实现独立 Tick 调度器 + 并发信号量 + 同源 SHA-256 去重缓存 (`singleflight`)；<br>3. 实现 `candy`、`pelican`、`custom_prompt` 三款插件；<br>4. 暴露插件清单、目标插件配置、手动立即执行、历史查询与 Pelican 沙箱预览 API。 | 插件表驱动单测 + 同源去重单测 + 并发调度单测全通过；手动/定时触发均可落库查看。 |
-| **Phase 3**<br>纯 Go `lmfpd` 数字指纹 + 告警联动 + 数据清理 | `feat/phase3-lmfpd-and-alerts` | 1. 集成 MIT 协议 `lm-detector` 纯 Go 特征提取/打分与内嵌参考库（`detectors/lmfpd`）；<br>2. 扩展 `notify` 4 类监测事件（`probe_down`/`probe_recovered`/`intelligence_suspected`/`intelligence_error`）与冷却去抖；<br>3. 在 `scheduler.runRetention` 接入测活样本（默认 14 天）与智力记录（默认 90 天）自动清理；<br>4. 增加 `gateway.enabled` 配置开关（外挂纯运维默认关闭网关入口）。 | `lmfpd` 回归单测通过；告警连续阈值与冷却单测通过；数据清理单测通过。 |
+| **Phase 3**<br>纯 Go `lmfpd` 数字指纹 + 告警联动 + 数据清理 | `feat/phase3-lmfpd-and-alerts` | 1. 集成 MIT 协议 `lm-detector` 纯 Go 特征提取/打分（支持 `./data/lmfpd/` 外挂目录优先加载 + 内置/一键拉取默认权重库）；<br>2. 扩展 `notify` 4 类监测事件（`probe_down`/`probe_recovered`/`intelligence_suspected`/`intelligence_error`）与冷却去抖；<br>3. 在 `scheduler.runRetention` 接入测活样本（默认 14 天）与智力记录（默认 90 天）自动清理。 | `lmfpd` 回归单测通过；告警连续阈值与冷却单测通过；数据清理单测通过。 |
 | **Phase 4**<br>零 JS 外部嵌入组件（`/embed`）与公开状态 API | `feat/phase4-embed-ssr` | 1. 实现 `backend/embed`：Go `html/template` 零 JS SSR（主表 + Candy/Fingerprint/Pelican 详情页 + 单张双沙箱 SVG 端点）；<br>2. 动态 CSP `frame-ancestors` 白名单与 `<meta http-equiv="refresh">`；<br>3. 实现 `EmbedSite` 管理 CRUD 与 `/api/public/status` 公开 JSON 接口；<br>4. `api.Register` 与 `AuthMiddleware` 安全放行与 SPA fallback 隔离。 | Embed SSR 单测验证零 `<script>`、XSS 转义、CSP 白名单与双沙箱隔离全通过。 |
-| **Phase 5**<br>前端管理面板（智力监测 + 外部嵌入台） | `feat/phase5-frontend-ui` | 1. 新增 `/intelligence` 页面（总览、目标管理、动态插件开关配置矩阵、一键检测、历史详情抽屉与 Pelican 沙箱预览）；<br>2. 新增 `/embed-admin` 页面（站点配置、白名单域名、实时预览与一键复制 `<iframe>` 代码）；<br>3. 更新导航栏、通知订阅事件选项、系统设置保留天数与网关入口开关；<br>4. 端到端联调与本地编译嵌入验证。 | `tsc --noEmit`、`npm run build`、`go test ./...` 全通过；本地实机可演示全流程与外部 iframe 嵌入。 |
+| **Phase 5**<br>前端管理面板（智力监测 + 外部嵌入台） | `feat/phase5-frontend-ui` | 1. 新增 `/intelligence` 页面（总览、目标管理、动态插件开关配置矩阵、一键检测、历史详情抽屉与 Pelican 沙箱预览）；<br>2. 新增 `/embed-admin` 页面（站点配置、白名单域名、实时预览与一键复制 `<iframe>` 代码）；<br>3. 更新导航栏（保留原 `/gateway` 入口）、通知订阅事件选项、系统设置保留天数配置；<br>4. 端到端联调与本地编译嵌入验证。 | `tsc --noEmit`、`npm run build`、`go test ./...` 全通过；本地实机可演示全流程与外部 iframe 嵌入。 |
 | **Phase 6**（后续按需）<br>PostgreSQL 驱动适配 | `feat/phase6-postgres` | 在 `storage.Open` 接入 `gorm.io/driver/postgres`、`config` 补充 `sslmode`、`docker-compose.postgres.yml` 与 PG 集成测试。 | SQLite / MySQL / PostgreSQL 三库 AutoMigrate 与核心查询全部通过。 |
 
 ---
 
-## 7. 待确认细节（审阅后即可启动 Phase 1）
+## 7. 已确认决策记录（Decision Record）
 
-在正式开始写 Phase 1 代码之前，请确认以下 3 个小细节是否有调整意见：
-1. **关于 `lmfpd` 参考数据体积**：`Ikaleio/lm-detector` 的二进制校准权重（`shared_detector.bin`）约 **5.2 MB**。你倾向直接用 Go `embed` 打进单二进制（开箱即用，二进制大 ~5MB），还是放在运行目录 `./data/lmfpd/` 下外挂加载（方便日后无需重编译即可更新新模型指纹库）？**推荐：支持外挂目录优先，同时内置或一键脚本下载默认库**。
-2. **关于原有 `/gateway` 页面**：是否按上述方案在 `config.yaml` 新增 `gateway.enabled`（默认 `false`，纯运维模式下隐藏顶部“请求网关”图标，未来想用时改为 `true` 即可恢复）？
-3. **关于 `liveness` 主动测活默认策略**：主动测活会产生极少量 Token 消耗，默认建议**新建目标时不自动开启，由用户勾选开启并设置间隔（默认 3 分钟）**，这样最安全省钱，是否符合你的预期？
+以下 3 项关键设计细节已由项目负责人审阅定稿，作为 Phase 1–5 开发的既定约束：
+
+1. **`lmfpd` 指纹参考库加载策略**：采用**外挂目录 `./data/lmfpd/` 优先加载 + 内置/一键拉取默认权重库**方案，确保后续新模型发布时无需重新编译即可更新指纹权重。
+2. **原 `/gateway` 请求转发网关保留策略**：**完整保留**原有后端转发网关与前端顶部 `/gateway` 导航入口，不做隐藏或删除；同时新增的监测模块保持与转发网关完全解耦（独立 `probe_targets` 与 `llmclient`）。
+3. **主动测活默认开关策略**：新建监测目标时，默认**不自动开启定时测活**（避免未配置就绪时误消耗 Token），由用户在目标的插拔式插件面板中显式勾选开启，默认检测间隔 **180 秒（3 分钟）**。
