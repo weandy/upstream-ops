@@ -14,7 +14,7 @@
 2. **主动测活与性能采集**：独立于转发网关，支持对任意监控渠道/分组或直连端点发起轻量级流式主动测活，采集 **TPS、首字延迟（TTFT）、平均总延迟、24 小时成功率、近 90 分钟逐分钟可用率趋势**。
 3. **插拔式模型降智/智力监测引擎**：后台内置并统一注册全部监测插件（`liveness`、`candy`、`lmfpd`、`pelican`、`custom_prompt`，未来可扩展 `juice`/`meow` 等），用户可按**目标粒度**自由勾选开启哪些检测项、独立配置模型/推理强度/执行周期。
 4. **第一期处置策略**：检测异常仅做**历史留存 + 推送告警（复用现有 7 渠道通知与去抖体系）+ 管理面板与外部 Embed 展示**，不做自动禁用/修改上游路由联动。
-5. **外部可导入嵌入组件**：完整实现类似 `pilot.bothyouandme.com/embed?site=ooioo` 的**零 JS 纯服务端渲染（SSR）+ 严格 CSP 白名单**嵌入体系，日后外部任意站点（NewAPI / Sub2API 首页或独立官网）仅需粘贴一行 `<iframe sandbox ...>` 即可安全导入。
+5. **外部可导入嵌入组件**：完整实现**零 JS 纯服务端渲染（SSR）+ 严格 CSP 白名单**嵌入体系（如 `/embed?site=portal`），日后外部任意站点（NewAPI / Sub2API 首页或独立官网）仅需粘贴一行 `<iframe sandbox ...>` 即可安全导入。
 
 ### 1.2 关键约束与工程原则
 - **数据库策略**：默认 **SQLite（WAL 模式，纯 Go 无 CGO `glebarez/sqlite`）**单机零依赖启动；所有新增表结构和查询严格遵循 GORM 跨方言标准 SQL，确保后续平滑兼容 MySQL 与 **PostgreSQL**（预留 `DBDriverPostgres` 扩展位）。
@@ -186,7 +186,7 @@ flowchart TB
 | `observed_at` | `time.Time` index(target_det_time) | 检测完成时间 |
 
 #### 表 5：`embed_sites`（外部嵌入组件站点配置）
-支持配置 1 个或多个对外 Embed 实例（如 `?site=default`、`?site=ooioo`），每个实例拥有独立的样式、目标筛选与防盗链白名单。
+支持配置 1 个或多个对外 Embed 实例（如 `?site=default`、`?site=portal`），每个实例拥有独立的样式、目标筛选与防盗链白名单。
 
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
@@ -198,7 +198,7 @@ flowchart TB
 | `refresh_seconds` | `int` | 自动刷新间隔（默认 `15`，0 表示关闭自动刷新） |
 | `allowed_origins_json` | `text` | 允许嵌入的父站点 Origin 列表 JSON（生成 CSP `frame-ancestors`） |
 | `cors_origins_json` | `text` | 允许跨域调用 `/api/public/status` 的 Origin 列表 JSON |
-| `theme` | `varchar(32)` | `paper`（暖纸风，复刻 `ooioo`）/ `light` / `dark` |
+| `theme` | `varchar(32)` | `paper`（暖纸风）/ `light` / `dark` |
 | `target_ids_json` | `text` | 指定展示的 `probe_targets.id` 有序数组（空则展示全部 `embed_visible=true`） |
 | `show_identity_column` | `bool` | 是否展示“模型检测”列 |
 | `created_at` / `updated_at` | `time.Time` | 时间戳 |
@@ -282,7 +282,7 @@ type Detector interface {
 
 ### 3.4 外部嵌入组件设计（`backend/embed/`）
 
-完全借鉴 `pilot.bothyouandme.com/embed` 的零 JS 极简安全架构：
+采用零 JS 极简安全架构：
 
 | 路由（公开免管理台鉴权） | 返回类型 | 核心特性 |
 | :--- | :--- | :--- |

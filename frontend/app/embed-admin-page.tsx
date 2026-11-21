@@ -178,7 +178,7 @@ export default function EmbedAdminPage() {
   async function handleSave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!form.slug.trim()) {
-      toast.error("请填写站点 Slug，例如 default 或 ooioo")
+      toast.error("请填写站点 Slug，例如 default 或 portal")
       return
     }
     const payload: EmbedSiteInput = {
@@ -363,7 +363,7 @@ export default function EmbedAdminPage() {
                   <Input
                     id="es-slug"
                     className="h-8 font-mono text-xs"
-                    placeholder="default 或 ooioo"
+                    placeholder="default 或 portal"
                     value={form.slug}
                     onChange={(e) => setForm({ ...form, slug: e.target.value })}
                     required
@@ -474,7 +474,7 @@ export default function EmbedAdminPage() {
                     id="es-allowed"
                     rows={3}
                     className="font-mono text-xs"
-                    placeholder={"https://ooioo.work\nhttps://*.example.com"}
+                    placeholder={"https://portal.example.com\nhttps://*.example.com"}
                     value={form.allowed_origins_text}
                     onChange={(e) =>
                       setForm({ ...form, allowed_origins_text: e.target.value })
@@ -493,7 +493,7 @@ export default function EmbedAdminPage() {
                     id="es-cors"
                     rows={2}
                     className="font-mono text-xs"
-                    placeholder={"https://ooioo.work"}
+                    placeholder={"https://portal.example.com"}
                     value={form.cors_origins_text}
                     onChange={(e) =>
                       setForm({ ...form, cors_origins_text: e.target.value })

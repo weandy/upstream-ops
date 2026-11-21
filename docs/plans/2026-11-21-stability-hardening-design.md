@@ -60,7 +60,7 @@ flowchart LR
 
 #### 关键设计细节
 1. **读放大削峰效果**：
-   * 在 `TTL = 5s` + `singleflight` 保护下，即使 300 人同时刷 `/embed?site=ooioo`，每 5 秒最多执行 **1 次** `BuildSiteSnapshot`，SQLite 读负载降低 **99%+**，而相对 15 秒刷新周期几乎零鲜度损失。
+   * 在 `TTL = 5s` + `singleflight` 保护下，即使 300 人同时刷 `/embed?site=portal`，每 5 秒最多执行 **1 次** `BuildSiteSnapshot`，SQLite 读负载降低 **99%+**，而相对 15 秒刷新周期几乎零鲜度损失。
 2. **动态响应头不进入静态缓存**：
    * `Content-Security-Policy`、`Access-Control-Allow-Origin`（依赖请求 `Origin` 头）每次响应时仍由 `ApplyEmbedHeaders` / `ApplyCORSHeaders` 动态计算输出，避免不同 `Origin` 请求串缓存！
 3. **写穿透主动失效（Zero-Stale Admin Preview）**：
@@ -72,7 +72,7 @@ flowchart LR
 ### 2.3 轻量按 IP 令牌桶限流设计（`backend/embed/ratelimit.go`）
 
 #### 为什么选令牌桶而非固定窗口？
-一个正常访客打开含 8 行 Pelican 缩略图的 `/embed?site=ooioo` 页面时，浏览器会在 **100ms 内突发并发 1 个主表 + 8 个缩略图 = 9 个请求**。令牌桶天然支持合理的短时突发（`Burst`），同时压制持续高频刷接口的爬虫。
+一个正常访客打开含 8 行 Pelican 缩略图的 `/embed?site=portal` 页面时，浏览器会在 **100ms 内突发并发 1 个主表 + 8 个缩略图 = 9 个请求**。令牌桶天然支持合理的短时突发（`Burst`），同时压制持续高频刷接口的爬虫。
 
 #### 核心机制
 * **限流范围**：仅作用于 `embed.Service.RegisterPublic` 注册的免鉴权公开路由（`/embed*` 与 `/api/public/status`），绝不干扰管理台 `/api/*` 与 `/healthz`。
@@ -248,7 +248,7 @@ sequenceDiagram
 ### 6.2 自动化测试与压测验收清单
 
 1. **模块一测试（`backend/embed/cache_test.go`、`ratelimit_test.go`）**：
-   * **并发防击穿测试**：50 个 goroutine 并发请求 `/embed?site=ooioo`，验证底层 `BuildSiteSnapshot` 只执行 **1 次**，后续请求命中 `X-Embed-Cache: HIT`；
+   * **并发防击穿测试**：50 个 goroutine 并发请求 `/embed?site=portal`，验证底层 `BuildSiteSnapshot` 只执行 **1 次**，后续请求命中 `X-Embed-Cache: HIT`；
    * **主动失效测试**：更新站点主题 `paper -> dark` 后无需等 TTL，立刻返回新主题；
    * **多 Origin CORS 隔离测试**：缓存命中状态下，允许 Origin 返回匹配头、非法 Origin 不返回 CORS 头；
    * **令牌桶限流测试**：验证 `Burst` 内并发全部 200、超过配额返回 429 + `Retry-After` + 无 `<meta refresh>`，等待补桶后恢复 200，以及超 `maxTrackedIPs` 时内存上限受控；

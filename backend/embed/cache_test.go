@@ -84,13 +84,13 @@ func setupEmbedBenchmarkFixture(t testing.TB) (*Service, *gin.Engine, *SiteDTO) 
 	}
 
 	site, err := svc.CreateSite(SiteInput{
-		Slug:               "ooioo",
+		Slug:               "portal",
 		Title:              "渠道性能",
 		Eyebrow:            "CHANNEL PERFORMANCE",
 		Enabled:            true,
 		RefreshSeconds:     15,
-		AllowedOrigins:     []string{"https://ooioo.work"},
-		CORSOrigins:        []string{"https://ooioo.work"},
+		AllowedOrigins:     []string{"https://portal.example.com"},
+		CORSOrigins:        []string{"https://portal.example.com"},
 		Theme:              "paper",
 		ShowIdentityColumn: true,
 	})
@@ -113,7 +113,7 @@ func TestEmbedMicroCacheSingleflightInvalidationAndCORSIsolation(t *testing.T) {
 		return now
 	}
 
-	// 1. 50 个并发请求同时打 /embed?site=ooioo，singleflight 必须合并为仅 1 次查库构建。
+	// 1. 50 个并发请求同时打 /embed?site=portal，singleflight 必须合并为仅 1 次查库构建。
 	const workers = 50
 	var wg sync.WaitGroup
 	errs := make(chan error, workers)
@@ -122,7 +122,7 @@ func TestEmbedMicroCacheSingleflightInvalidationAndCORSIsolation(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/embed?site=ooioo", nil))
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/embed?site=portal", nil))
 			if rec.Code != http.StatusOK {
 				errs <- fmt.Errorf("status=%d", rec.Code)
 				return
@@ -142,15 +142,15 @@ func TestEmbedMicroCacheSingleflightInvalidationAndCORSIsolation(t *testing.T) {
 	}
 
 	// 2. 紧接着查 /api/public/status 共享主快照缓存（不增加查库次数），且多 Origin CORS 头严格隔离！
-	reqOK := httptest.NewRequest(http.MethodGet, "/api/public/status?site=ooioo", nil)
-	reqOK.Header.Set("Origin", "https://ooioo.work")
+	reqOK := httptest.NewRequest(http.MethodGet, "/api/public/status?site=portal", nil)
+	reqOK.Header.Set("Origin", "https://portal.example.com")
 	recOK := httptest.NewRecorder()
 	router.ServeHTTP(recOK, reqOK)
-	if recOK.Code != http.StatusOK || recOK.Header().Get("X-Embed-Cache") != cacheStatusHit || recOK.Header().Get("Access-Control-Allow-Origin") != "https://ooioo.work" {
+	if recOK.Code != http.StatusOK || recOK.Header().Get("X-Embed-Cache") != cacheStatusHit || recOK.Header().Get("Access-Control-Allow-Origin") != "https://portal.example.com" {
 		t.Fatalf("unexpected cached CORS hit: code=%d cache=%q cors=%q", recOK.Code, recOK.Header().Get("X-Embed-Cache"), recOK.Header().Get("Access-Control-Allow-Origin"))
 	}
 
-	reqBad := httptest.NewRequest(http.MethodGet, "/api/public/status?site=ooioo", nil)
+	reqBad := httptest.NewRequest(http.MethodGet, "/api/public/status?site=portal", nil)
 	reqBad.Header.Set("Origin", "https://evil.example")
 	recBad := httptest.NewRecorder()
 	router.ServeHTTP(recBad, reqBad)
@@ -176,7 +176,7 @@ func TestEmbedMicroCacheSingleflightInvalidationAndCORSIsolation(t *testing.T) {
 		t.Fatalf("update site: %v", err)
 	}
 	recAfterUpdate := httptest.NewRecorder()
-	router.ServeHTTP(recAfterUpdate, httptest.NewRequest(http.MethodGet, "/embed?site=ooioo", nil))
+	router.ServeHTTP(recAfterUpdate, httptest.NewRequest(http.MethodGet, "/embed?site=portal", nil))
 	if recAfterUpdate.Code != http.StatusOK ||
 		recAfterUpdate.Header().Get("X-Embed-Cache") != cacheStatusMiss ||
 		!strings.Contains(recAfterUpdate.Body.String(), "theme-dark") ||
@@ -192,7 +192,7 @@ func TestEmbedMicroCacheSingleflightInvalidationAndCORSIsolation(t *testing.T) {
 	now = now.Add(6 * time.Second)
 	mu.Unlock()
 	recExpired := httptest.NewRecorder()
-	router.ServeHTTP(recExpired, httptest.NewRequest(http.MethodGet, "/embed?site=ooioo", nil))
+	router.ServeHTTP(recExpired, httptest.NewRequest(http.MethodGet, "/embed?site=portal", nil))
 	if recExpired.Code != http.StatusOK || recExpired.Header().Get("X-Embed-Cache") != cacheStatusMiss || svc.SnapshotBuildCount() != 3 {
 		t.Fatalf("expected cache expiry rebuild, cache=%q builds=%d", recExpired.Header().Get("X-Embed-Cache"), svc.SnapshotBuildCount())
 	}
@@ -202,7 +202,7 @@ func TestEmbedMicroCacheSingleflightInvalidationAndCORSIsolation(t *testing.T) {
 	off := false
 	svc.UpdateRuntimeConfig(config.EmbedConfig{CacheTTLSeconds: &zero, RateLimitEnabled: &off})
 	recBypass := httptest.NewRecorder()
-	router.ServeHTTP(recBypass, httptest.NewRequest(http.MethodGet, "/embed?site=ooioo", nil))
+	router.ServeHTTP(recBypass, httptest.NewRequest(http.MethodGet, "/embed?site=portal", nil))
 	if recBypass.Header().Get("X-Embed-Cache") != cacheStatusBypass || svc.SnapshotBuildCount() != 4 {
 		t.Fatalf("expected BYPASS when TTL=0, cache=%q builds=%d", recBypass.Header().Get("X-Embed-Cache"), svc.SnapshotBuildCount())
 	}
@@ -234,7 +234,7 @@ func BenchmarkEmbedOverviewCache(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/embed?site=ooioo", nil))
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/embed?site=portal", nil))
 			if rec.Code != http.StatusOK {
 				b.Fatalf("status=%d", rec.Code)
 			}
@@ -247,7 +247,7 @@ func BenchmarkEmbedOverviewCache(b *testing.B) {
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/embed?site=ooioo", nil))
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/embed?site=portal", nil))
 			if rec.Code != http.StatusOK {
 				b.Fatalf("status=%d", rec.Code)
 			}

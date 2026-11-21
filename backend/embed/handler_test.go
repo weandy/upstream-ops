@@ -89,13 +89,13 @@ func TestEmbedSSROverviewSubpagesXSSAndZeroScript(t *testing.T) {
 	_ = intel.Runs.Append(pelicanRun)
 
 	_, err = svc.CreateSite(SiteInput{
-		Slug:               "ooioo",
+		Slug:               "portal",
 		Title:              "渠道性能 " + xssPayload,
 		Eyebrow:            "CHANNEL PERFORMANCE",
 		Enabled:            true,
 		RefreshSeconds:     15,
-		AllowedOrigins:     []string{"https://ooioo.work"},
-		CORSOrigins:        []string{"https://ooioo.work"},
+		AllowedOrigins:     []string{"https://portal.example.com"},
+		CORSOrigins:        []string{"https://portal.example.com"},
 		Theme:              "paper",
 		ShowIdentityColumn: true,
 	})
@@ -107,10 +107,10 @@ func TestEmbedSSROverviewSubpagesXSSAndZeroScript(t *testing.T) {
 	svc.RegisterPublic(router)
 
 	pages := []string{
-		"/embed?site=ooioo",
-		"/embed/candy?site=ooioo&target=codex-xss",
-		"/embed/fingerprint?site=ooioo&target=codex-xss",
-		"/embed/pelican?site=ooioo&target=codex-xss",
+		"/embed?site=portal",
+		"/embed/candy?site=portal&target=codex-xss",
+		"/embed/fingerprint?site=portal&target=codex-xss",
+		"/embed/pelican?site=portal&target=codex-xss",
 	}
 	for _, u := range pages {
 		req := httptest.NewRequest(http.MethodGet, u, nil)
@@ -132,7 +132,7 @@ func TestEmbedSSROverviewSubpagesXSSAndZeroScript(t *testing.T) {
 			t.Fatalf("GET %s leaked internal secret or upstream URL", u)
 		}
 		csp := rec.Header().Get("Content-Security-Policy")
-		if !strings.Contains(csp, "default-src 'none'") || !strings.Contains(csp, "frame-ancestors 'self' https://ooioo.work") {
+		if !strings.Contains(csp, "default-src 'none'") || !strings.Contains(csp, "frame-ancestors 'self' https://portal.example.com") {
 			t.Fatalf("GET %s unexpected CSP: %s", u, csp)
 		}
 		if rec.Header().Get("Cache-Control") != "no-store" {
@@ -142,7 +142,7 @@ func TestEmbedSSROverviewSubpagesXSSAndZeroScript(t *testing.T) {
 
 	// 验证主表自动刷新 meta 与双沙箱缩略图 iframe。
 	recOverview := httptest.NewRecorder()
-	router.ServeHTTP(recOverview, httptest.NewRequest(http.MethodGet, "/embed?site=ooioo", nil))
+	router.ServeHTTP(recOverview, httptest.NewRequest(http.MethodGet, "/embed?site=portal", nil))
 	ovBody := recOverview.Body.String()
 	if !strings.Contains(ovBody, `<meta http-equiv="refresh" content="15">`) {
 		t.Fatalf("overview missing meta refresh")
@@ -153,11 +153,11 @@ func TestEmbedSSROverviewSubpagesXSSAndZeroScript(t *testing.T) {
 
 	// 验证单张 Pelican 隔离端点强沙箱 CSP。
 	recPelican := httptest.NewRecorder()
-	router.ServeHTTP(recPelican, httptest.NewRequest(http.MethodGet, "/embed/pelican/"+pelicanRun.RunUUID+"?site=ooioo", nil))
+	router.ServeHTTP(recPelican, httptest.NewRequest(http.MethodGet, "/embed/pelican/"+pelicanRun.RunUUID+"?site=portal", nil))
 	if recPelican.Code != http.StatusOK {
 		t.Fatalf("pelican artifact status=%d", recPelican.Code)
 	}
-	wantPelicanCSP := BuildPelicanSandboxCSP([]string{"https://ooioo.work"})
+	wantPelicanCSP := BuildPelicanSandboxCSP([]string{"https://portal.example.com"})
 	if recPelican.Header().Get("Content-Security-Policy") != wantPelicanCSP {
 		t.Fatalf("unexpected pelican CSP: got %q want %q", recPelican.Header().Get("Content-Security-Policy"), wantPelicanCSP)
 	}
@@ -166,15 +166,15 @@ func TestEmbedSSROverviewSubpagesXSSAndZeroScript(t *testing.T) {
 	}
 
 	// 验证公开 JSON API + CORS 白名单 + 零敏感信息泄漏。
-	reqAllowed := httptest.NewRequest(http.MethodGet, "/api/public/status?site=ooioo", nil)
-	reqAllowed.Header.Set("Origin", "https://ooioo.work")
+	reqAllowed := httptest.NewRequest(http.MethodGet, "/api/public/status?site=portal", nil)
+	reqAllowed.Header.Set("Origin", "https://portal.example.com")
 	recJSON := httptest.NewRecorder()
 	router.ServeHTTP(recJSON, reqAllowed)
 	if recJSON.Code != http.StatusOK {
 		t.Fatalf("public status code=%d", recJSON.Code)
 	}
-	if recJSON.Header().Get("Access-Control-Allow-Origin") != "https://ooioo.work" {
-		t.Fatalf("expected CORS allow origin https://ooioo.work, got %q", recJSON.Header().Get("Access-Control-Allow-Origin"))
+	if recJSON.Header().Get("Access-Control-Allow-Origin") != "https://portal.example.com" {
+		t.Fatalf("expected CORS allow origin https://portal.example.com, got %q", recJSON.Header().Get("Access-Control-Allow-Origin"))
 	}
 	rawJSON := recJSON.Body.String()
 	if strings.Contains(rawJSON, "sk-never-leak") || strings.Contains(rawJSON, "secret-upstream-host.local") {
@@ -191,7 +191,7 @@ func TestEmbedSSROverviewSubpagesXSSAndZeroScript(t *testing.T) {
 	}
 
 	// 非白名单 Origin 不应收到 Access-Control-Allow-Origin。
-	reqDenied := httptest.NewRequest(http.MethodGet, "/api/public/status?site=ooioo", nil)
+	reqDenied := httptest.NewRequest(http.MethodGet, "/api/public/status?site=portal", nil)
 	reqDenied.Header.Set("Origin", "https://evil.example")
 	recDenied := httptest.NewRecorder()
 	router.ServeHTTP(recDenied, reqDenied)
@@ -200,11 +200,11 @@ func TestEmbedSSROverviewSubpagesXSSAndZeroScript(t *testing.T) {
 	}
 
 	// OPTIONS 预检返回 204 并携带允许头。
-	reqOpt := httptest.NewRequest(http.MethodOptions, "/api/public/status?site=ooioo", nil)
-	reqOpt.Header.Set("Origin", "https://ooioo.work")
+	reqOpt := httptest.NewRequest(http.MethodOptions, "/api/public/status?site=portal", nil)
+	reqOpt.Header.Set("Origin", "https://portal.example.com")
 	recOpt := httptest.NewRecorder()
 	router.ServeHTTP(recOpt, reqOpt)
-	if recOpt.Code != http.StatusNoContent || recOpt.Header().Get("Access-Control-Allow-Origin") != "https://ooioo.work" {
+	if recOpt.Code != http.StatusNoContent || recOpt.Header().Get("Access-Control-Allow-Origin") != "https://portal.example.com" {
 		t.Fatalf("unexpected OPTIONS response: code=%d cors=%q", recOpt.Code, recOpt.Header().Get("Access-Control-Allow-Origin"))
 	}
 }

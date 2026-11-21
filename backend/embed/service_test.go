@@ -39,8 +39,8 @@ func openTestEmbedEnv(t *testing.T) (*Service, *intelligence.Service) {
 
 func TestSecurityOriginSanitizeAndCSP(t *testing.T) {
 	valid, err := SanitizeOriginList([]string{
-		"https://ooioo.work/",
-		"HTTPS://OOIOO.WORK",
+		"https://portal.example.org/",
+		"HTTPS://PORTAL.EXAMPLE.ORG",
 		"https://*.example.com:8443",
 		"http://localhost:3000",
 	}, true)
@@ -55,7 +55,7 @@ func TestSecurityOriginSanitizeAndCSP(t *testing.T) {
 	if !strings.Contains(csp, "default-src 'none'") {
 		t.Fatalf("missing default-src none: %s", csp)
 	}
-	if !strings.Contains(csp, "frame-ancestors 'self' https://ooioo.work https://*.example.com:8443 http://localhost:3000") {
+	if !strings.Contains(csp, "frame-ancestors 'self' https://portal.example.org https://*.example.com:8443 http://localhost:3000") {
 		t.Fatalf("unexpected frame-ancestors: %s", csp)
 	}
 
@@ -71,7 +71,7 @@ func TestSecurityOriginSanitizeAndCSP(t *testing.T) {
 		}
 	}
 
-	if got, ok := MatchCORSOrigin("https://ooioo.work", valid); !ok || got != "https://ooioo.work" {
+	if got, ok := MatchCORSOrigin("https://portal.example.org", valid); !ok || got != "https://portal.example.org" {
 		t.Fatalf("expected CORS match, got (%q, %v)", got, ok)
 	}
 	if got, ok := MatchCORSOrigin("https://sub.example.com:8443", valid); !ok || got != "https://sub.example.com:8443" {
@@ -98,13 +98,13 @@ func TestSiteCRUDAndResolveFallback(t *testing.T) {
 	}
 
 	created, err := svc.CreateSite(SiteInput{
-		Slug:               "OOIOO_Main",
+		Slug:               "Portal_Main",
 		Title:              "渠道性能",
 		Eyebrow:            "CHANNEL PERFORMANCE",
 		Enabled:            true,
 		RefreshSeconds:     15,
-		AllowedOrigins:     []string{"https://ooioo.work"},
-		CORSOrigins:        []string{"https://ooioo.work"},
+		AllowedOrigins:     []string{"https://portal.example.com"},
+		CORSOrigins:        []string{"https://portal.example.com"},
 		Theme:              "paper",
 		TargetIDs:          []uint{2, 1, 2},
 		ShowIdentityColumn: true,
@@ -112,14 +112,14 @@ func TestSiteCRUDAndResolveFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create site: %v", err)
 	}
-	if created.Slug != "ooioo-main" {
-		t.Fatalf("expected normalized slug ooioo-main, got %q", created.Slug)
+	if created.Slug != "portal-main" {
+		t.Fatalf("expected normalized slug portal-main, got %q", created.Slug)
 	}
 	if len(created.TargetIDs) != 2 || created.TargetIDs[0] != 2 || created.TargetIDs[1] != 1 {
 		t.Fatalf("expected deduplicated ordered target_ids [2 1], got %v", created.TargetIDs)
 	}
 
-	resolved, err := svc.ResolveSite("ooioo-main")
+	resolved, err := svc.ResolveSite("portal-main")
 	if err != nil || resolved.ID != created.ID {
 		t.Fatalf("resolve created site failed: %v %+v", err, resolved)
 	}
@@ -139,7 +139,7 @@ func TestSiteCRUDAndResolveFallback(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("disable site: %v", err)
 	}
-	if _, err := svc.ResolveSite("ooioo-main"); err != ErrSiteNotFound {
+	if _, err := svc.ResolveSite("portal-main"); err != ErrSiteNotFound {
 		t.Fatalf("expected ErrSiteNotFound for disabled site, got %v", err)
 	}
 	if _, err := svc.ResolveSite(""); err != ErrSiteNotFound {
@@ -243,12 +243,12 @@ func TestSnapshotAndArtifactAccessBoundary(t *testing.T) {
 	_ = intel.Runs.Append(privPelican)
 
 	site, err := svc.CreateSite(SiteInput{
-		Slug:               "ooioo",
+		Slug:               "portal",
 		Title:              "渠道性能",
 		Eyebrow:            "CHANNEL PERFORMANCE",
 		Enabled:            true,
 		RefreshSeconds:     15,
-		AllowedOrigins:     []string{"https://ooioo.work"},
+		AllowedOrigins:     []string{"https://portal.example.com"},
 		Theme:              "paper",
 		ShowIdentityColumn: true,
 	})

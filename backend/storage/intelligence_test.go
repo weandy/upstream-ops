@@ -344,19 +344,19 @@ func TestEmbedSitesCRUD(t *testing.T) {
 	sites := NewEmbedSites(db)
 
 	site := &EmbedSite{
-		Slug:               "ooioo",
+		Slug:               "portal",
 		Title:              "渠道性能",
 		Eyebrow:            "CHANNEL PERFORMANCE",
 		Enabled:            true,
 		RefreshSeconds:     15,
-		AllowedOriginsJSON: `["https://ooioo.work"]`,
+		AllowedOriginsJSON: `["https://portal.example.com"]`,
 		Theme:              "paper",
 		ShowIdentityColumn: true,
 	}
 	if err := sites.Create(site); err != nil {
 		t.Fatalf("create embed site: %v", err)
 	}
-	got, err := sites.FindBySlug("ooioo")
+	got, err := sites.FindBySlug("portal")
 	if err != nil {
 		t.Fatalf("find embed site by slug: %v", err)
 	}
