@@ -133,7 +133,7 @@ export function MonitorHeader() {
                 </button>
                 {updateAvailable ? (
                   <a
-                    href={updateURL || "https://github.com/bejix/upstream-ops"}
+                    href={updateURL || "https://github.com/weandy/upstream-ops"}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="ml-1.5 font-medium text-emerald-600 underline-offset-2 hover:text-emerald-700 hover:underline sm:ml-2"
@@ -229,7 +229,7 @@ export function MonitorHeader() {
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild>
                 <a
-                  href="https://github.com/bejix/upstream-ops"
+                  href="https://github.com/weandy/upstream-ops"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -365,7 +365,7 @@ export function MonitorHeader() {
                   aria-label="GitHub 仓库"
                 >
                   <a
-                    href="https://github.com/bejix/upstream-ops"
+                    href="https://github.com/weandy/upstream-ops"
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -374,7 +374,7 @@ export function MonitorHeader() {
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
-                {"GitHub · bejix/upstream-ops"}
+                {"GitHub · weandy/upstream-ops"}
               </TooltipContent>
             </Tooltip>
 

@@ -273,7 +273,7 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=replace-with-a-strong-password
 ```
 
-Docker pulls `ghcr.io/bejix/upstream-ops:${IMAGE_TAG:-latest}` by default. Configuration and data are stored in the host `data/` directory.
+Docker pulls `ghcr.io/weandy/upstream-ops:${IMAGE_TAG:-latest}` by default. Configuration and data are stored in the host `data/` directory.
 
 Start:
 
