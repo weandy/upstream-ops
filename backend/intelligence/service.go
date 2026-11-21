@@ -83,14 +83,23 @@ type Service struct {
 	mu                  sync.RWMutex
 	proxyConfig         config.ProxyConfig
 	upstreamConfig      config.UpstreamConfig
+	backoffPolicy       BackoffPolicy
 	keyLocks            sync.Map
 	targetDetectorLocks sync.Map
 	inflight            inflightGroup
 	resultHook          ResultHook
+	onPublicDataChanged func()
 
-	runnerMu     sync.Mutex
-	runnerCancel context.CancelFunc
-	runnerWG     sync.WaitGroup
+	runnerMu          sync.Mutex
+	runnerRunning     bool
+	runnerTick        time.Duration
+	runnerConcurrency int
+	runnerGen         uint64
+	shutdownCtx       context.Context
+	shutdownCancel    context.CancelFunc
+	tickCancel        context.CancelFunc
+	tickWG            sync.WaitGroup
+	jobWG             sync.WaitGroup
 }
 
 // NewService 构造监测核心服务，并自动注册全部内置监测插件。
@@ -125,6 +134,37 @@ func NewService(
 		LMFPD:          lmfpdMgr,
 		Log:            log,
 		upstreamConfig: config.UpstreamConfig{}.WithDefaults(),
+		backoffPolicy:  DefaultBackoffPolicy(),
+	}
+}
+
+// UpdateBackoffConfig 热更新异常目标分级指数退避策略。
+func (s *Service) UpdateBackoffConfig(cfg config.IntelligenceConfig) {
+	s.mu.Lock()
+	s.backoffPolicy = BackoffPolicyFromConfig(cfg)
+	s.mu.Unlock()
+}
+
+func (s *Service) currentBackoffPolicy() BackoffPolicy {
+	s.mu.RLock()
+	p := s.backoffPolicy
+	s.mu.RUnlock()
+	return p
+}
+
+// SetOnPublicDataChanged 注册公开快照失效回调（供 embed 微缓存写穿透主动失效）。
+func (s *Service) SetOnPublicDataChanged(fn func()) {
+	s.mu.Lock()
+	s.onPublicDataChanged = fn
+	s.mu.Unlock()
+}
+
+func (s *Service) notifyPublicDataChanged() {
+	s.mu.RLock()
+	fn := s.onPublicDataChanged
+	s.mu.RUnlock()
+	if fn != nil {
+		fn()
 	}
 }
 
@@ -182,10 +222,11 @@ func (s *Service) CreateTarget(in TargetInput) (*storage.ProbeTarget, error) {
 	if err := s.Targets.Create(target); err != nil {
 		return nil, err
 	}
+	s.notifyPublicDataChanged()
 	return target, nil
 }
 
-// UpdateTarget 更新监测目标。APIKey 留空时保留原有加密密钥。
+// UpdateTarget 更新监测目标。APIKey 留空时保留原有加密密钥；更新后自动清零该目标下插件退避状态。
 func (s *Service) UpdateTarget(id uint, in TargetInput) (*storage.ProbeTarget, error) {
 	existing, err := s.Targets.FindByID(id)
 	if err != nil {
@@ -198,11 +239,17 @@ func (s *Service) UpdateTarget(id uint, in TargetInput) (*storage.ProbeTarget, e
 	if err := s.Targets.Update(updated); err != nil {
 		return nil, err
 	}
+	_ = s.Configs.ResetTargetBackoff(updated.ID, time.Now().UTC())
+	s.notifyPublicDataChanged()
 	return updated, nil
 }
 
 func (s *Service) DeleteTarget(id uint) error {
-	return s.Targets.Delete(id)
+	if err := s.Targets.Delete(id); err != nil {
+		return err
+	}
+	s.notifyPublicDataChanged()
+	return nil
 }
 
 func (s *Service) ListTargets() ([]storage.ProbeTarget, error) {
@@ -389,6 +436,7 @@ func (s *Service) EnsureChannelKey(ctx context.Context, targetID uint) (*storage
 	if err := s.Targets.UpdateKey(target.ID, finalKey.ID, keyName, cipherText, hint); err != nil {
 		return nil, err
 	}
+	_ = s.Configs.ResetTargetBackoff(target.ID, time.Now().UTC())
 	return s.Targets.FindByID(target.ID)
 }
 

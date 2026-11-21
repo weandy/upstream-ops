@@ -109,6 +109,8 @@ func (d *LMFPDDetector) Run(ctx context.Context, client LLMClient, req DetectorR
 		firstToken int64
 		latency    int64
 		outTokens  int
+		errClass   string
+		retryAfter int
 		errMsg     string
 	}
 	rounds := make([]roundResult, lmfpd.ChallengeCount)
@@ -144,6 +146,8 @@ func (d *LMFPDDetector) Run(ctx context.Context, client LLMClient, req DetectorR
 				rounds[i].firstToken = resp.FirstTokenMS
 				rounds[i].latency = resp.LatencyMS
 				rounds[i].outTokens = resp.OutputTokens
+				rounds[i].errClass = resp.ErrorClass
+				rounds[i].retryAfter = resp.RetryAfterSec
 			}
 			if callErr != nil {
 				rounds[i].errMsg = callErr.Error()
@@ -165,9 +169,11 @@ func (d *LMFPDDetector) Run(ctx context.Context, client LLMClient, req DetectorR
 
 	replies := make([]lmfpd.Reply, lmfpd.ChallengeCount)
 	var (
-		totalTokens int
-		minTTFT     int64
-		roundErrs   []string
+		totalTokens   int
+		minTTFT       int64
+		roundErrs     []string
+		firstErrClass string
+		maxRetryAfter int
 	)
 	for i, rr := range rounds {
 		replies[i] = rr.reply
@@ -175,15 +181,23 @@ func (d *LMFPDDetector) Run(ctx context.Context, client LLMClient, req DetectorR
 		if rr.firstToken > 0 && (minTTFT == 0 || rr.firstToken < minTTFT) {
 			minTTFT = rr.firstToken
 		}
+		if rr.errClass != "" && rr.errClass != "ok" && firstErrClass == "" {
+			firstErrClass = rr.errClass
+		}
+		if rr.retryAfter > maxRetryAfter {
+			maxRetryAfter = rr.retryAfter
+		}
 		if rr.errMsg != "" {
 			roundErrs = append(roundErrs, fmt.Sprintf("第%d轮: %s", i+1, rr.errMsg))
 		}
 	}
 
 	out := &DetectorRunResult{
-		FirstTokenMS: minTTFT,
-		LatencyMS:    time.Since(started).Milliseconds(),
-		OutputTokens: totalTokens,
+		FirstTokenMS:  minTTFT,
+		LatencyMS:     time.Since(started).Milliseconds(),
+		OutputTokens:  totalTokens,
+		ErrorClass:    firstErrClass,
+		RetryAfterSec: maxRetryAfter,
 	}
 
 	attr := eng.Analyze(replies)

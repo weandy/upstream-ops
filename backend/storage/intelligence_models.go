@@ -69,12 +69,15 @@ type ProbeDetectorConfig struct {
 	TimeoutSeconds  int        `gorm:"not null;default:60" json:"timeout_seconds"`
 	AlertEnabled    bool       `gorm:"not null;default:true" json:"alert_enabled"`
 	AlertThreshold  int        `gorm:"not null;default:3" json:"alert_threshold"`
-	ParamsJSON      string     `gorm:"type:text;not null;default:''" json:"params_json,omitempty"`
-	EmbedVisible    bool       `gorm:"not null;default:true" json:"embed_visible"`
-	LastRunAt       *time.Time `json:"last_run_at,omitempty"`
-	NextRunAt       *time.Time `gorm:"index" json:"next_run_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ParamsJSON        string     `gorm:"type:text;not null;default:''" json:"params_json,omitempty"`
+	EmbedVisible      bool       `gorm:"not null;default:true" json:"embed_visible"`
+	ConsecutiveErrors int        `gorm:"not null;default:0" json:"consecutive_errors"`
+	LastErrorClass    string     `gorm:"size:32;not null;default:''" json:"last_error_class,omitempty"`
+	BackoffUntil      *time.Time `json:"backoff_until,omitempty"`
+	LastRunAt         *time.Time `json:"last_run_at,omitempty"`
+	NextRunAt         *time.Time `gorm:"index" json:"next_run_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 func (ProbeDetectorConfig) TableName() string { return "probe_detector_configs" }

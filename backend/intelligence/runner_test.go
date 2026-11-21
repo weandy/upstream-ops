@@ -2,6 +2,7 @@ package intelligence
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,13 +14,21 @@ import (
 )
 
 type countingStubLLM struct {
-	calls atomic.Int32
-	delay time.Duration
-	resp  *llmclient.Response
+	calls   atomic.Int32
+	delay   time.Duration
+	resp    *llmclient.Response
+	err     error
+	onEnter chan struct{}
 }
 
 func (c *countingStubLLM) Complete(ctx context.Context, _ llmclient.Request) (*llmclient.Response, error) {
 	c.calls.Add(1)
+	if c.onEnter != nil {
+		select {
+		case c.onEnter <- struct{}{}:
+		default:
+		}
+	}
 	if c.delay > 0 {
 		select {
 		case <-time.After(c.delay):
@@ -27,8 +36,11 @@ func (c *countingStubLLM) Complete(ctx context.Context, _ llmclient.Request) (*l
 			return nil, ctx.Err()
 		}
 	}
+	if c.resp == nil {
+		return nil, c.err
+	}
 	cp := *c.resp
-	return &cp, nil
+	return &cp, c.err
 }
 
 func (c *countingStubLLM) ListModels(_ context.Context, _ llmclient.Endpoint) ([]string, error) {
@@ -235,5 +247,156 @@ func TestBackgroundRunnerExecutesDueJobsAndStopsCleanly(t *testing.T) {
 	cfg, err := svc.Configs.Find(target.ID, DetectorKeyLiveness)
 	if err != nil || cfg.LastRunAt == nil || cfg.NextRunAt == nil || !cfg.NextRunAt.After(time.Now().Add(2*time.Minute)) {
 		t.Fatalf("expected schedule advanced by 180s, got %+v err=%v", cfg, err)
+	}
+}
+
+func TestReconfigureNonBlockingWhileSlowJobInflightAndIdempotent(t *testing.T) {
+	db := openIntelTestDB(t)
+	cipher, _ := crypto.NewCipher("reconf-test-secret-32-bytes!!!!!!")
+	entered := make(chan struct{}, 2)
+	stub := &countingStubLLM{
+		delay:   500 * time.Millisecond,
+		onEnter: entered,
+		resp: &llmclient.Response{
+			Content:      "A quiet sunrise illuminates the sea.",
+			Complete:     true,
+			HTTPStatus:   200,
+			FirstTokenMS: 120,
+			LatencyMS:    500,
+			OutputTokens: 12,
+			TPS:          48,
+			ErrorClass:   llmclient.ErrorClassOK,
+		},
+	}
+	svc := NewService(db, cipher, nil, stub, nil)
+	target, err := svc.CreateTarget(TargetInput{
+		Name: "slow-target", SourceKind: storage.ProbeSourceDirect,
+		BaseURL: "https://slow.example.com", APIKey: "sk-slow-1234", Protocol: storage.ProbeProtocolOpenAIChat, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if _, err := svc.SaveTargetDetectors(target.ID, []DetectorConfigInput{
+		{DetectorKey: DetectorKeyLiveness, Enabled: true, ModelName: "gpt-6.2-sol", IntervalSeconds: 180},
+	}); err != nil {
+		t.Fatalf("save liveness config: %v", err)
+	}
+
+	svc.Start(15*time.Millisecond, 1)
+	defer svc.Stop()
+
+	// 等待慢任务进入执行中。
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for slow job to start")
+	}
+
+	// 慢任务在途期间热重建调度器：必须在毫秒级返回，严禁阻塞等待 500ms 慢任务。
+	startReconf := time.Now()
+	rebuilt := svc.Reconfigure(30*time.Millisecond, 4)
+	elapsed := time.Since(startReconf)
+	if !rebuilt {
+		t.Fatal("expected Reconfigure to return true when parameters changed")
+	}
+	if elapsed >= 200*time.Millisecond {
+		t.Fatalf("expected non-blocking Reconfigure (<200ms), took %s", elapsed)
+	}
+
+	running, tick, conc, gen := svc.RunnerStats()
+	if !running || tick != 30*time.Millisecond || conc != 4 || gen != 2 {
+		t.Fatalf("unexpected runner stats after reconfigure: running=%v tick=%s conc=%d gen=%d", running, tick, conc, gen)
+	}
+
+	// 重复以相同参数调用 Reconfigure 必须幂等返回 false 且不递增代际。
+	if svc.Reconfigure(30*time.Millisecond, 4) {
+		t.Fatal("expected idempotent Reconfigure with same params to return false")
+	}
+	_, _, _, genAfter := svc.RunnerStats()
+	if genAfter != gen {
+		t.Fatalf("expected generation unchanged (%d), got %d", gen, genAfter)
+	}
+
+	// 验证旧在途慢任务没有被取消，仍优雅完成落库。
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		samples, err := svc.Liveness.ListRecentByTarget(target.ID, 5)
+		if err == nil && len(samples) >= 1 && samples[0].Success {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("expected inflight slow job to finish and persist sample after Reconfigure")
+}
+
+func TestScheduledBackoffAndResetOnTargetUpdate(t *testing.T) {
+	db := openIntelTestDB(t)
+	cipher, _ := crypto.NewCipher("backoff-runner-secret-32-bytes!!!")
+	stub := &countingStubLLM{
+		resp: &llmclient.Response{
+			HTTPStatus:    429,
+			ErrorClass:    llmclient.ErrorClassRateLimit,
+			ErrorMessage:  "rate limit exceeded",
+			RetryAfterSec: 300,
+		},
+		err: errors.New("http 429: rate limit exceeded"),
+	}
+	svc := NewService(db, cipher, nil, stub, nil)
+	target, err := svc.CreateTarget(TargetInput{
+		Name: "rl-target", SourceKind: storage.ProbeSourceDirect,
+		BaseURL: "https://rl.example.com", APIKey: "sk-rl-old-key", Protocol: storage.ProbeProtocolOpenAIChat, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if _, err := svc.SaveTargetDetectors(target.ID, []DetectorConfigInput{
+		{DetectorKey: DetectorKeyLiveness, Enabled: true, ModelName: "gpt-6.2-sol", IntervalSeconds: 60},
+	}); err != nil {
+		t.Fatalf("save liveness config: %v", err)
+	}
+
+	svc.Start(15*time.Millisecond, 2)
+	deadline := time.Now().Add(2 * time.Second)
+	var cfg *storage.ProbeDetectorConfig
+	for time.Now().Before(deadline) {
+		c, err := svc.Configs.Find(target.ID, DetectorKeyLiveness)
+		if err == nil && c.ConsecutiveErrors >= 1 && c.BackoffUntil != nil {
+			cfg = c
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	svc.Stop()
+
+	if cfg == nil {
+		t.Fatal("expected scheduled 429 job to persist consecutive_errors and backoff_until")
+	}
+	if cfg.ConsecutiveErrors != 1 {
+		t.Fatalf("expected ConsecutiveErrors=1, got %d", cfg.ConsecutiveErrors)
+	}
+	if cfg.LastErrorClass != llmclient.ErrorClassRateLimit {
+		t.Fatalf("expected LastErrorClass=rate_limit, got %q", cfg.LastErrorClass)
+	}
+	if cfg.NextRunAt == nil || !cfg.NextRunAt.After(time.Now().UTC().Add(240*time.Second)) {
+		t.Fatalf("expected NextRunAt backed off >= 240s (Retry-After=300s with jitter), got %+v", cfg.NextRunAt)
+	}
+
+	// 更新目标（例如更换 API Key）后，应立即清零退避状态并恢复即时可调度。
+	if _, err := svc.UpdateTarget(target.ID, TargetInput{
+		Name:       target.Name,
+		SourceKind: storage.ProbeSourceDirect,
+		BaseURL:    target.BaseURL,
+		APIKey:     "sk-rl-new-key",
+		Protocol:   storage.ProbeProtocolOpenAIChat,
+		Enabled:    true,
+	}); err != nil {
+		t.Fatalf("UpdateTarget: %v", err)
+	}
+	afterReset, err := svc.Configs.Find(target.ID, DetectorKeyLiveness)
+	if err != nil {
+		t.Fatalf("find config after target update: %v", err)
+	}
+	if afterReset.ConsecutiveErrors != 0 || afterReset.LastErrorClass != "" || afterReset.BackoffUntil != nil {
+		t.Fatalf("expected backoff state reset after UpdateTarget, got %+v", afterReset)
 	}
 }
