@@ -26,6 +26,7 @@ type Config struct {
 	Gateway       GatewayConfig       `mapstructure:"gateway" yaml:"gateway" json:"gateway"`
 	Pricing       PricingConfig       `mapstructure:"pricing" yaml:"pricing" json:"pricing"`
 	Intelligence  IntelligenceConfig  `mapstructure:"intelligence" yaml:"intelligence" json:"intelligence"`
+	Embed         EmbedConfig         `mapstructure:"embed" yaml:"embed" json:"embed"`
 	Log           LogConfig           `mapstructure:"log" yaml:"log" json:"log"`
 }
 
@@ -322,9 +323,33 @@ type LogConfig struct {
 
 // IntelligenceConfig 外挂式主动测活与模型智力监测运行时配置。
 type IntelligenceConfig struct {
-	LMFPDDataDir        string `mapstructure:"lmfpdDataDir" yaml:"lmfpdDataDir" json:"lmfpdDataDir"`
-	TickIntervalSeconds int    `mapstructure:"tickIntervalSeconds" yaml:"tickIntervalSeconds" json:"tickIntervalSeconds"`
-	Concurrency         int    `mapstructure:"concurrency" yaml:"concurrency" json:"concurrency"`
+	LMFPDDataDir               string `mapstructure:"lmfpdDataDir" yaml:"lmfpdDataDir" json:"lmfpdDataDir"`
+	TickIntervalSeconds        int    `mapstructure:"tickIntervalSeconds" yaml:"tickIntervalSeconds" json:"tickIntervalSeconds"`
+	Concurrency                int    `mapstructure:"concurrency" yaml:"concurrency" json:"concurrency"`
+	BackoffEnabled             *bool  `mapstructure:"backoffEnabled" yaml:"backoffEnabled" json:"backoffEnabled"`
+	BackoffTransientMaxSeconds int    `mapstructure:"backoffTransientMaxSeconds" yaml:"backoffTransientMaxSeconds" json:"backoffTransientMaxSeconds"`
+	BackoffRateLimitMaxSeconds int    `mapstructure:"backoffRateLimitMaxSeconds" yaml:"backoffRateLimitMaxSeconds" json:"backoffRateLimitMaxSeconds"`
+	BackoffAuthMaxSeconds      int    `mapstructure:"backoffAuthMaxSeconds" yaml:"backoffAuthMaxSeconds" json:"backoffAuthMaxSeconds"`
+}
+
+const (
+	DefaultBackoffTransientMaxSeconds = 3600  // 1 小时
+	DefaultBackoffRateLimitMaxSeconds = 7200  // 2 小时
+	DefaultBackoffAuthMaxSeconds      = 21600 // 6 小时
+
+	DefaultEmbedCacheTTLSeconds = 5
+	DefaultEmbedRateLimitRPS    = 5.0
+	DefaultEmbedRateLimitBurst  = 30
+)
+
+func boolPtr(v bool) *bool { return &v }
+
+// IsBackoffEnabled 返回是否开启异常目标指数退避（未显式配置时默认开启）。
+func (c IntelligenceConfig) IsBackoffEnabled() bool {
+	if c.BackoffEnabled == nil {
+		return true
+	}
+	return *c.BackoffEnabled
 }
 
 func (c IntelligenceConfig) WithDefaults() IntelligenceConfig {
@@ -339,6 +364,67 @@ func (c IntelligenceConfig) WithDefaults() IntelligenceConfig {
 	}
 	if c.Concurrency > 32 {
 		c.Concurrency = 32
+	}
+	if c.BackoffEnabled == nil {
+		c.BackoffEnabled = boolPtr(true)
+	}
+	if c.BackoffTransientMaxSeconds <= 0 {
+		c.BackoffTransientMaxSeconds = DefaultBackoffTransientMaxSeconds
+	}
+	if c.BackoffRateLimitMaxSeconds <= 0 {
+		c.BackoffRateLimitMaxSeconds = DefaultBackoffRateLimitMaxSeconds
+	}
+	if c.BackoffAuthMaxSeconds <= 0 {
+		c.BackoffAuthMaxSeconds = DefaultBackoffAuthMaxSeconds
+	}
+	return c
+}
+
+// EmbedConfig 公开 /embed 与 /api/public/status 的微缓存与按 IP 限流配置。
+type EmbedConfig struct {
+	CacheTTLSeconds  *int    `mapstructure:"cacheTTLSeconds" yaml:"cacheTTLSeconds" json:"cacheTTLSeconds"`
+	RateLimitEnabled *bool   `mapstructure:"rateLimitEnabled" yaml:"rateLimitEnabled" json:"rateLimitEnabled"`
+	RateLimitRPS     float64 `mapstructure:"rateLimitRPS" yaml:"rateLimitRPS" json:"rateLimitRPS"`
+	RateLimitBurst   int     `mapstructure:"rateLimitBurst" yaml:"rateLimitBurst" json:"rateLimitBurst"`
+}
+
+func intPtr(v int) *int { return &v }
+
+func (c EmbedConfig) EffectiveCacheTTLSeconds() int {
+	if c.CacheTTLSeconds == nil {
+		return DefaultEmbedCacheTTLSeconds
+	}
+	if *c.CacheTTLSeconds < 0 {
+		return 0
+	}
+	if *c.CacheTTLSeconds > 60 {
+		return 60
+	}
+	return *c.CacheTTLSeconds
+}
+
+func (c EmbedConfig) IsRateLimitEnabled() bool {
+	if c.RateLimitEnabled == nil {
+		return true
+	}
+	return *c.RateLimitEnabled
+}
+
+func (c EmbedConfig) WithDefaults() EmbedConfig {
+	if c.CacheTTLSeconds == nil {
+		c.CacheTTLSeconds = intPtr(DefaultEmbedCacheTTLSeconds)
+	} else {
+		v := c.EffectiveCacheTTLSeconds()
+		c.CacheTTLSeconds = intPtr(v)
+	}
+	if c.RateLimitEnabled == nil {
+		c.RateLimitEnabled = boolPtr(true)
+	}
+	if c.RateLimitRPS <= 0 {
+		c.RateLimitRPS = DefaultEmbedRateLimitRPS
+	}
+	if c.RateLimitBurst <= 0 {
+		c.RateLimitBurst = DefaultEmbedRateLimitBurst
 	}
 	return c
 }
@@ -430,6 +516,7 @@ func load(path string, withEnv bool) (*Config, string, error) {
 	cfg.Gateway = cfg.Gateway.WithDefaults()
 	cfg.Pricing = cfg.Pricing.WithDefaults()
 	cfg.Intelligence = cfg.Intelligence.WithDefaults()
+	cfg.Embed = cfg.Embed.WithDefaults()
 	return cfg, v.ConfigFileUsed(), nil
 }
 
@@ -556,6 +643,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intelligence.lmfpdDataDir", "./data/lmfpd")
 	v.SetDefault("intelligence.tickIntervalSeconds", 10)
 	v.SetDefault("intelligence.concurrency", 3)
+	v.SetDefault("intelligence.backoffEnabled", true)
+	v.SetDefault("intelligence.backoffTransientMaxSeconds", DefaultBackoffTransientMaxSeconds)
+	v.SetDefault("intelligence.backoffRateLimitMaxSeconds", DefaultBackoffRateLimitMaxSeconds)
+	v.SetDefault("intelligence.backoffAuthMaxSeconds", DefaultBackoffAuthMaxSeconds)
+
+	v.SetDefault("embed.cacheTTLSeconds", DefaultEmbedCacheTTLSeconds)
+	v.SetDefault("embed.rateLimitEnabled", true)
+	v.SetDefault("embed.rateLimitRPS", DefaultEmbedRateLimitRPS)
+	v.SetDefault("embed.rateLimitBurst", DefaultEmbedRateLimitBurst)
 
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")
