@@ -1152,3 +1152,40 @@ export interface EmbedSiteInput {
   target_ids: number[]
   show_identity_column: boolean
 }
+
+export type PerformanceTrendWindow = "6h" | "24h" | "7d"
+
+export interface PerformanceTrendPoint {
+  timestamp: string
+  sample_count: number
+  success_count: number
+  success_rate: number
+  avg_first_token_ms: number
+  p95_first_token_ms: number
+  avg_latency_ms: number
+  tps: number
+}
+
+export interface PerformanceTrendSeries {
+  target_id: number
+  window: PerformanceTrendWindow
+  bucket_minutes: number
+  points: PerformanceTrendPoint[]
+}
+
+export interface TargetCompareItem {
+  target: ProbeTarget
+  performance: ProbePerformanceSummary
+  candy_passed_24h: number
+  candy_checked_24h: number
+  lmfpd_rank1_count: number
+  lmfpd_checked: number
+  latest_runs: Record<string, ProbeIntelligenceRun>
+  trend: PerformanceTrendPoint[]
+}
+
+export interface TargetCompareResult {
+  window: PerformanceTrendWindow
+  bucket_minutes: number
+  items: TargetCompareItem[]
+}

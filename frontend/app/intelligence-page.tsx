@@ -3,9 +3,11 @@ import { toast } from "sonner"
 import {
   Activity,
   AlertTriangle,
+  BarChart3,
   BrainCircuit,
   Globe,
   History,
+  LayoutList,
   Loader2,
   PencilLine,
   Play,
@@ -44,6 +46,7 @@ import {
 import { TargetFormDialog } from "@/components/intelligence/target-form-dialog"
 import { DetectorsDrawer } from "@/components/intelligence/detectors-drawer"
 import { HistoryDrawer } from "@/components/intelligence/history-drawer"
+import { ComparePanel } from "@/components/intelligence/compare-panel"
 import { cn } from "@/lib/utils"
 
 export default function IntelligencePage() {
@@ -55,6 +58,7 @@ export default function IntelligencePage() {
   const [search, setSearch] = useState("")
   const [familyFilter, setFamilyFilter] = useState<ProbeFamily | "all">("all")
   const [onlyAlert, setOnlyAlert] = useState(false)
+  const [viewMode, setViewMode] = useState<"list" | "compare">("list")
 
   const [formOpen, setFormOpen] = useState(false)
   const [editingTarget, setEditingTarget] = useState<ProbeTarget | null>(null)
@@ -223,7 +227,29 @@ export default function IntelligencePage() {
           </p>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-md border border-border bg-muted/30 p-0.5">
+            <Button
+              type="button"
+              size="sm"
+              variant={viewMode === "list" ? "secondary" : "ghost"}
+              className="h-7 gap-1 px-2.5 text-xs"
+              onClick={() => setViewMode("list")}
+            >
+              <LayoutList className="size-3.5" />
+              目标列表
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={viewMode === "compare" ? "secondary" : "ghost"}
+              className="h-7 gap-1 px-2.5 text-xs"
+              onClick={() => setViewMode("compare")}
+            >
+              <BarChart3 className="size-3.5" />
+              横向对比
+            </Button>
+          </div>
           <Button
             variant="outline"
             size="sm"
@@ -288,8 +314,12 @@ export default function IntelligencePage() {
         />
       </div>
 
-      {/* 筛选栏 */}
-      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+      {viewMode === "compare" ? (
+        <ComparePanel targets={targets} />
+      ) : (
+        <>
+          {/* 筛选栏 */}
+          <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-1.5">
           {(["all", "claude", "codex", "grok", "domestic", "other"] as const).map(
             (fam) => (
@@ -667,6 +697,8 @@ export default function IntelligencePage() {
             )
           })}
         </div>
+      )}
+        </>
       )}
 
       <TargetFormDialog

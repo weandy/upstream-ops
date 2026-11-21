@@ -160,3 +160,46 @@ func TestLivenessProbeExecution(t *testing.T) {
 		t.Fatalf("expected failed liveness sample, got %+v", failSample)
 	}
 }
+
+func TestAggregatePerformanceTrendWindowsAndP95(t *testing.T) {
+	now := time.Date(2026, 11, 21, 12, 15, 0, 0, time.UTC)
+	samples := []storage.ProbeLivenessSample{
+		// 当前 30 分钟桶（12:00）放入 4 个样本，验证均值与 P95 TTFT。
+		{Success: true, FirstTokenMS: 400, LatencyMS: 1400, OutputTokens: 40, ObservedAt: now.Add(-10 * time.Minute)},
+		{Success: true, FirstTokenMS: 600, LatencyMS: 1600, OutputTokens: 40, ObservedAt: now.Add(-8 * time.Minute)},
+		{Success: true, FirstTokenMS: 800, LatencyMS: 1800, OutputTokens: 40, ObservedAt: now.Add(-6 * time.Minute)},
+		{Success: true, FirstTokenMS: 2200, LatencyMS: 3200, OutputTokens: 40, ObservedAt: now.Add(-4 * time.Minute)},
+		{Success: false, HTTPStatus: 502, ObservedAt: now.Add(-2 * time.Minute)},
+		// 2 小时前（10:00 桶）放 1 个样本。
+		{Success: true, FirstTokenMS: 500, LatencyMS: 1500, OutputTokens: 50, ObservedAt: now.Add(-2 * time.Hour)},
+	}
+
+	win, bucketMin, points := AggregatePerformanceTrend(samples, "24h", now)
+	if win != "24h" || bucketMin != 30 || len(points) != 48 {
+		t.Fatalf("expected 24h / 30m / 48 points, got %s / %dm / %d", win, bucketMin, len(points))
+	}
+	last := points[len(points)-1]
+	if last.SampleCount != 5 || last.SuccessCount != 4 || math.Abs(last.SuccessRate-80.0) > 0.01 {
+		t.Fatalf("unexpected last bucket counts: %+v", last)
+	}
+	if last.AvgFirstTokenMS != 1000 || last.P95FirstTokenMS != 2200 {
+		t.Fatalf("expected avg TTFT 1000 / P95 2200, got avg=%d p95=%d", last.AvgFirstTokenMS, last.P95FirstTokenMS)
+	}
+	if math.Abs(last.TPS-40.0) > 0.01 {
+		t.Fatalf("expected bucket TPS 40.0, got %.2f", last.TPS)
+	}
+
+	// 校验 6h 与 7d 窗口以及非法窗口回退。
+	w6, m6, p6 := AggregatePerformanceTrend(samples, "6h", now)
+	if w6 != "6h" || m6 != 10 || len(p6) != 36 {
+		t.Fatalf("unexpected 6h window: %s / %d / %d", w6, m6, len(p6))
+	}
+	w7, m7, p7 := AggregatePerformanceTrend(samples, "7d", now)
+	if w7 != "7d" || m7 != 180 || len(p7) != 56 {
+		t.Fatalf("unexpected 7d window: %s / %d / %d", w7, m7, len(p7))
+	}
+	wDef, _, _ := AggregatePerformanceTrend(samples, "invalid", now)
+	if wDef != "24h" {
+		t.Fatalf("expected invalid window fallback to 24h, got %s", wDef)
+	}
+}

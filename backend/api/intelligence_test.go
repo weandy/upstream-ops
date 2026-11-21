@@ -217,4 +217,23 @@ func TestIntelligencePluginWorkflowAndArtifactSandboxAPI(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"candy_passed_24h":1`) {
 		t.Fatalf("GET overviews failed: status=%d body=%s", rec.Code, rec.Body.String())
 	}
+
+	// 8. 读取单目标性能趋势与多目标横向对比接口。
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/intelligence/targets/1/trend?window=6h", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"bucket_minutes":10`) {
+		t.Fatalf("GET trend failed: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/intelligence/compare?ids=1&window=24h", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"candy_passed_24h":1`) || !strings.Contains(rec.Body.String(), `"bucket_minutes":30`) {
+		t.Fatalf("GET compare failed: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/intelligence/compare?ids=abc", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on invalid compare ids, got %d", rec.Code)
+	}
 }
