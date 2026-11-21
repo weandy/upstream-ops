@@ -107,16 +107,28 @@ export function formatSuccessRateClass(rate: number, samples: number): string {
   return "text-rose-600 dark:text-rose-400"
 }
 
-function bucketColor(tone: AvailabilityBucket["tone"]): string {
+function bucketBarClass(tone: AvailabilityBucket["tone"], compact: boolean): string {
   switch (tone) {
     case "ok":
-      return "bg-emerald-500/85 dark:bg-emerald-400/85"
+      return cn(
+        compact ? "h-5" : "h-7",
+        "rounded-[2.5px] bg-emerald-500/90 dark:bg-emerald-400/90",
+      )
     case "warn":
-      return "bg-amber-500/90 dark:bg-amber-400/90"
+      return cn(
+        compact ? "h-5" : "h-7",
+        "rounded-[2.5px] bg-amber-500/95 dark:bg-amber-400/95",
+      )
     case "down":
-      return "bg-rose-500/90 dark:bg-rose-400/90"
+      return cn(
+        compact ? "h-5" : "h-7",
+        "rounded-[2.5px] bg-rose-500/95 dark:bg-rose-400/95",
+      )
     default:
-      return "bg-muted-foreground/20"
+      return cn(
+        compact ? "h-2.5" : "h-3.5",
+        "rounded-[2px] bg-muted-foreground/20",
+      )
   }
 }
 
@@ -134,39 +146,56 @@ function formatBucketTooltip(b: AvailabilityBucket): string {
 export function TrendStrip({
   buckets,
   compact = false,
+  showAxis = true,
   className,
 }: {
   buckets: AvailabilityBucket[]
   compact?: boolean
+  showAxis?: boolean
   className?: string
 }) {
   const list = buckets.length > 0 ? buckets : []
+  const count = Math.max(list.length, 60)
   return (
-    <div
-      className={cn(
-        "grid w-full items-stretch gap-px",
-        compact ? "h-5 min-w-[160px]" : "h-7",
-        className,
-      )}
-      style={{
-        gridTemplateColumns: `repeat(${Math.max(list.length, 60)}, minmax(1px, 1fr))`,
-      }}
-      aria-label="近 60 分钟逐分钟可用率"
-    >
-      {list.length === 0
-        ? Array.from({ length: 60 }).map((_, idx) => (
-            <span
-              key={idx}
-              className="block rounded-[1px] bg-muted-foreground/15"
-            />
-          ))
-        : list.map((b, idx) => (
-            <span
-              key={`${b.timestamp}-${idx}`}
-              title={formatBucketTooltip(b)}
-              className={cn("block rounded-[1px] transition-opacity hover:opacity-80", bucketColor(b.tone))}
-            />
-          ))}
+    <div className={cn("w-full space-y-1.5", className)}>
+      <div
+        className={cn(
+          "grid w-full items-center gap-[2px] sm:gap-[3px]",
+          compact ? "h-6" : "h-8",
+        )}
+        style={{
+          gridTemplateColumns: `repeat(${count}, minmax(2px, 1fr))`,
+        }}
+        aria-label="近 60 分钟逐分钟可用率"
+      >
+        {list.length === 0
+          ? Array.from({ length: 60 }).map((_, idx) => (
+              <span
+                key={idx}
+                className={cn(
+                  "block rounded-[2px] bg-muted-foreground/20",
+                  compact ? "h-2.5" : "h-3.5",
+                )}
+              />
+            ))
+          : list.map((b, idx) => (
+              <span
+                key={`${b.timestamp}-${idx}`}
+                title={formatBucketTooltip(b)}
+                className={cn(
+                  "block transition-transform duration-150 hover:scale-y-125",
+                  bucketBarClass(b.tone, compact),
+                )}
+              />
+            ))}
+      </div>
+      {showAxis ? (
+        <div className="flex items-center justify-between font-mono text-[10px] leading-none text-muted-foreground/80">
+          <span>60 分钟前</span>
+          <span className="hidden sm:inline">30 分钟前</span>
+          <span>现在</span>
+        </div>
+      ) : null}
     </div>
   )
 }

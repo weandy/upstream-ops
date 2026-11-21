@@ -215,7 +215,9 @@ export function HistoryDrawer({
                   )}
                 />
               </div>
-              <TrendStrip buckets={overview?.trend ?? []} />
+              <div className="rounded-lg border border-border/70 bg-muted/15 px-3 py-2">
+                <TrendStrip buckets={overview?.trend ?? []} />
+              </div>
             </div>
           ) : null}
         </SheetHeader>
