@@ -325,6 +325,73 @@ func normalizeReasoningEffort(effort string) string {
 	}
 }
 
+// anthropicUsesManualThinking 判断目标 Claude 模型是否属于旧代手动 budget_tokens 架构（3.7 / 4.0–4.5）。
+// Claude 4.6+ / 5.x 起改为 Adaptive Thinking + output_config.effort，传入 budget_tokens 会触发 400。
+func anthropicUsesManualThinking(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	for _, token := range []string{
+		"3-7", "3.7",
+		"4-0", "4.0",
+		"4-1", "4.1",
+		"4-2", "4.2",
+		"4-5", "4.5",
+		"-4-2025",
+	} {
+		if strings.Contains(m, token) {
+			return true
+		}
+	}
+	return false
+}
+
+// applyAnthropicReasoning 将统一的 reasoning_effort 映射为 Anthropic /v1/messages 参数。
+// 返回值表示是否启用了 thinking（启用时 Anthropic 要求不传非 1.0 的 temperature）。
+func applyAnthropicReasoning(body map[string]any, model, effort string, maxTokens int) bool {
+	if effort == "" {
+		return false
+	}
+	if effort == "none" {
+		body["thinking"] = map[string]any{"type": "disabled"}
+		return false
+	}
+
+	if anthropicUsesManualThinking(model) {
+		budget := 4096
+		switch effort {
+		case "minimal":
+			budget = 1024
+		case "low":
+			budget = 2048
+		case "medium":
+			budget = 4096
+		case "high":
+			budget = 8192
+		case "xhigh":
+			budget = 16384
+		case "max":
+			budget = 24576
+		}
+		// Anthropic 严格要求 max_tokens > thinking.budget_tokens。
+		if maxTokens <= budget {
+			body["max_tokens"] = budget + 1024
+		}
+		body["thinking"] = map[string]any{
+			"type":          "enabled",
+			"budget_tokens": budget,
+		}
+		return true
+	}
+
+	// Claude 4.6+ / 5.x：Adaptive Thinking + output_config.effort。
+	mappedEffort := effort
+	if mappedEffort == "minimal" {
+		mappedEffort = "low"
+	}
+	body["thinking"] = map[string]any{"type": "adaptive"}
+	body["output_config"] = map[string]any{"effort": mappedEffort}
+	return true
+}
+
 func buildRequestBody(proto string, req Request) (string, []byte, error) {
 	effort := normalizeReasoningEffort(req.ReasoningEffort)
 	maxTokens := req.MaxTokens
@@ -364,7 +431,8 @@ func buildRequestBody(proto string, req Request) (string, []byte, error) {
 		if strings.TrimSpace(req.SystemPrompt) != "" {
 			body["system"] = req.SystemPrompt
 		}
-		if req.Temperature != nil {
+		thinkingEnabled := applyAnthropicReasoning(body, req.Model, effort, maxTokens)
+		if req.Temperature != nil && !thinkingEnabled {
 			body["temperature"] = *req.Temperature
 		}
 		raw, err := json.Marshal(body)

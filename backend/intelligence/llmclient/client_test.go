@@ -214,6 +214,109 @@ func TestAnthropicStreamTextAndThinkingSeparation(t *testing.T) {
 	}
 }
 
+func TestAnthropicReasoningEffortMapping(t *testing.T) {
+	t.Run("adaptive_claude_4_6_and_5_x", func(t *testing.T) {
+		var gotBody map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"21"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`))
+		}))
+		defer srv.Close()
+
+		_, err := New().Complete(context.Background(), Request{
+			BaseURL:         srv.URL,
+			APIKey:          "sk-ant",
+			Protocol:        storage.ProbeProtocolAnthropic,
+			Model:           "claude-opus-4-6",
+			Prompt:          "answer 21",
+			ReasoningEffort: "high",
+			MaxTokens:       4096,
+			Timeout:         5 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("Complete failed: %v", err)
+		}
+		thinking, _ := gotBody["thinking"].(map[string]any)
+		outCfg, _ := gotBody["output_config"].(map[string]any)
+		if thinking["type"] != "adaptive" {
+			t.Fatalf("expected thinking.type=adaptive, got %#v", gotBody["thinking"])
+		}
+		if outCfg["effort"] != "high" {
+			t.Fatalf("expected output_config.effort=high, got %#v", gotBody["output_config"])
+		}
+	})
+
+	t.Run("manual_budget_claude_4_5_raises_max_tokens", func(t *testing.T) {
+		var gotBody map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"21"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":5}}`))
+		}))
+		defer srv.Close()
+
+		temp := 0.5
+		_, err := New().Complete(context.Background(), Request{
+			BaseURL:         srv.URL,
+			APIKey:          "sk-ant",
+			Protocol:        storage.ProbeProtocolAnthropic,
+			Model:           "claude-sonnet-4-5-20250929",
+			Prompt:          "answer 21",
+			ReasoningEffort: "high",
+			MaxTokens:       4096,
+			Temperature:     &temp,
+			Timeout:         5 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("Complete failed: %v", err)
+		}
+		thinking, _ := gotBody["thinking"].(map[string]any)
+		if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(8192) {
+			t.Fatalf("expected manual thinking enabled with budget_tokens=8192, got %#v", gotBody["thinking"])
+		}
+		if gotBody["max_tokens"] != float64(9216) {
+			t.Fatalf("expected max_tokens auto-raised to 9216 (> 8192), got %#v", gotBody["max_tokens"])
+		}
+		if _, hasTemp := gotBody["temperature"]; hasTemp {
+			t.Fatalf("expected temperature omitted when thinking enabled, got %#v", gotBody["temperature"])
+		}
+	})
+
+	t.Run("none_disables_thinking_and_omit_skips", func(t *testing.T) {
+		var bodies []map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var b map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&b)
+			bodies = append(bodies, b)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":2}}`))
+		}))
+		defer srv.Close()
+
+		for _, effort := range []string{"none", "omit"} {
+			if _, err := New().Complete(context.Background(), Request{
+				BaseURL:         srv.URL,
+				APIKey:          "sk-ant",
+				Protocol:        storage.ProbeProtocolAnthropic,
+				Model:           "claude-opus-4-6",
+				Prompt:          "hi",
+				ReasoningEffort: effort,
+				Timeout:         5 * time.Second,
+			}); err != nil {
+				t.Fatalf("Complete(%s) failed: %v", effort, err)
+			}
+		}
+		thinkingNone, _ := bodies[0]["thinking"].(map[string]any)
+		if thinkingNone["type"] != "disabled" {
+			t.Fatalf("expected thinking.type=disabled for effort=none, got %#v", bodies[0]["thinking"])
+		}
+		if _, exists := bodies[1]["thinking"]; exists {
+			t.Fatalf("expected no thinking field for effort=omit, got %#v", bodies[1]["thinking"])
+		}
+	})
+}
+
 func TestStreamTruncationAndHTTPErrorClassification(t *testing.T) {
 	t.Run("truncated stream", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
