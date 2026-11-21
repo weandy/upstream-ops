@@ -4,6 +4,7 @@ import {
   Bell,
   BrainCircuit,
   Clock3,
+  Globe,
   MonitorCog,
   KeyRound,
   Network,
@@ -42,6 +43,7 @@ import type {
   NotificationChannel,
   NotificationChannelType,
   SystemConfig,
+  SystemEmbedConfig,
   SystemGatewayConfig,
   SystemIntelligenceConfig,
 } from "@/lib/api-types";
@@ -78,6 +80,17 @@ const defaultIntelligenceConfig: SystemIntelligenceConfig = {
   lmfpdDataDir: "./data/lmfpd",
   tickIntervalSeconds: 10,
   concurrency: 3,
+  backoffEnabled: true,
+  backoffTransientMaxSeconds: 3600,
+  backoffRateLimitMaxSeconds: 7200,
+  backoffAuthMaxSeconds: 21600,
+};
+
+const defaultEmbedConfig: SystemEmbedConfig = {
+  cacheTTLSeconds: 5,
+  rateLimitEnabled: true,
+  rateLimitRPS: 5,
+  rateLimitBurst: 30,
 };
 
 function patchGateway(
@@ -154,6 +167,10 @@ export default function SettingsPage() {
         intelligence: {
           ...defaultIntelligenceConfig,
           ...(cfg.intelligence ?? {}),
+        },
+        embed: {
+          ...defaultEmbedConfig,
+          ...(cfg.embed ?? {}),
         },
       });
     }
@@ -1268,7 +1285,7 @@ export default function SettingsPage() {
           <SectionCard
             icon={<BrainCircuit className="size-4 text-emerald-600" />}
             title="模型智力监测"
-            description="配置独立测活/降智监测调度器与外挂 lmfpd 数字指纹参考库目录（优先外挂目录，缺失自动回退内置库）。"
+            description="配置独立测活/降智监测调度器、异常指数退避与外挂 lmfpd 参考库目录。保存后点「应用」立即无阻塞热生效。"
           >
             <div className="grid gap-4 md:grid-cols-3">
               <Field
@@ -1298,7 +1315,7 @@ export default function SettingsPage() {
               </Field>
               <Field
                 label="调度扫描间隔（秒）"
-                description="后台检查到期探测任务的周期，默认 10 秒（重启后生效）。"
+                description="后台检查到期探测任务的周期，默认 10 秒，应用后立即平滑重建。"
               >
                 <Input
                   type="number"
@@ -1324,7 +1341,7 @@ export default function SettingsPage() {
               </Field>
               <Field
                 label="并发执行上限"
-                description="单实例同时运行的探测 Worker 数，默认 3（上限 32，重启后生效）。"
+                description="单实例同时运行的探测 Worker 数，默认 3（上限 32），应用后立即平滑重建。"
               >
                 <Input
                   type="number"
@@ -1342,6 +1359,212 @@ export default function SettingsPage() {
                             intelligence: {
                               ...(prev.intelligence ?? defaultIntelligenceConfig),
                               concurrency: num(e.target.value),
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+            </div>
+            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <InlineSwitch
+                id="intel-backoff-enabled"
+                label="启用异常指数退避"
+                description="429 限流首错退避并尊重 Retry-After；401/403 与超时达告警阈值后自动拉长周期；疑似降智永不退避。"
+                checked={form.intelligence?.backoffEnabled ?? true}
+                onCheckedChange={(checked) =>
+                  setForm((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          intelligence: {
+                            ...(prev.intelligence ?? defaultIntelligenceConfig),
+                            backoffEnabled: checked,
+                          },
+                        }
+                      : prev,
+                  )
+                }
+              />
+              <Field
+                label="瞬时故障退避上限（秒）"
+                description="超时、网络波动与 5xx 连续失败后的最大探测间隔，默认 3600（1 小时）。"
+              >
+                <Input
+                  type="number"
+                  min={60}
+                  value={String(
+                    form.intelligence?.backoffTransientMaxSeconds ??
+                      defaultIntelligenceConfig.backoffTransientMaxSeconds,
+                  )}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            intelligence: {
+                              ...(prev.intelligence ?? defaultIntelligenceConfig),
+                              backoffTransientMaxSeconds: num(e.target.value),
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+              <Field
+                label="429 限流退避上限（秒）"
+                description="上游返回 HTTP 429 时的最大退避间隔，默认 7200（2 小时）。"
+              >
+                <Input
+                  type="number"
+                  min={60}
+                  value={String(
+                    form.intelligence?.backoffRateLimitMaxSeconds ??
+                      defaultIntelligenceConfig.backoffRateLimitMaxSeconds,
+                  )}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            intelligence: {
+                              ...(prev.intelligence ?? defaultIntelligenceConfig),
+                              backoffRateLimitMaxSeconds: num(e.target.value),
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+              <Field
+                label="鉴权/配置错误退避上限（秒）"
+                description="401/403/400/404 持续失败后的最大探测间隔，默认 21600（6 小时）。"
+              >
+                <Input
+                  type="number"
+                  min={60}
+                  value={String(
+                    form.intelligence?.backoffAuthMaxSeconds ??
+                      defaultIntelligenceConfig.backoffAuthMaxSeconds,
+                  )}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            intelligence: {
+                              ...(prev.intelligence ?? defaultIntelligenceConfig),
+                              backoffAuthMaxSeconds: num(e.target.value),
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+            </div>
+          </SectionCard>
+
+          <SectionCard
+            icon={<Globe className="size-4 text-sky-600" />}
+            title="外部嵌入抗压与限流"
+            description="保护公开 /embed 页面与 /api/public/status 接口：进程内微缓存抗并发读击穿，按 IP 令牌桶防止恶意刷流。应用后立即生效。"
+          >
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <InlineSwitch
+                id="embed-ratelimit-enabled"
+                label="启用按 IP 限流"
+                description="限制单个客户端 IP 对公开嵌入页与状态接口的请求频率，超限返回 429。"
+                checked={form.embed?.rateLimitEnabled ?? true}
+                onCheckedChange={(checked) =>
+                  setForm((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          embed: {
+                            ...(prev.embed ?? defaultEmbedConfig),
+                            rateLimitEnabled: checked,
+                          },
+                        }
+                      : prev,
+                  )
+                }
+              />
+              <Field
+                label="微缓存 TTL（秒）"
+                description="同站点同视图并发自动合并为 1 次查库，默认 5 秒（0 表示关闭，最大 60 秒）。"
+              >
+                <Input
+                  type="number"
+                  min={0}
+                  max={60}
+                  value={String(
+                    form.embed?.cacheTTLSeconds ??
+                      defaultEmbedConfig.cacheTTLSeconds,
+                  )}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            embed: {
+                              ...(prev.embed ?? defaultEmbedConfig),
+                              cacheTTLSeconds: num(e.target.value),
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+              <Field
+                label="单 IP 速率上限（req/s）"
+                description="令牌桶持续补充速率，默认 5 次/秒。"
+              >
+                <Input
+                  type="number"
+                  step="0.5"
+                  min={0.5}
+                  value={String(
+                    form.embed?.rateLimitRPS ?? defaultEmbedConfig.rateLimitRPS,
+                  )}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            embed: {
+                              ...(prev.embed ?? defaultEmbedConfig),
+                              rateLimitRPS: Number(e.target.value || 0),
+                            },
+                          }
+                        : prev,
+                    )
+                  }
+                />
+              </Field>
+              <Field
+                label="单 IP 突发容量（Burst）"
+                description="允许同 IP 短时突发请求数（覆盖含多张 Pelican 缩略图的单页加载），默认 30。"
+              >
+                <Input
+                  type="number"
+                  min={1}
+                  value={String(
+                    form.embed?.rateLimitBurst ??
+                      defaultEmbedConfig.rateLimitBurst,
+                  )}
+                  onChange={(e) =>
+                    setForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            embed: {
+                              ...(prev.embed ?? defaultEmbedConfig),
+                              rateLimitBurst: num(e.target.value),
                             },
                           }
                         : prev,
@@ -1522,7 +1745,7 @@ export default function SettingsPage() {
             >
               {configSavedPendingApply
                 ? "配置已保存但尚未应用，点击应用后才会立即生效。"
-                : "保存写入配置文件，应用让鉴权、调度、通知策略、代理和上游请求配置立即更新。"}
+                : "保存写入配置文件，应用让鉴权、调度、通知策略、智力监测调度与退避、外部嵌入抗压、代理和上游请求配置立即热更新。"}
             </span>
           </div>
             </CardContent>

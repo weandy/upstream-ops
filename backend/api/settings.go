@@ -16,6 +16,7 @@ type settingsConfigView struct {
 	Upstream      config.UpstreamConfig      `json:"upstream"`
 	Gateway       config.GatewayConfig       `json:"gateway"`
 	Intelligence  config.IntelligenceConfig  `json:"intelligence"`
+	Embed         config.EmbedConfig         `json:"embed"`
 }
 
 type settingsConfigInput struct {
@@ -27,6 +28,7 @@ type settingsConfigInput struct {
 	Upstream      config.UpstreamConfig      `json:"upstream"`
 	Gateway       config.GatewayConfig       `json:"gateway"`
 	Intelligence  config.IntelligenceConfig  `json:"intelligence"`
+	Embed         config.EmbedConfig         `json:"embed"`
 }
 
 func registerSettings(g *gin.RouterGroup, d *Deps) {
@@ -55,6 +57,7 @@ func getSettingsConfig(c *gin.Context, d *Deps) {
 				Upstream:      cfg.Upstream.WithDefaults(),
 				Gateway:       cfg.Gateway.WithDefaults(),
 				Intelligence:  cfg.Intelligence.WithDefaults(),
+				Embed:         cfg.Embed.WithDefaults(),
 			},
 		},
 	})
@@ -82,8 +85,20 @@ func saveSettingsConfig(c *gin.Context, d *Deps) {
 	cfg.Proxy = in.Proxy
 	cfg.Upstream = in.Upstream.WithDefaults()
 	cfg.Gateway = in.Gateway.WithDefaults()
-	if in.Intelligence.LMFPDDataDir != "" || in.Intelligence.TickIntervalSeconds > 0 || in.Intelligence.Concurrency > 0 {
+	if in.Intelligence.LMFPDDataDir != "" ||
+		in.Intelligence.TickIntervalSeconds > 0 ||
+		in.Intelligence.Concurrency > 0 ||
+		in.Intelligence.BackoffEnabled != nil ||
+		in.Intelligence.BackoffTransientMaxSeconds > 0 ||
+		in.Intelligence.BackoffRateLimitMaxSeconds > 0 ||
+		in.Intelligence.BackoffAuthMaxSeconds > 0 {
 		cfg.Intelligence = in.Intelligence.WithDefaults()
+	}
+	if in.Embed.CacheTTLSeconds != nil ||
+		in.Embed.RateLimitEnabled != nil ||
+		in.Embed.RateLimitRPS > 0 ||
+		in.Embed.RateLimitBurst > 0 {
+		cfg.Embed = in.Embed.WithDefaults()
 	}
 
 	if err := config.Save(path, cfg); err != nil {

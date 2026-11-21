@@ -321,6 +321,17 @@ export interface SystemIntelligenceConfig {
   lmfpdDataDir: string
   tickIntervalSeconds: number
   concurrency: number
+  backoffEnabled?: boolean
+  backoffTransientMaxSeconds?: number
+  backoffRateLimitMaxSeconds?: number
+  backoffAuthMaxSeconds?: number
+}
+
+export interface SystemEmbedConfig {
+  cacheTTLSeconds: number
+  rateLimitEnabled: boolean
+  rateLimitRPS: number
+  rateLimitBurst: number
 }
 
 export interface SystemConfig {
@@ -332,6 +343,7 @@ export interface SystemConfig {
   upstream: SystemUpstreamConfig
   gateway: SystemGatewayConfig
   intelligence?: SystemIntelligenceConfig
+  embed?: SystemEmbedConfig
 }
 
 export interface SystemConfigResponse {
@@ -1026,6 +1038,9 @@ export interface ProbeDetectorConfig {
   alert_threshold: number
   params_json?: string
   embed_visible: boolean
+  consecutive_errors?: number
+  last_error_class?: string
+  backoff_until?: string | null
   last_run_at?: string | null
   next_run_at?: string | null
   created_at: string

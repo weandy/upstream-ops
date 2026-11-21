@@ -139,11 +139,14 @@ func main() {
 	intelligenceSvc.UpdateProxyConfig(cfg.Proxy)
 	intelligenceSvc.UpdateUpstreamConfig(cfg.Upstream)
 	intelligenceSvc.SetLMFPDDataDir(intelCfg.LMFPDDataDir)
+	intelligenceSvc.UpdateBackoffConfig(intelCfg)
 	intelAlerter := intelligence.NewAlerter(intelligenceSvc.Liveness, intelligenceSvc.Runs, dispatcher, log)
 	intelligenceSvc.SetResultHook(intelAlerter.HandleResult)
 	intelligenceSvc.Start(time.Duration(intelCfg.TickIntervalSeconds)*time.Second, intelCfg.Concurrency)
 	defer intelligenceSvc.Stop()
 	embedSvc := embedsvc.NewService(db, intelligenceSvc)
+	embedSvc.UpdateRuntimeConfig(cfg.Embed.WithDefaults())
+	intelligenceSvc.SetOnPublicDataChanged(embedSvc.InvalidateSnapshots)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
 		s := scheduler.New(scfg, monitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, gatewaySvc, pcfg, log)
@@ -172,6 +175,7 @@ func main() {
 		schedulerFactory,
 	)
 	runtimeMgr.SetIntelligenceService(intelligenceSvc)
+	runtimeMgr.SetEmbedService(embedSvc)
 
 	gin.SetMode(cfg.Server.Mode)
 	router := gin.New()

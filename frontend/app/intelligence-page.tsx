@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import {
   Activity,
@@ -9,6 +9,7 @@ import {
   History,
   LayoutList,
   Loader2,
+  PauseCircle,
   PencilLine,
   Play,
   Plus,
@@ -31,6 +32,7 @@ import {
 } from "@/lib/queries"
 import type {
   DetectorRunResult,
+  ProbeDetectorConfig,
   ProbeFamily,
   ProbeTarget,
   TargetOverview,
@@ -70,6 +72,14 @@ export default function IntelligencePage() {
     tab: string
   }>({ target: null, tab: "liveness" })
   const [runningTargetID, setRunningTargetID] = useState<number | null>(null)
+  const [nowMs, setNowMs] = useState<number>(() => Date.now())
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNowMs(Date.now())
+    }, 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const overviewList = useMemo(
     () => overviewsQuery.data ?? [],
@@ -400,6 +410,7 @@ export default function IntelligencePage() {
             const enabledCfgs = (ov?.detector_configs ?? []).filter(
               (c) => c.enabled,
             )
+            const activeBackoffs = getActiveBackoffs(enabledCfgs, nowMs)
             const candyRun = ov?.latest_runs?.candy
             const lmfpdRun = ov?.latest_runs?.lmfpd
             const pelicanRun = ov?.latest_runs?.pelican
@@ -691,6 +702,25 @@ export default function IntelligencePage() {
                         暂未开启智力监测插件，点击「插件配置」自由勾选
                       </span>
                     ) : null}
+
+                    {activeBackoffs.length > 0 ? (
+                      <div className="ml-auto flex flex-wrap items-center gap-1.5">
+                        {activeBackoffs.map((item) => (
+                          <Badge
+                            key={item.detectorKey}
+                            variant="outline"
+                            title={`已连续失败 ${item.consecutiveErrors} 次，退避至 ${item.untilText}；点击「立即测」或更新密钥后自动恢复`}
+                            className="gap-1 border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-700 dark:text-amber-300"
+                          >
+                            <PauseCircle className="size-3" />
+                            <span>
+                              {item.detectorLabel} 退避中（{item.reasonLabel} · 剩{" "}
+                              {item.remainingText}）
+                            </span>
+                          </Badge>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </CardContent>
               </Card>
@@ -773,4 +803,65 @@ function KpiCard({
       </CardContent>
     </Card>
   )
+}
+
+interface ActiveBackoffItem {
+  detectorKey: string
+  detectorLabel: string
+  reasonLabel: string
+  consecutiveErrors: number
+  remainingText: string
+  untilText: string
+}
+
+const DETECTOR_SHORT_LABELS: Record<string, string> = {
+  liveness: "测活",
+  candy: "Candy",
+  lmfpd: "指纹",
+  pelican: "画鹈鹕",
+  custom_prompt: "自定义题",
+}
+
+const ERROR_CLASS_LABELS: Record<string, string> = {
+  rate_limit: "429限流",
+  auth: "鉴权失败",
+  config: "配置错误",
+  timeout: "请求超时",
+  network: "网络异常",
+  upstream: "上游异常",
+  truncated: "流式截断",
+}
+
+function formatRemainingDuration(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return "<1m"
+  const mins = Math.ceil(sec / 60)
+  if (mins < 60) return `${mins}m`
+  const hours = Math.floor(mins / 60)
+  const remMins = mins % 60
+  return remMins > 0 ? `${hours}h${remMins}m` : `${hours}h`
+}
+
+function getActiveBackoffs(
+  cfgs: ProbeDetectorConfig[],
+  nowMs: number,
+): ActiveBackoffItem[] {
+  const out: ActiveBackoffItem[] = []
+  for (const cfg of cfgs) {
+    const errs = cfg.consecutive_errors ?? 0
+    if (!cfg.enabled || errs <= 0 || !cfg.backoff_until) continue
+    const untilMs = Date.parse(cfg.backoff_until)
+    if (!Number.isFinite(untilMs) || untilMs <= nowMs) continue
+    out.push({
+      detectorKey: cfg.detector_key,
+      detectorLabel: DETECTOR_SHORT_LABELS[cfg.detector_key] ?? cfg.detector_key,
+      reasonLabel:
+        ERROR_CLASS_LABELS[(cfg.last_error_class ?? "").toLowerCase()] ??
+        (cfg.last_error_class || "连续错误"),
+      consecutiveErrors: errs,
+      remainingText: formatRemainingDuration(untilMs - nowMs),
+      untilText: new Date(untilMs).toLocaleTimeString(),
+    })
+  }
+  return out
 }

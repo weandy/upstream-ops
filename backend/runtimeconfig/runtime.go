@@ -10,6 +10,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/auth"
 	"github.com/bejix/upstream-ops/backend/channel"
 	"github.com/bejix/upstream-ops/backend/config"
+	embedsvc "github.com/bejix/upstream-ops/backend/embed"
 	"github.com/bejix/upstream-ops/backend/gateway"
 	"github.com/bejix/upstream-ops/backend/intelligence"
 	"github.com/bejix/upstream-ops/backend/notify"
@@ -28,6 +29,7 @@ type Manager struct {
 	channelSvc       *channel.Service
 	gatewaySvc       *gateway.Service
 	intelligenceSvc  *intelligence.Service
+	embedSvc         *embedsvc.Service
 	schedulerFactory SchedulerFactory
 	auth             *auth.Service
 	scheduler        *scheduler.Scheduler
@@ -71,10 +73,17 @@ func New(
 	}
 }
 
-// SetIntelligenceService 绑定外挂式监测服务，用于热重载代理、上游和外挂指纹库目录配置。
+// SetIntelligenceService 绑定外挂式监测服务，用于热重载代理、上游、退避策略、调度器与外挂指纹库目录配置。
 func (m *Manager) SetIntelligenceService(svc *intelligence.Service) {
 	m.mu.Lock()
 	m.intelligenceSvc = svc
+	m.mu.Unlock()
+}
+
+// SetEmbedService 绑定外部嵌入服务，用于热重载微缓存 TTL 与按 IP 限流配置。
+func (m *Manager) SetEmbedService(svc *embedsvc.Service) {
+	m.mu.Lock()
+	m.embedSvc = svc
 	m.mu.Unlock()
 }
 
@@ -140,6 +149,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	channelSvc := m.channelSvc
 	gatewaySvc := m.gatewaySvc
 	intelligenceSvc := m.intelligenceSvc
+	embedSvc := m.embedSvc
 	factory := m.schedulerFactory
 	oldScheduler := m.scheduler
 	m.mu.RUnlock()
@@ -185,9 +195,19 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 		intelligenceSvc.UpdateProxyConfig(cfg.Proxy)
 		intelligenceSvc.UpdateUpstreamConfig(cfg.Upstream)
 		intelligenceSvc.SetLMFPDDataDir(intelCfg.LMFPDDataDir)
+		intelligenceSvc.UpdateBackoffConfig(intelCfg)
 		if err := intelligenceSvc.ReloadLMFPD(); err != nil && m.log != nil {
 			m.log.Warn("reload lmfpd reference bank failed, fallback active", "dir", intelCfg.LMFPDDataDir, "err", err)
 		}
+		if rebuilt := intelligenceSvc.Reconfigure(time.Duration(intelCfg.TickIntervalSeconds)*time.Second, intelCfg.Concurrency); rebuilt && m.log != nil {
+			m.log.Info("intelligence runner reconfigured",
+				"tick_interval_seconds", intelCfg.TickIntervalSeconds,
+				"concurrency", intelCfg.Concurrency,
+			)
+		}
+	}
+	if embedSvc != nil {
+		embedSvc.UpdateRuntimeConfig(cfg.Embed.WithDefaults())
 	}
 
 	newScheduler := factory(cfg.Scheduler, cfg.Proxy)
@@ -207,7 +227,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 		oldScheduler.Stop()
 	}
 
-	sections := []string{"app", "auth", "scheduler", "notifications", "retention", "proxy", "upstream", "gateway", "pricing", "intelligence"}
+	sections := []string{"app", "auth", "scheduler", "notifications", "retention", "proxy", "upstream", "gateway", "pricing", "intelligence", "embed"}
 	if m.log != nil {
 		m.log.Info("runtime config applied",
 			"sections", sections,
@@ -217,7 +237,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 
 	return &ApplyResult{
 		AppliedSections: sections,
-		Message:         "app、auth、scheduler、notifications、retention、proxy、upstream、gateway、intelligence 已立即生效",
+		Message:         "app、auth、scheduler、notifications、retention、proxy、upstream、gateway、intelligence、embed 已立即生效",
 	}, nil
 }
 
