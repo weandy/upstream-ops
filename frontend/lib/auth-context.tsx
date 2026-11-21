@@ -13,15 +13,18 @@ import {
   apiFetch,
   setToken,
   setUnauthorizedHandler,
+  type ApiError,
 } from "@/lib/api"
 
-type AuthStatus = "loading" | "anonymous" | "authenticated"
+type AuthStatus = "loading" | "anonymous" | "authenticated" | "unreachable"
 
 interface AuthContextValue {
   status: AuthStatus
   username: string | null
   /** 后端关闭了鉴权（AUTH_ENABLED=false），整套 UI 当作"已登录"渲染。 */
   authDisabled: boolean
+  /** 重新探测 /auth/me。后端暂时连不上时用，不要把它当成登录。 */
+  retry: () => void
   login: (username: string, password: string) => Promise<void>
   logout: () => void
 }
@@ -45,6 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading")
   const [username, setUsername] = useState<string | null>(null)
   const [authDisabled, setAuthDisabled] = useState(false)
+  const [probeGeneration, setProbeGeneration] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -60,20 +64,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return
         }
         // 后端开启鉴权：me 成功说明现有 token 仍有效
+        setAuthDisabled(false)
         setUsername(me.username)
         setStatus("authenticated")
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (cancelled) return
-        // me 失败：本地 token（如果有）已失效；显示登录页
-        setToken(null)
-        setUsername(null)
-        setStatus("anonymous")
+        // 只有 401 才表示鉴权开启且未登录。后端进程挂了、代理 5xx、网络失败都不是登录问题。
+        const statusCode = (err as ApiError | undefined)?.status
+        if (statusCode === 401) {
+          setToken(null)
+          setAuthDisabled(false)
+          setUsername(null)
+          setStatus("anonymous")
+          return
+        }
+        setStatus("unreachable")
       })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [probeGeneration])
 
   // 注册全局 401 回调：让 apiFetch 在任何业务请求 401 时把我们打回登录页。
   // 鉴权关闭时不可能拿到 401，这里也无害。
@@ -83,6 +94,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus("anonymous")
     })
     return () => setUnauthorizedHandler(null)
+  }, [])
+
+  const retry = useCallback(() => {
+    setStatus("loading")
+    setProbeGeneration((n) => n + 1)
   }, [])
 
   const login = useCallback(async (u: string, p: string) => {
@@ -110,8 +126,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo(
-    () => ({ status, username, authDisabled, login, logout }),
-    [status, username, authDisabled, login, logout],
+    () => ({ status, username, authDisabled, retry, login, logout }),
+    [status, username, authDisabled, retry, login, logout],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
