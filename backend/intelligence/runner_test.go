@@ -177,6 +177,52 @@ func TestSaveTargetDetectorsAndSharedCacheDeduplication(t *testing.T) {
 	}
 }
 
+func TestScheduledRunDoesNotReuseOwnPreviousResult(t *testing.T) {
+	db := openIntelTestDB(t)
+	cipher, _ := crypto.NewCipher("own-cache-secret-32-bytes-long!!")
+	stub := &countingStubLLM{
+		resp: &llmclient.Response{
+			Content:      "21",
+			Complete:     true,
+			HTTPStatus:   200,
+			FirstTokenMS: 10,
+			LatencyMS:    20,
+			OutputTokens: 2,
+			ErrorClass:   llmclient.ErrorClassOK,
+		},
+	}
+	svc := NewService(db, cipher, nil, stub, nil)
+	target, err := svc.CreateTarget(TargetInput{
+		Name: "solo", SourceKind: storage.ProbeSourceDirect,
+		BaseURL: "https://solo.example.com", APIKey: "sk-solo-1234", Protocol: storage.ProbeProtocolOpenAIChat, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if _, err := svc.SaveTargetDetectors(target.ID, []DetectorConfigInput{
+		{DetectorKey: DetectorKeyCandy, Enabled: true, ModelName: "gpt-6.2-sol", IntervalSeconds: 3600},
+	}); err != nil {
+		t.Fatalf("save detectors: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := svc.ExecuteDetector(context.Background(), target.ID, DetectorKeyCandy, RunOptions{Manual: false}); err != nil {
+			t.Fatalf("scheduled execute %d: %v", i+1, err)
+		}
+	}
+	if stub.calls.Load() != 2 {
+		t.Fatalf("expected two upstream calls for two scheduled runs of the same target, got %d", stub.calls.Load())
+	}
+	runs, err := svc.Runs.ListByTargetAndDetector(target.ID, DetectorKeyCandy, 10)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("expected 2 runs, got %d err=%v", len(runs), err)
+	}
+	for _, run := range runs {
+		if run.ReusedFromRunID != nil {
+			t.Fatalf("same-target run was copied from cache: %+v", run)
+		}
+	}
+}
+
 func TestSingleflightInflightDeduplication(t *testing.T) {
 	db := openIntelTestDB(t)
 	cipher, _ := crypto.NewCipher("singleflight-secret-32-bytes!!!!!")

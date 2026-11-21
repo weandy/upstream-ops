@@ -322,12 +322,19 @@ func TestProbeLivenessAndIntelligenceRunsQueriesAndRetention(t *testing.T) {
 		t.Fatal("expected FindByUUID to include artifact_svg")
 	}
 
-	fresh, err := runs.FindLatestFreshBySharedKey("sha256-same-source", now.Add(-10*time.Minute))
+	fresh, err := runs.FindLatestFreshBySharedKey("sha256-same-source", now.Add(-10*time.Minute), 0)
 	if err != nil {
 		t.Fatalf("find fresh by shared key: %v", err)
 	}
 	if fresh == nil || fresh.RunUUID != "pelican-uuid-1" {
 		t.Fatalf("expected fresh shared run, got %+v", fresh)
+	}
+	own, err := runs.FindLatestFreshBySharedKey("sha256-same-source", now.Add(-10*time.Minute), 1)
+	if err != nil {
+		t.Fatalf("find fresh excluding own target: %v", err)
+	}
+	if own != nil {
+		t.Fatalf("expected own target to be excluded from shared cache, got %+v", own)
 	}
 
 	deletedRuns, err := runs.DeleteBefore(now.AddDate(0, 0, -90))

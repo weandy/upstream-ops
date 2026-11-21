@@ -289,14 +289,22 @@ func (r *ProbeIntelligenceRuns) FindByUUID(runUUID string) (*ProbeIntelligenceRu
 	return &run, nil
 }
 
-// FindLatestFreshBySharedKey 按同源缓存键查最近一条新鲜结果（用于多目标同源共享去重）。
-func (r *ProbeIntelligenceRuns) FindLatestFreshBySharedKey(sharedKey string, since time.Time) (*ProbeIntelligenceRun, error) {
+// FindLatestFreshBySharedKey 按同源缓存键查最近一条可复用的新鲜结果。
+// 只匹配其他目标的原始采样：本目标自己的上一轮、以及由缓存复制出来的记录都不能再当缓存源，
+// 否则慢检测（画鹈鹕约 100 秒）会在下一个整点仍落在 TTL 内，把同一张图无限复制下去。
+func (r *ProbeIntelligenceRuns) FindLatestFreshBySharedKey(sharedKey string, since time.Time, excludeTargetID uint) (*ProbeIntelligenceRun, error) {
 	if strings.TrimSpace(sharedKey) == "" {
 		return nil, nil
 	}
+	q := r.db.Where(
+		"shared_cache_key = ? AND observed_at >= ? AND status <> ? AND reused_from_run_id IS NULL",
+		sharedKey, since, IntelligenceStatusError,
+	)
+	if excludeTargetID != 0 {
+		q = q.Where("target_id <> ?", excludeTargetID)
+	}
 	var run ProbeIntelligenceRun
-	err := r.db.Where("shared_cache_key = ? AND observed_at >= ? AND status <> ?", sharedKey, since, IntelligenceStatusError).
-		Order("observed_at DESC").Order("id DESC").First(&run).Error
+	err := q.Order("observed_at DESC").Order("id DESC").First(&run).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}

@@ -276,7 +276,7 @@ func (s *Service) ExecuteDetector(ctx context.Context, targetID uint, detectorKe
 	now := time.Now().UTC()
 
 	if !opts.Manual {
-		cached, err := s.Runs.FindLatestFreshBySharedKey(sharedKey, now.Add(-interval))
+		cached, err := s.Runs.FindLatestFreshBySharedKey(sharedKey, now.Add(-interval), target.ID)
 		if err != nil {
 			return nil, err
 		}

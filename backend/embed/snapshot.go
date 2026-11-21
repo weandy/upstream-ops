@@ -364,6 +364,10 @@ func (s *Service) BuildPelicanGallery(site *SiteDTO, targetSlug string, limit in
 		if r.Status != storage.IntelligenceStatusNormal {
 			continue
 		}
+		// 缓存复用只是上一张原图的副本，画廊按「一次真实作画」计数。
+		if r.ReusedFromRunID != nil {
+			continue
+		}
 		items = append(items, PelicanGalleryItem{
 			RunUUID:         r.RunUUID,
 			ModelName:       r.ModelName,
