@@ -34,6 +34,7 @@ import {
   statusBadgeProps,
   TrendStrip90m,
 } from "@/components/intelligence/shared"
+import { PerformanceTrendChart } from "@/components/intelligence/performance-trend-chart"
 import { cn } from "@/lib/utils"
 
 interface HistoryDrawerProps {
@@ -91,6 +92,7 @@ export function HistoryDrawer({
   const [runs, setRuns] = useState<ProbeIntelligenceRun[]>([])
   const [loading, setLoading] = useState(false)
   const [runningKey, setRunningKey] = useState<string | null>(null)
+  const [trendRefreshKey, setTrendRefreshKey] = useState(0)
 
   useEffect(() => {
     if (open) {
@@ -143,6 +145,7 @@ export function HistoryDrawer({
         toast.error(`${detectorKey} 探测失败：${res.error_message || res.summary}`)
       }
       await loadData()
+      setTrendRefreshKey((k) => k + 1)
       onChanged()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "执行检测失败")
@@ -272,7 +275,13 @@ export function HistoryDrawer({
                 </div>
               ) : null}
 
-              <TabsContent value="liveness" className="mt-0 space-y-2">
+              <TabsContent value="liveness" className="mt-0 space-y-3">
+                {target ? (
+                  <PerformanceTrendChart
+                    targetID={target.id}
+                    refreshKey={trendRefreshKey}
+                  />
+                ) : null}
                 {(overview?.recent_samples ?? []).length === 0 ? (
                   <EmptyHint text="暂无主动测活记录。请先在插件配置中为 liveness 设置模型并开启，或点右上角立即测本项。" />
                 ) : (
