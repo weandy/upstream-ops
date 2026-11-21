@@ -131,7 +131,7 @@ function formatBucketTooltip(b: AvailabilityBucket): string {
   return `${hhmm} 可用率 ${b.success_rate.toFixed(0)}% (${b.success_count}/${b.sample_count})`
 }
 
-export function TrendStrip90m({
+export function TrendStrip({
   buckets,
   compact = false,
   className,
@@ -149,12 +149,12 @@ export function TrendStrip90m({
         className,
       )}
       style={{
-        gridTemplateColumns: `repeat(${Math.max(list.length, 90)}, minmax(1px, 1fr))`,
+        gridTemplateColumns: `repeat(${Math.max(list.length, 60)}, minmax(1px, 1fr))`,
       }}
-      aria-label="近 90 分钟逐分钟可用率"
+      aria-label="近 60 分钟逐分钟可用率"
     >
       {list.length === 0
-        ? Array.from({ length: 90 }).map((_, idx) => (
+        ? Array.from({ length: 60 }).map((_, idx) => (
             <span
               key={idx}
               className="block rounded-[1px] bg-muted-foreground/15"

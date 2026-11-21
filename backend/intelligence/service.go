@@ -51,7 +51,7 @@ type TargetInput struct {
 	Notes            string `json:"notes"`
 }
 
-// TargetOverview 单目标实时总览（24h 性能 + 90 分钟趋势 + 最近采样 + 检测器配置与最新智力检测结果）。
+// TargetOverview 单目标实时总览（24h 性能 + 60 分钟趋势 + 最近采样 + 检测器配置与最新智力检测结果）。
 type TargetOverview struct {
 	Target          *storage.ProbeTarget                    `json:"target"`
 	Performance     PerformanceSummary                      `json:"performance"`
@@ -569,7 +569,7 @@ func (s *Service) RunLivenessNow(ctx context.Context, targetID uint, modelOverri
 	return sample, nil
 }
 
-// ListTargetOverviews 批量汇总所有监测目标的 24h 性能、90 分钟趋势与最新检测状态（消除前端 N+1 请求）。
+// ListTargetOverviews 批量汇总所有监测目标的 24h 性能、60 分钟趋势与最新检测状态（消除前端 N+1 请求）。
 func (s *Service) ListTargetOverviews() ([]TargetOverview, error) {
 	targets, err := s.Targets.List()
 	if err != nil {
@@ -742,7 +742,7 @@ func (s *Service) CompareTargets(targetIDs []uint, windowRaw string) (*TargetCom
 	}, nil
 }
 
-// GetTargetOverview 获取单目标的 24h 性能汇总、90 分钟趋势、最近采样及检测器配置。
+// GetTargetOverview 获取单目标的 24h 性能汇总、60 分钟趋势、最近采样及检测器配置。
 func (s *Service) GetTargetOverview(targetID uint) (*TargetOverview, error) {
 	target, err := s.Targets.FindByID(targetID)
 	if err != nil {

@@ -12,7 +12,7 @@ import (
 const (
 	// DefaultLivenessPrompt 轻量级主动测活提示词：控制输出在 ~20 个词，兼顾低成本与稳定测量 TPS。
 	DefaultLivenessPrompt = "Write one short sentence of 16 to 24 words describing a calm sunrise over the ocean. Output plain text only."
-	// DefaultLivenessIntervalSec 主动测活默认周期：1 分钟（60 秒），与近 90 分钟逐分钟热力条 1:1 对齐。
+	// DefaultLivenessIntervalSec 主动测活默认周期：1 分钟（60 秒），与近 60 分钟逐分钟热力条 1:1 对齐。
 	DefaultLivenessIntervalSec = 60
 	// DefaultLivenessTimeoutSec 主动测活默认超时：30 秒。
 	DefaultLivenessTimeoutSec = 30

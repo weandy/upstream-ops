@@ -154,7 +154,7 @@ func TestServiceTargetCRUDAndKeyPreservation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTargetOverview: %v", err)
 	}
-	if ov.Performance.SampleCount != 1 || ov.Performance.SuccessRate != 100 || len(ov.Trend) != 90 {
+	if ov.Performance.SampleCount != 1 || ov.Performance.SuccessRate != 100 || len(ov.Trend) != TrendBucketCount {
 		t.Fatalf("unexpected overview: %+v", ov)
 	}
 }

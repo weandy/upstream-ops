@@ -25,10 +25,10 @@ func (s *stubLLMClient) ListModels(_ context.Context, _ llmclient.Endpoint) ([]s
 	return []string{"gpt-6.2-sol"}, nil
 }
 
-func TestAggregateLivenessMetricsAnd90MinBuckets(t *testing.T) {
+func TestAggregateLivenessMetricsAnd60MinBuckets(t *testing.T) {
 	now := time.Date(2026, 11, 21, 10, 0, 30, 0, time.UTC)
 	samples := []storage.ProbeLivenessSample{
-		// 20 小时前：计入 24h 性能，不计入 90m 趋势条。
+		// 20 小时前：计入 24h 性能，不计入 60m 趋势条。
 		{
 			Success:      true,
 			FirstTokenMS: 1000,
@@ -91,20 +91,20 @@ func TestAggregateLivenessMetricsAnd90MinBuckets(t *testing.T) {
 		t.Fatalf("expected weighted TPS 50.0, got %.2f", perf.TPS)
 	}
 
-	if len(buckets) != 90 {
-		t.Fatalf("expected 90 buckets, got %d", len(buckets))
+	if len(buckets) != 60 {
+		t.Fatalf("expected 60 buckets, got %d", len(buckets))
 	}
-	// 最后一个桶是当前分钟（index 89）-> 1/2 = 50% -> warn
-	if buckets[89].Tone != "warn" || buckets[89].SampleCount != 2 {
-		t.Fatalf("unexpected bucket[89]: %+v", buckets[89])
+	// 最后一个桶是当前分钟（index 59）-> 1/2 = 50% -> warn
+	if buckets[59].Tone != "warn" || buckets[59].SampleCount != 2 {
+		t.Fatalf("unexpected bucket[59]: %+v", buckets[59])
 	}
-	// 10 分钟前（index 79）-> 1/1 -> ok
-	if buckets[79].Tone != "ok" || buckets[79].SampleCount != 1 {
-		t.Fatalf("unexpected bucket[79]: %+v", buckets[79])
+	// 10 分钟前（index 49）-> 1/1 -> ok
+	if buckets[49].Tone != "ok" || buckets[49].SampleCount != 1 {
+		t.Fatalf("unexpected bucket[49]: %+v", buckets[49])
 	}
-	// 20 分钟前（index 69）-> 0/1 -> down
-	if buckets[69].Tone != "down" || buckets[69].SampleCount != 1 {
-		t.Fatalf("unexpected bucket[69]: %+v", buckets[69])
+	// 20 分钟前（index 39）-> 0/1 -> down
+	if buckets[39].Tone != "down" || buckets[39].SampleCount != 1 {
+		t.Fatalf("unexpected bucket[39]: %+v", buckets[39])
 	}
 	// 其余无样本桶 -> none
 	if buckets[0].Tone != "none" || buckets[0].SampleCount != 0 {

@@ -43,7 +43,7 @@ import {
   PelicanSandboxFrame,
   PROTOCOL_LABELS,
   statusBadgeProps,
-  TrendStrip90m,
+  TrendStrip,
 } from "@/components/intelligence/shared"
 import { TargetFormDialog } from "@/components/intelligence/target-form-dialog"
 import { DetectorsDrawer } from "@/components/intelligence/detectors-drawer"
@@ -470,7 +470,7 @@ export default function IntelligencePage() {
                       </div>
                     </div>
 
-                    {/* 中部：24h 性能 + 90 分钟趋势 */}
+                    {/* 中部：24h 性能 + 60 分钟趋势 */}
                     <div className="flex flex-1 flex-col gap-2.5 sm:flex-row sm:items-center">
                       <div className="grid grid-cols-4 gap-3 sm:w-[300px] sm:shrink-0">
                         <div>
@@ -519,14 +519,14 @@ export default function IntelligencePage() {
 
                       <div className="min-w-0 flex-1 space-y-1">
                         <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                          <span>近 90 分钟可用率</span>
+                          <span>近 60 分钟可用率</span>
                           <span>
                             {ov?.recent_samples?.[0]
                               ? `最近 ${relativeTime(ov.recent_samples[0].observed_at)}`
                               : "等待首次采样"}
                           </span>
                         </div>
-                        <TrendStrip90m buckets={ov?.trend ?? []} compact />
+                        <TrendStrip buckets={ov?.trend ?? []} compact />
                       </div>
                     </div>
 

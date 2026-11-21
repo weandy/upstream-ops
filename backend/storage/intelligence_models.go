@@ -82,7 +82,7 @@ type ProbeDetectorConfig struct {
 
 func (ProbeDetectorConfig) TableName() string { return "probe_detector_configs" }
 
-// ProbeLivenessSample 主动测活与性能采样时间序列（用于 24h 指标与 90 分钟趋势条）。
+// ProbeLivenessSample 主动测活与性能采样时间序列（用于 24h 指标与 60 分钟趋势条）。
 type ProbeLivenessSample struct {
 	ID           uint      `gorm:"primaryKey" json:"id"`
 	TargetID     uint      `gorm:"not null;index:idx_liveness_target_observed" json:"target_id"`

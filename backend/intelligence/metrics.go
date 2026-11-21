@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	// TrendBucketCount 趋势条时间桶个数（近 90 分钟，每分钟 1 桶）。
-	TrendBucketCount = 90
+	// TrendBucketCount 趋势条时间桶个数（近 60 分钟，每分钟 1 桶）。
+	TrendBucketCount = 60
 )
 
 // PerformanceSummary 24 小时主动测活性能汇总。
@@ -34,7 +34,7 @@ type AvailabilityBucket struct {
 	Tone         string    `json:"tone"` // ok | warn | down | none
 }
 
-// AggregateLiveness 根据给定时间窗口内的主动测活样本计算 24h 性能汇总与近 90 分钟趋势条。
+// AggregateLiveness 根据给定时间窗口内的主动测活样本计算 24h 性能汇总与近 60 分钟趋势条。
 // 纯内存计算，跨 SQLite / MySQL / PostgreSQL 零方言差异。
 func AggregateLiveness(samples []storage.ProbeLivenessSample, now time.Time) (PerformanceSummary, []AvailabilityBucket) {
 	nowUTC := now.UTC()

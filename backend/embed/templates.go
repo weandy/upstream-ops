@@ -400,7 +400,7 @@ a.badge:hover { filter: brightness(0.95); text-decoration: underline; }
 }
 .trend-grid {
   display: grid;
-  grid-template-columns: repeat(90, minmax(2px, 1fr));
+  grid-template-columns: repeat(60, minmax(2px, 1fr));
   gap: 1px;
   width: 196px;
   height: 22px;
@@ -595,7 +595,7 @@ const tplOverview = `<!doctype html>
             {{- if .Site.ShowIdentityColumn }}
             <th>模型检测</th>
             {{- end }}
-            <th>近 90 分钟可用率</th>
+            <th>近 60 分钟可用率</th>
           </tr>
         </thead>
         <tbody>
@@ -646,7 +646,7 @@ const tplOverview = `<!doctype html>
             </td>
             {{- end }}
             <td>
-              <div class="trend-grid" aria-label="近 90 分钟逐分钟可用率">
+              <div class="trend-grid" aria-label="近 60 分钟逐分钟可用率">
                 {{- range .Trend }}
                 <span class="tbar {{ .Tone }}" title="{{ bucketTitle .Timestamp .SampleCount .SuccessCount .SuccessRate }}"></span>
                 {{- end }}
@@ -661,7 +661,7 @@ const tplOverview = `<!doctype html>
   </main>
 
   <footer class="ftr">
-    <div>24h 性能指标与 90 分钟可用率基于主动流式测活采样{{- if gt .Site.RefreshSeconds 0 }} · 每 {{ .Site.RefreshSeconds }} 秒自动刷新{{- end }}</div>
+    <div>24h 性能指标与 60 分钟可用率基于主动流式测活采样{{- if gt .Site.RefreshSeconds 0 }} · 每 {{ .Site.RefreshSeconds }} 秒自动刷新{{- end }}</div>
     <div>最后数据时间：{{ fmtTimePtr .LatestData }}{{- if .Site.ShowIdentityColumn }} · 数字指纹排名仅供参考，不作为绝对身份证明{{- end }}</div>
   </footer>
 </div>

@@ -142,7 +142,7 @@ func (LivenessDetector) Meta() DetectorMeta {
 		Key:                DetectorKeyLiveness,
 		Name:               "主动测活与性能",
 		Category:           DetectorCategoryLiveness,
-		Description:        "定期发起轻量流式请求，采集首字延迟（TTFT）、平均延迟、TPS、24 小时成功率与近 90 分钟可用率趋势。",
+		Description:        "定期发起轻量流式请求，采集首字延迟（TTFT）、平均延迟、TPS、24 小时成功率与近 60 分钟可用率趋势。",
 		DefaultIntervalSec: DefaultLivenessIntervalSec,
 		DefaultTimeoutSec:  DefaultLivenessTimeoutSec,
 		DefaultAlertThresh: 3,

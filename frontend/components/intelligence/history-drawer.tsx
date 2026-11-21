@@ -32,7 +32,7 @@ import {
   formatSuccessRateClass,
   PelicanSandboxFrame,
   statusBadgeProps,
-  TrendStrip90m,
+  TrendStrip,
 } from "@/components/intelligence/shared"
 import { PerformanceTrendChart } from "@/components/intelligence/performance-trend-chart"
 import { cn } from "@/lib/utils"
@@ -176,7 +176,7 @@ export function HistoryDrawer({
             ) : null}
           </div>
           <SheetDescription>
-            查看近 24 小时性能聚合、90 分钟趋势与各插拔检测项历史记录，支持即时手动单测。
+            查看近 24 小时性能聚合、60 分钟趋势与各插拔检测项历史记录，支持即时手动单测。
           </SheetDescription>
 
           {perf ? (
@@ -215,7 +215,7 @@ export function HistoryDrawer({
                   )}
                 />
               </div>
-              <TrendStrip90m buckets={overview?.trend ?? []} />
+              <TrendStrip buckets={overview?.trend ?? []} />
             </div>
           ) : null}
         </SheetHeader>
