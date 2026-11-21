@@ -472,8 +472,8 @@ export default function IntelligencePage() {
                       </div>
                     </div>
 
-                    {/* 中部：4 项性能指标 + 紧凑等高 60 分钟胶囊条（控制最大宽度，不抢占大面积空间） */}
-                    <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between xl:justify-start xl:gap-6">
+                    {/* 中部：4 项性能指标 + 略加宽的等高 60 分钟胶囊条 */}
+                    <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between xl:justify-start xl:gap-5">
                       <div className="grid grid-cols-4 gap-3 sm:w-[270px] sm:shrink-0">
                         <div>
                           <p className="text-[10px] text-muted-foreground">TPS</p>
@@ -519,7 +519,7 @@ export default function IntelligencePage() {
                         </div>
                       </div>
 
-                      <div className="w-full min-w-0 sm:max-w-[235px] xl:max-w-[255px]">
+                      <div className="w-full min-w-0 sm:max-w-[340px] xl:min-w-[300px] xl:max-w-[380px] xl:flex-1">
                         <div className="mb-1 flex items-center justify-between text-[10px] text-muted-foreground">
                           <span>近 60 分钟可用率</span>
                           <span>

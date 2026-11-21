@@ -326,19 +326,19 @@ table.perf-table {
   border-collapse: collapse;
   table-layout: fixed;
 }
-table.perf-table .col-channel  { width: 14%; }
-table.perf-table .col-tps      { width: 10%; }
-table.perf-table .col-first    { width: 11%; }
-table.perf-table .col-latency  { width: 10%; }
-table.perf-table .col-success  { width: 10%; }
-table.perf-table .col-identity { width: 20%; }
-table.perf-table .col-trend    { width: 25%; }
-table.perf-table.no-identity .col-channel { width: 17%; }
-table.perf-table.no-identity .col-tps     { width: 11%; }
-table.perf-table.no-identity .col-first   { width: 13%; }
-table.perf-table.no-identity .col-latency { width: 12%; }
-table.perf-table.no-identity .col-success { width: 11%; }
-table.perf-table.no-identity .col-trend   { width: 36%; }
+table.perf-table .col-channel  { width: 12%; }
+table.perf-table .col-tps      { width: 9%; }
+table.perf-table .col-first    { width: 10%; }
+table.perf-table .col-latency  { width: 9%; }
+table.perf-table .col-success  { width: 9%; }
+table.perf-table .col-identity { width: 17%; }
+table.perf-table .col-trend    { width: 34%; }
+table.perf-table.no-identity .col-channel { width: 15%; }
+table.perf-table.no-identity .col-tps     { width: 10%; }
+table.perf-table.no-identity .col-first   { width: 12%; }
+table.perf-table.no-identity .col-latency { width: 11%; }
+table.perf-table.no-identity .col-success { width: 10%; }
+table.perf-table.no-identity .col-trend   { width: 42%; }
 
 table.perf-table th,
 table.perf-table td {
