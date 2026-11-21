@@ -4,13 +4,17 @@ package storage
 import (
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	sqliteDriver "github.com/glebarez/sqlite"
 	mysqlDriver "gorm.io/driver/mysql"
+	postgresDriver "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -18,18 +22,22 @@ import (
 type DBDriver string
 
 const (
-	DBDriverSQLite DBDriver = "sqlite"
-	DBDriverMySQL  DBDriver = "mysql"
+	DBDriverSQLite   DBDriver = "sqlite"
+	DBDriverMySQL    DBDriver = "mysql"
+	DBDriverPostgres DBDriver = "postgres"
 )
 
 type DBConfig struct {
 	Driver       DBDriver
 	Path         string
+	DSN          string
 	Host         string
 	Port         int
 	User         string
 	Password     string
 	Name         string
+	SSLMode      string
+	TimeZone     string
 	MaxOpenConns int
 	MaxIdleConns int
 }
@@ -42,10 +50,62 @@ func (c DBConfig) SQLitePath() string {
 }
 
 func (c DBConfig) MySQLDSN() string {
+	if raw := strings.TrimSpace(c.DSN); raw != "" {
+		return raw
+	}
+	host := strings.TrimSpace(c.Host)
+	if host == "" {
+		host = "localhost"
+	}
+	port := c.Port
+	if port <= 0 {
+		port = 3306
+	}
 	return fmt.Sprintf(
 		"%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local",
-		c.User, c.Password, c.Host, c.Port, c.Name,
+		c.User, c.Password, host, port, c.Name,
 	)
+}
+
+// PostgresDSN 构造标准 RFC 3986 postgres:// 连接串，自动安全转义特殊字符凭据。
+func (c DBConfig) PostgresDSN() string {
+	if raw := strings.TrimSpace(c.DSN); raw != "" {
+		return raw
+	}
+	host := strings.TrimSpace(c.Host)
+	if host == "" {
+		host = "localhost"
+	}
+	port := c.Port
+	if port <= 0 {
+		port = 5432
+	}
+	sslMode := strings.TrimSpace(c.SSLMode)
+	if sslMode == "" {
+		sslMode = "disable"
+	}
+	tz := strings.TrimSpace(c.TimeZone)
+	if tz == "" {
+		tz = "Asia/Shanghai"
+	}
+
+	u := &url.URL{
+		Scheme: "postgres",
+		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Path:   "/" + strings.TrimLeft(strings.TrimSpace(c.Name), "/"),
+	}
+	if strings.TrimSpace(c.User) != "" || c.Password != "" {
+		if c.Password != "" {
+			u.User = url.UserPassword(c.User, c.Password)
+		} else {
+			u.User = url.User(c.User)
+		}
+	}
+	q := u.Query()
+	q.Set("sslmode", sslMode)
+	q.Set("TimeZone", tz)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 // newGormLogger 关掉 GORM 默认 logger 对 ErrRecordNotFound 的告警噪音。
@@ -66,10 +126,7 @@ func newGormLogger() logger.Interface {
 }
 
 func Open(cfg DBConfig) (*gorm.DB, error) {
-	driver := DBDriver(strings.ToLower(string(cfg.Driver)))
-	if driver == "" {
-		driver = DBDriverSQLite
-	}
+	driver := normalizeDriver(cfg.Driver)
 
 	var dialector gorm.Dialector
 	switch driver {
@@ -81,6 +138,8 @@ func Open(cfg DBConfig) (*gorm.DB, error) {
 		dialector = sqliteDriver.Open(path)
 	case DBDriverMySQL:
 		dialector = mysqlDriver.Open(cfg.MySQLDSN())
+	case DBDriverPostgres:
+		dialector = postgresDriver.Open(cfg.PostgresDSN())
 	default:
 		return nil, fmt.Errorf("unsupported database driver: %s", cfg.Driver)
 	}
@@ -107,11 +166,28 @@ func Open(cfg DBConfig) (*gorm.DB, error) {
 		sqlDB.SetMaxOpenConns(1)
 		sqlDB.SetMaxIdleConns(1)
 	default:
-		sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
-		sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+		if cfg.MaxOpenConns > 0 {
+			sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
+		}
+		if cfg.MaxIdleConns > 0 {
+			sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
+		}
 	}
 
 	return db, nil
+}
+
+func normalizeDriver(raw DBDriver) DBDriver {
+	switch strings.ToLower(strings.TrimSpace(string(raw))) {
+	case "", "sqlite", "sqlite3":
+		return DBDriverSQLite
+	case "mysql":
+		return DBDriverMySQL
+	case "postgres", "postgresql", "pg":
+		return DBDriverPostgres
+	default:
+		return DBDriver(strings.ToLower(strings.TrimSpace(string(raw))))
+	}
 }
 
 // AutoMigrate 启动时自动同步表结构。

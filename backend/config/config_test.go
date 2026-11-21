@@ -53,3 +53,26 @@ func TestGatewayConfigWithDefaults(t *testing.T) {
 		t.Fatalf("models cache ttl = %d", custom.ModelsCacheTTLSeconds)
 	}
 }
+
+func TestPostgresDatabaseEnvConfigBinding(t *testing.T) {
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("DATABASE_HOST", "pg.local")
+	t.Setenv("DATABASE_PORT", "5432")
+	t.Setenv("DATABASE_USER", "uops")
+	t.Setenv("DATABASE_PASSWORD", "secret")
+	t.Setenv("DATABASE_NAME", "uops_db")
+	t.Setenv("DATABASE_SSLMODE", "require")
+	t.Setenv("DATABASE_TIMEZONE", "UTC")
+
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	sc := cfg.Database.ToStorageConfig()
+	if sc.Driver != "postgres" || sc.Host != "pg.local" || sc.Port != 5432 || sc.SSLMode != "require" || sc.TimeZone != "UTC" {
+		t.Fatalf("unexpected postgres storage config: %+v", sc)
+	}
+	if dsn := sc.PostgresDSN(); dsn != "postgres://uops:secret@pg.local:5432/uops_db?TimeZone=UTC&sslmode=require" {
+		t.Fatalf("unexpected postgres dsn: %q", dsn)
+	}
+}

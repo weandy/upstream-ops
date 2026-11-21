@@ -44,11 +44,14 @@ type ServerConfig struct {
 type DatabaseConfig struct {
 	Driver       string `mapstructure:"driver" yaml:"driver" json:"driver"`
 	Path         string `mapstructure:"path" yaml:"path" json:"path"`
+	DSN          string `mapstructure:"dsn" yaml:"dsn" json:"dsn"`
 	Host         string `mapstructure:"host" yaml:"host" json:"host"`
 	Port         int    `mapstructure:"port" yaml:"port" json:"port"`
 	User         string `mapstructure:"user" yaml:"user" json:"user"`
 	Password     string `mapstructure:"password" yaml:"password" json:"password"`
 	Name         string `mapstructure:"name" yaml:"name" json:"name"`
+	SSLMode      string `mapstructure:"sslMode" yaml:"sslMode" json:"sslMode"`
+	TimeZone     string `mapstructure:"timeZone" yaml:"timeZone" json:"timeZone"`
 	MaxOpenConns int    `mapstructure:"maxOpenConns" yaml:"maxOpenConns" json:"maxOpenConns"`
 	MaxIdleConns int    `mapstructure:"maxIdleConns" yaml:"maxIdleConns" json:"maxIdleConns"`
 }
@@ -57,11 +60,14 @@ func (d DatabaseConfig) ToStorageConfig() storage.DBConfig {
 	return storage.DBConfig{
 		Driver:       storage.DBDriver(d.Driver),
 		Path:         d.Path,
+		DSN:          d.DSN,
 		Host:         d.Host,
 		Port:         d.Port,
 		User:         d.User,
 		Password:     d.Password,
 		Name:         d.Name,
+		SSLMode:      d.SSLMode,
+		TimeZone:     d.TimeZone,
 		MaxOpenConns: d.MaxOpenConns,
 		MaxIdleConns: d.MaxIdleConns,
 	}
@@ -391,11 +397,14 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		// 因此显式 BindEnv 以确保从环境变量读取。
 		_ = v.BindEnv("database.driver", "DATABASE_DRIVER")
 		_ = v.BindEnv("database.path", "DATABASE_PATH")
+		_ = v.BindEnv("database.dsn", "DATABASE_DSN")
 		_ = v.BindEnv("database.host", "DATABASE_HOST")
 		_ = v.BindEnv("database.port", "DATABASE_PORT")
 		_ = v.BindEnv("database.user", "DATABASE_USER")
 		_ = v.BindEnv("database.password", "DATABASE_PASSWORD")
 		_ = v.BindEnv("database.name", "DATABASE_NAME")
+		_ = v.BindEnv("database.sslMode", "DATABASE_SSLMODE")
+		_ = v.BindEnv("database.timeZone", "DATABASE_TIMEZONE")
 		_ = v.BindEnv("server.port", "SERVER_PORT")
 		_ = v.BindEnv("server.mode", "SERVER_MODE")
 		_ = v.BindEnv("log.level", "LOG_LEVEL")
@@ -478,8 +487,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.driver", "sqlite")
 	v.SetDefault("database.path", "./data/upstream-ops.db")
 	v.SetDefault("database.host", "localhost")
-	v.SetDefault("database.port", 3306)
+	v.SetDefault("database.port", 0)
 	v.SetDefault("database.name", "upstreamops")
+	v.SetDefault("database.sslMode", "disable")
+	v.SetDefault("database.timeZone", "Asia/Shanghai")
 	v.SetDefault("database.maxOpenConns", 20)
 	v.SetDefault("database.maxIdleConns", 5)
 

@@ -770,7 +770,7 @@ func (r *GatewayUsageLogs) applyFilters(db *gorm.DB, q GatewayUsageQuery) *gorm.
 				GROUP BY request_id
 				HAVING (COUNT(*) > 1 OR MAX(attempt) > 1
 					OR SUM(CASE WHEN attempt_kind IN ('retry','failover') THEN 1 ELSE 0 END) > 0)
-					AND SUM(CASE WHEN success = 1 OR success = true THEN 1 ELSE 0 END) > 0
+					AND SUM(CASE WHEN success THEN 1 ELSE 0 END) > 0
 			)`,
 		)
 	case "multi_fail", "chain_fail":
@@ -781,7 +781,7 @@ func (r *GatewayUsageLogs) applyFilters(db *gorm.DB, q GatewayUsageQuery) *gorm.
 				GROUP BY request_id
 				HAVING (COUNT(*) > 1 OR MAX(attempt) > 1
 					OR SUM(CASE WHEN attempt_kind IN ('retry','failover') THEN 1 ELSE 0 END) > 0)
-					AND SUM(CASE WHEN success = 1 OR success = true THEN 1 ELSE 0 END) = 0
+					AND SUM(CASE WHEN success THEN 1 ELSE 0 END) = 0
 			)`,
 		)
 	default:
