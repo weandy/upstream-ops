@@ -8,17 +8,50 @@
 
 It also includes an OpenAI / Claude / Responses compatible request gateway: create gateway API keys, bind monitored channels or direct providers, schedule by rate and weight, convert protocols, fail over on errors, and record per-request usage and cost estimates.
 
-## Changes in this fork
+## What this fork adds
 
-Relative to bejix/upstream-ops v0.0.10, v0.3.0 adds model-intelligence monitoring and a public status page, and fixes several scheduler and UI issues:
+The admin page is `/intelligence`. Public embed sites are configured at `/embed-admin`. A probe target can bind an existing upstream channel or use a direct base URL and API key. Each target selects one model, then enables liveness or intelligence plugins. Management APIs live under `/api/intelligence/*` and require admin auth. Public pages and `/api/public/status` do not.
 
-- **Model probes**: active liveness checks, Candy logic, lmfpd numeric fingerprints, and pelican SVG drawings for a selected model. Liveness defaults to 60 seconds; intelligence probes default to 1 hour. Schedules advance from the planned anchor so request duration does not keep drifting the next run.
-- **Numeric fingerprint**: prompts are sent to the model selected on the probe target, then ranked against the whole reference bank. The selected model name, or an explicit claimed model, is used to report that model's rank rather than a blind match.
-- **Pelican drawings**: results render in a zero-JS sandboxed gallery. A scheduled run no longer reuses the same target's previous image, and the gallery lists original drawings only. A manual run waits synchronously; the plugin timeout defaults to 180 seconds. A timeout is stored as a failure and does not keep a partial image.
-- **60-minute availability**: the admin page and `/embed` show 60 one-minute equal-height cells. The public page is server-rendered with no JavaScript.
-- **Anthropic**: `/v1/messages` maps `reasoning_effort` by model generation (`thinking.budget_tokens` for older models, adaptive effort for newer ones).
-- **Login**: authentication is off by default. If the backend is unreachable, the UI says the backend is down instead of asking for a username and password.
-- **Release**: update checks read this repository's GitHub Releases. The Docker image is `ghcr.io/weandy/upstream-ops`.
+The scheduler scans due jobs every 5 seconds by default (`intelligence.tickIntervalSeconds`). No plugin interval can be shorter than 60 seconds. After success, the next run is the previous planned anchor plus one interval, so request duration does not keep pushing the schedule later. The interval grows only after consecutive failures reach the alert threshold; a timeout counts as a failure. Manual runs skip the cache, and `POST /api/intelligence/targets/:id/run` stays open until that run finishes.
+
+Intelligence probes for the same upstream, key, model, and parameters may reuse another target's fresh original result within one interval. A target never reuses its own previous run, and a copied row cannot become a cache source.
+
+### Liveness and the 60-minute strip
+
+The `liveness` plugin sends a short sentence every 60 seconds by default, with a 30-second timeout, and records success, time to first token, and TPS. The availability strip is 60 one-minute cells. A cell is colored only when it has a sample. If the current minute has no sample yet, the right edge aligns to the previous minute instead of showing a fake gray cell. Both the admin page and the public page use equal-height capsules.
+
+### Intelligence plugins
+
+| Plugin | Default interval | Default timeout | Behavior |
+| --- | --- | --- | --- |
+| `candy` | 3600s | 90s | Candy logic puzzle. Only a final standalone integer `21` passes. Values such as `121`, `21.0`, or `21 or 22` fail |
+| `lmfpd` | 3600s | 120s | Three numeric-sequence rounds, ranked against the whole reference bank. An empty `claimed_model` uses the model selected on the target. Rank 1 is normal; a bank hit that is not rank 1 is suspected degradation; a name missing from the bank still reports the closest model. Names are normalized, with fixed aliases for `gpt-6.1-sol` and `deepseek-flash` |
+| `pelican` | 3600s | 180s | Asks the model to reply with an HTML/SVG drawing of a pelican on a bicycle, without tools. `original` is the classic animation; `all-in-one` is a denser scene. Only a complete document up to 256KiB is stored |
+| `custom_prompt` | 3600s | 90s | Custom prompt with `exact_number`, `contains`, or `regex`, plus an optional forbidden string. Disabled configs do not block saving other plugins; enabling one requires both prompt and expected answer. It is not shown on the public page |
+
+Intelligence plugins accept `reasoning_effort`. For Anthropic `/v1/messages`, older Claude models use `thinking.budget_tokens`, while 4.6+ and 5.x use adaptive effort. `none` disables thinking, and `omit` sends no thinking field.
+
+A pelican timeout or a canceled connection does not keep a partial image; it stores a failed run. The public gallery shows at most 12 original drawings and skips cache copies. Candy and fingerprint history pages show at most 48 runs.
+
+### Public embed pages
+
+These pages are server-rendered HTML with no frontend script. SVG documents load inside `sandbox=""` iframes:
+
+```text
+GET /embed?site=<slug>
+GET /embed/candy?site=<slug>&target=<target slug>
+GET /embed/fingerprint?site=<slug>&target=<target slug>
+GET /embed/pelican?site=<slug>&target=<target slug>
+GET /embed/pelican/<run_uuid>?site=<slug>
+GET /api/public/status?site=<slug>
+```
+
+A column, history page, or gallery appears only when that detector is marked visible for the site. The artifact route checks that the run belongs to the site; a UUID alone cannot read a private target.
+
+### Other differences
+
+- Authentication is off by default. If the backend is down, or `/auth/me` fails with a network error or 5xx, the admin UI says the backend is unreachable. Only HTTP 401 opens the login form.
+- Update checks read the latest Release from `https://github.com/weandy/upstream-ops`. The Docker image is `ghcr.io/weandy/upstream-ops`.
 
 ## Why Use UpstreamOps
 
