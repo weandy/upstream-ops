@@ -147,23 +147,27 @@ func (s *Service) SaveTargetDetectors(targetID uint, items []DetectorConfigInput
 		}
 
 		cfg := &storage.ProbeDetectorConfig{
-			TargetID:        targetID,
-			DetectorKey:     key,
-			Enabled:         in.Enabled,
-			ModelName:       modelName,
-			ReasoningEffort: effort,
-			IntervalSeconds: interval,
-			TimeoutSeconds:  timeout,
-			AlertEnabled:    in.AlertEnabled,
-			AlertThreshold:  threshold,
-			ParamsJSON:      strings.TrimSpace(in.ParamsJSON),
-			EmbedVisible:    in.EmbedVisible,
-			NextRunAt:       nextRunAt,
+			TargetID:          targetID,
+			DetectorKey:       key,
+			Enabled:           in.Enabled,
+			ModelName:         modelName,
+			ReasoningEffort:   effort,
+			IntervalSeconds:   interval,
+			TimeoutSeconds:    timeout,
+			AlertEnabled:      in.AlertEnabled,
+			AlertThreshold:    threshold,
+			ParamsJSON:        strings.TrimSpace(in.ParamsJSON),
+			EmbedVisible:      in.EmbedVisible,
+			ConsecutiveErrors: 0,
+			LastErrorClass:    "",
+			BackoffUntil:      nil,
+			NextRunAt:         nextRunAt,
 		}
 		if err := s.Configs.Upsert(cfg); err != nil {
 			return nil, err
 		}
 	}
+	s.notifyPublicDataChanged()
 	return s.Configs.ListByTarget(targetID)
 }
 
@@ -254,6 +258,12 @@ func (s *Service) ExecuteDetector(ctx context.Context, targetID uint, detectorKe
 			if err := s.Liveness.Append(res.LivenessSample); err != nil {
 				return res, err
 			}
+			if opts.Manual && res.LivenessSample.Success {
+				_ = s.Configs.ResetConfigBackoff(target.ID, key)
+			}
+		}
+		if opts.Manual {
+			s.notifyPublicDataChanged()
 		}
 		if hook := s.currentResultHook(); hook != nil && res != nil {
 			hook(ctx, target, cfg, res)
@@ -351,6 +361,12 @@ func (s *Service) ExecuteDetector(ctx context.Context, targetID uint, detectorKe
 	if err := s.Runs.Append(run); err != nil {
 		return res, err
 	}
+	if opts.Manual {
+		if res.Status != storage.IntelligenceStatusError {
+			_ = s.Configs.ResetConfigBackoff(target.ID, key)
+		}
+		s.notifyPublicDataChanged()
+	}
 	if hook := s.currentResultHook(); hook != nil {
 		hook(ctx, target, cfg, res)
 	}
@@ -395,54 +411,131 @@ func (s *Service) GetRunArtifact(runUUID string) (*storage.ProbeIntelligenceRun,
 	return s.Runs.FindByUUID(runUUID)
 }
 
-// Start 启动独立后台 Tick 调度器，定期扫描到期任务并以有界并发执行。
-func (s *Service) Start(tickInterval time.Duration, concurrency int) {
-	s.runnerMu.Lock()
-	defer s.runnerMu.Unlock()
-	if s.runnerCancel != nil {
-		return
-	}
+func normalizeRunnerParams(tickInterval time.Duration, concurrency int) (time.Duration, int) {
 	if tickInterval <= 0 {
 		tickInterval = DefaultRunnerTickInterval
 	}
 	if concurrency <= 0 {
 		concurrency = DefaultRunnerConcurrency
 	}
+	if concurrency > 32 {
+		concurrency = 32
+	}
+	return tickInterval, concurrency
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	s.runnerCancel = cancel
+// Start 启动独立后台 Tick 调度器，定期扫描到期任务并以有界并发执行。
+func (s *Service) Start(tickInterval time.Duration, concurrency int) {
+	tickInterval, concurrency = normalizeRunnerParams(tickInterval, concurrency)
+
+	s.runnerMu.Lock()
+	defer s.runnerMu.Unlock()
+	if s.runnerRunning {
+		return
+	}
+
+	s.shutdownCtx, s.shutdownCancel = context.WithCancel(context.Background())
+	s.runnerRunning = true
+	s.startTickerLocked(tickInterval, concurrency)
+}
+
+// Reconfigure 平滑热重建后台调度器与并发 Worker 池，不阻塞等待已派发的长耗时在途任务。
+// 若调度器未启动或参数未变化，返回 false 且不做任何重启。
+func (s *Service) Reconfigure(tickInterval time.Duration, concurrency int) bool {
+	tickInterval, concurrency = normalizeRunnerParams(tickInterval, concurrency)
+
+	s.runnerMu.Lock()
+	if !s.runnerRunning {
+		s.runnerMu.Unlock()
+		return false
+	}
+	if s.runnerTick == tickInterval && s.runnerConcurrency == concurrency {
+		s.runnerMu.Unlock()
+		return false
+	}
+
+	oldCancel := s.tickCancel
+	s.tickCancel = nil
+	s.runnerMu.Unlock()
+
+	// 毫秒级停止旧代 Ticker 循环（不再拾取新任务），已在途的慢任务仍持 shutdownCtx 优雅完成。
+	if oldCancel != nil {
+		oldCancel()
+	}
+	s.tickWG.Wait()
+
+	s.runnerMu.Lock()
+	defer s.runnerMu.Unlock()
+	if !s.runnerRunning {
+		return false
+	}
+	s.startTickerLocked(tickInterval, concurrency)
+	return true
+}
+
+func (s *Service) startTickerLocked(tickInterval time.Duration, concurrency int) {
+	tickCtx, tickCancel := context.WithCancel(s.shutdownCtx)
+	s.tickCancel = tickCancel
+	s.runnerTick = tickInterval
+	s.runnerConcurrency = concurrency
+	s.runnerGen++
+	gen := s.runnerGen
 	sem := make(chan struct{}, concurrency)
+	jobCtx := s.shutdownCtx
 
-	s.runnerWG.Add(1)
+	s.tickWG.Add(1)
 	go func() {
-		defer s.runnerWG.Done()
-		s.dispatchDueJobs(ctx, sem)
+		defer s.tickWG.Done()
+		s.dispatchDueJobs(tickCtx, jobCtx, sem)
 		ticker := time.NewTicker(tickInterval)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-tickCtx.Done():
 				return
 			case <-ticker.C:
-				s.dispatchDueJobs(ctx, sem)
+				s.dispatchDueJobs(tickCtx, jobCtx, sem)
 			}
 		}
 	}()
+	if s.Log != nil {
+		s.Log.Info("intelligence runner generation started",
+			"generation", gen,
+			"tick_interval", tickInterval.String(),
+			"concurrency", concurrency,
+		)
+	}
+}
+
+// RunnerStats 返回调度器当前运行状态（供测试与诊断）。
+func (s *Service) RunnerStats() (running bool, tick time.Duration, concurrency int, gen uint64) {
+	s.runnerMu.Lock()
+	defer s.runnerMu.Unlock()
+	return s.runnerRunning, s.runnerTick, s.runnerConcurrency, s.runnerGen
 }
 
 // Stop 优雅停止后台调度器并等待所有在途 Worker 结束。
 func (s *Service) Stop() {
 	s.runnerMu.Lock()
-	cancel := s.runnerCancel
-	s.runnerCancel = nil
+	tickCancel := s.tickCancel
+	shutdownCancel := s.shutdownCancel
+	s.tickCancel = nil
+	s.shutdownCancel = nil
+	s.runnerRunning = false
 	s.runnerMu.Unlock()
-	if cancel != nil {
-		cancel()
+
+	if tickCancel != nil {
+		tickCancel()
 	}
-	s.runnerWG.Wait()
+	s.tickWG.Wait()
+
+	if shutdownCancel != nil {
+		shutdownCancel()
+	}
+	s.jobWG.Wait()
 }
 
-func (s *Service) dispatchDueJobs(ctx context.Context, sem chan struct{}) {
+func (s *Service) dispatchDueJobs(tickCtx, jobCtx context.Context, sem chan struct{}) {
 	now := time.Now().UTC()
 	dueList, err := s.Configs.ListDue(now)
 	if err != nil {
@@ -452,7 +545,7 @@ func (s *Service) dispatchDueJobs(ctx context.Context, sem chan struct{}) {
 		return
 	}
 	for _, cfg := range dueList {
-		if ctx.Err() != nil {
+		if tickCtx.Err() != nil {
 			return
 		}
 		cfg := cfg
@@ -470,21 +563,35 @@ func (s *Service) dispatchDueJobs(ctx context.Context, sem chan struct{}) {
 
 		select {
 		case sem <- struct{}{}:
-		case <-ctx.Done():
+		case <-tickCtx.Done():
 			return
 		}
 
-		s.runnerWG.Add(1)
+		s.jobWG.Add(1)
 		go func() {
-			defer s.runnerWG.Done()
+			defer s.jobWG.Done()
 			defer func() { <-sem }()
-			_, execErr := s.ExecuteDetector(ctx, cfg.TargetID, cfg.DetectorKey, RunOptions{Manual: false})
+			res, execErr := s.ExecuteDetector(jobCtx, cfg.TargetID, cfg.DetectorKey, RunOptions{Manual: false})
 			finished := time.Now().UTC()
-			_ = s.Configs.UpdateSchedule(cfg.ID, finished, finished.Add(interval))
-			if execErr != nil && s.Log != nil && ctx.Err() == nil {
+			if jobCtx.Err() != nil {
+				return
+			}
+			decision := ComputeNextSchedule(s.currentBackoffPolicy(), &cfg, res, execErr, finished, nil)
+			_ = s.Configs.UpdateScheduleWithBackoff(
+				cfg.ID,
+				finished,
+				decision.NextRunAt,
+				decision.ConsecutiveErrors,
+				decision.LastErrorClass,
+				decision.BackoffUntil,
+			)
+			if execErr != nil && s.Log != nil {
 				s.Log.Warn("scheduled probe execution failed",
 					"target_id", cfg.TargetID,
 					"detector", cfg.DetectorKey,
+					"error_class", decision.LastErrorClass,
+					"consecutive_errors", decision.ConsecutiveErrors,
+					"next_run_at", decision.NextRunAt.Format(time.RFC3339),
 					"err", execErr,
 				)
 			}

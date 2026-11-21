@@ -76,3 +76,39 @@ func TestPostgresDatabaseEnvConfigBinding(t *testing.T) {
 		t.Fatalf("unexpected postgres dsn: %q", dsn)
 	}
 }
+
+func TestEmbedAndIntelligenceBackoffConfigDefaults(t *testing.T) {
+	cfg, err := LoadFile(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if !cfg.Intelligence.IsBackoffEnabled() ||
+		cfg.Intelligence.BackoffTransientMaxSeconds != DefaultBackoffTransientMaxSeconds ||
+		cfg.Intelligence.BackoffRateLimitMaxSeconds != DefaultBackoffRateLimitMaxSeconds ||
+		cfg.Intelligence.BackoffAuthMaxSeconds != DefaultBackoffAuthMaxSeconds {
+		t.Fatalf("unexpected intelligence defaults: %+v", cfg.Intelligence)
+	}
+	if cfg.Embed.EffectiveCacheTTLSeconds() != DefaultEmbedCacheTTLSeconds ||
+		!cfg.Embed.IsRateLimitEnabled() ||
+		cfg.Embed.RateLimitRPS != DefaultEmbedRateLimitRPS ||
+		cfg.Embed.RateLimitBurst != DefaultEmbedRateLimitBurst {
+		t.Fatalf("unexpected embed defaults: %+v", cfg.Embed)
+	}
+
+	// 验证显式关闭（false / 0）不会被 WithDefaults 误覆写。
+	zero := 0
+	off := false
+	customEmbed := EmbedConfig{
+		CacheTTLSeconds:  &zero,
+		RateLimitEnabled: &off,
+		RateLimitRPS:     12,
+		RateLimitBurst:   50,
+	}.WithDefaults()
+	if customEmbed.EffectiveCacheTTLSeconds() != 0 || customEmbed.IsRateLimitEnabled() {
+		t.Fatalf("explicit disabled embed config should be preserved: %+v", customEmbed)
+	}
+	customIntel := IntelligenceConfig{BackoffEnabled: &off}.WithDefaults()
+	if customIntel.IsBackoffEnabled() {
+		t.Fatalf("explicit backoffEnabled=false should be preserved")
+	}
+}

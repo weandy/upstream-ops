@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,6 +86,7 @@ type Response struct {
 	TPS            float64 `json:"tps"`
 	ErrorClass     string  `json:"error_class"`
 	ErrorMessage   string  `json:"error_message,omitempty"`
+	RetryAfterSec  int     `json:"retry_after_sec,omitempty"`
 }
 
 // Client 三协议流式客户端。
@@ -250,10 +252,11 @@ func (c *Client) Complete(ctx context.Context, req Request) (*Response, error) {
 		errClass := classifyHTTPStatus(httpResp.StatusCode)
 		msg := extractErrorMessage(errBody, httpResp.Status)
 		res := &Response{
-			HTTPStatus:   httpResp.StatusCode,
-			LatencyMS:    latency,
-			ErrorClass:   errClass,
-			ErrorMessage: msg,
+			HTTPStatus:    httpResp.StatusCode,
+			LatencyMS:     latency,
+			ErrorClass:    errClass,
+			ErrorMessage:  msg,
+			RetryAfterSec: parseRetryAfterSeconds(httpResp.Header.Get("Retry-After"), time.Now()),
 		}
 		return res, fmt.Errorf("HTTP %d: %s", httpResp.StatusCode, msg)
 	}
@@ -440,4 +443,31 @@ func applyCommonHeaders(req *http.Request, ua string, extra map[string]string) {
 		}
 		req.Header.Set(k, v)
 	}
+}
+
+func parseRetryAfterSeconds(raw string, now time.Time) int {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(s); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		if secs > 86400 {
+			return 86400
+		}
+		return secs
+	}
+	if t, err := http.ParseTime(s); err == nil {
+		diff := int(t.Sub(now).Seconds())
+		if diff <= 0 {
+			return 0
+		}
+		if diff > 86400 {
+			return 86400
+		}
+		return diff
+	}
+	return 0
 }

@@ -18,8 +18,13 @@ const (
 	DefaultLivenessTimeoutSec = 30
 )
 
-// RunLivenessProbe 执行一次主动流式测活，返回可直接落库的采样记录。
+// RunLivenessProbe 执行一次主动流式测活，返回可直接落库的采样记录与上游建议退避秒数（如 429 Retry-After）。
 func RunLivenessProbe(ctx context.Context, client LLMClient, req llmclient.Request, targetID uint) *storage.ProbeLivenessSample {
+	sample, _ := runLivenessProbeDetailed(ctx, client, req, targetID)
+	return sample
+}
+
+func runLivenessProbeDetailed(ctx context.Context, client LLMClient, req llmclient.Request, targetID uint) (*storage.ProbeLivenessSample, int) {
 	if strings.TrimSpace(req.Prompt) == "" {
 		req.Prompt = DefaultLivenessPrompt
 	}
@@ -32,6 +37,7 @@ func RunLivenessProbe(ctx context.Context, client LLMClient, req llmclient.Reque
 
 	now := time.Now().UTC()
 	resp, err := client.Complete(ctx, req)
+	retryAfter := 0
 	sample := &storage.ProbeLivenessSample{
 		TargetID:   targetID,
 		ModelName:  req.Model,
@@ -45,6 +51,7 @@ func RunLivenessProbe(ctx context.Context, client LLMClient, req llmclient.Reque
 		sample.LatencyMS = resp.LatencyMS
 		sample.OutputTokens = resp.OutputTokens
 		sample.TPS = resp.TPS
+		retryAfter = resp.RetryAfterSec
 	}
 	if err != nil {
 		sample.Success = false
@@ -54,7 +61,7 @@ func RunLivenessProbe(ctx context.Context, client LLMClient, req llmclient.Reque
 		if sample.ErrorMessage == "" {
 			sample.ErrorMessage = err.Error()
 		}
-		return sample
+		return sample, retryAfter
 	}
 	if resp == nil || !resp.Complete || strings.TrimSpace(resp.Content) == "" {
 		sample.Success = false
@@ -64,11 +71,11 @@ func RunLivenessProbe(ctx context.Context, client LLMClient, req llmclient.Reque
 		if sample.ErrorMessage == "" {
 			sample.ErrorMessage = "empty or incomplete liveness response"
 		}
-		return sample
+		return sample, retryAfter
 	}
 
 	sample.Success = true
 	sample.ErrorClass = llmclient.ErrorClassOK
 	sample.ErrorMessage = ""
-	return sample
+	return sample, 0
 }

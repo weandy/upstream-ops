@@ -304,6 +304,73 @@ func TestListModels(t *testing.T) {
 	}
 }
 
+func TestRetryAfterHeaderParsing(t *testing.T) {
+	t.Run("integer_seconds", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", "45")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded"}}`))
+		}))
+		defer srv.Close()
+
+		resp, err := New().Complete(context.Background(), Request{
+			BaseURL:  srv.URL,
+			APIKey:   "sk-test",
+			Protocol: storage.ProbeProtocolOpenAIChat,
+			Model:    "gpt-6.2-sol",
+			Prompt:   "hi",
+			Timeout:  5 * time.Second,
+		})
+		if err == nil {
+			t.Fatal("expected error for HTTP 429")
+		}
+		if resp == nil || resp.ErrorClass != ErrorClassRateLimit || resp.RetryAfterSec != 45 {
+			t.Fatalf("expected rate_limit with RetryAfterSec=45, got %+v", resp)
+		}
+	})
+
+	t.Run("http_date_and_cap", func(t *testing.T) {
+		future := time.Now().UTC().Add(120 * time.Second).Format(http.TimeFormat)
+		srvDate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", future)
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"slow down"}}`))
+		}))
+		defer srvDate.Close()
+
+		resp, _ := New().Complete(context.Background(), Request{
+			BaseURL:  srvDate.URL,
+			APIKey:   "sk-test",
+			Protocol: storage.ProbeProtocolOpenAIChat,
+			Model:    "gpt-6.2-sol",
+			Prompt:   "hi",
+			Timeout:  5 * time.Second,
+		})
+		if resp == nil || resp.RetryAfterSec < 110 || resp.RetryAfterSec > 125 {
+			t.Fatalf("expected HTTP-date RetryAfterSec in [110,125], got %+v", resp)
+		}
+
+		srvCap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", "999999")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"way too long"}}`))
+		}))
+		defer srvCap.Close()
+
+		respCap, _ := New().Complete(context.Background(), Request{
+			BaseURL:  srvCap.URL,
+			APIKey:   "sk-test",
+			Protocol: storage.ProbeProtocolOpenAIChat,
+			Model:    "gpt-6.2-sol",
+			Prompt:   "hi",
+			Timeout:  5 * time.Second,
+		})
+		if respCap == nil || respCap.RetryAfterSec != 86400 {
+			t.Fatalf("expected capped RetryAfterSec=86400, got %+v", respCap)
+		}
+	})
+}
+
 // TestLiveEndpoint 仅在显式提供环境变量时运行，避免离线 CI 失败及密钥硬编码。
 func TestLiveEndpoint(t *testing.T) {
 	baseURL := strings.TrimSpace(os.Getenv("LIVE_TEST_BASE_URL"))

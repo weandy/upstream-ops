@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/bejix/upstream-ops/backend/intelligence"
 	"github.com/bejix/upstream-ops/backend/storage"
 	"gorm.io/gorm"
@@ -77,10 +79,15 @@ type Service struct {
 	Liveness *storage.ProbeLivenessSamples
 	Runs     *storage.ProbeIntelligenceRuns
 	NowFunc  func() time.Time
+
+	cache              *embedCache
+	limiter            *ipRateLimiter
+	snapshotBuildCount atomic.Int64
 }
 
 // NewService 构造嵌入服务。可复用已有 intelligence.Service 的仓储实例。
 func NewService(db *gorm.DB, intel *intelligence.Service) *Service {
+	defCfg := config.EmbedConfig{}.WithDefaults()
 	svc := &Service{
 		Sites:   storage.NewEmbedSites(db),
 		NowFunc: func() time.Time { return time.Now().UTC() },
@@ -96,7 +103,47 @@ func NewService(db *gorm.DB, intel *intelligence.Service) *Service {
 		svc.Liveness = storage.NewProbeLivenessSamples(db)
 		svc.Runs = storage.NewProbeIntelligenceRuns(db)
 	}
+	svc.cache = newEmbedCache(time.Duration(defCfg.EffectiveCacheTTLSeconds()) * time.Second)
+	svc.limiter = newIPRateLimiter(
+		defCfg.IsRateLimitEnabled(),
+		defCfg.RateLimitRPS,
+		defCfg.RateLimitBurst,
+		svc.nowUTC,
+	)
 	return svc
+}
+
+// UpdateRuntimeConfig 热更新公开嵌入服务的微缓存 TTL 与 IP 令牌桶限流配置。
+func (s *Service) UpdateRuntimeConfig(cfg config.EmbedConfig) {
+	if s == nil {
+		return
+	}
+	c := cfg.WithDefaults()
+	if s.cache != nil {
+		s.cache.SetTTL(time.Duration(c.EffectiveCacheTTLSeconds()) * time.Second)
+	}
+	if s.limiter != nil {
+		s.limiter.Configure(c.IsRateLimitEnabled(), c.RateLimitRPS, c.RateLimitBurst)
+	}
+}
+
+// InvalidateCache 主动清空全部微缓存（站点配置变更时调用）。
+func (s *Service) InvalidateCache() {
+	if s != nil && s.cache != nil {
+		s.cache.InvalidateAll()
+	}
+}
+
+// InvalidateSnapshots 主动清空数据快照与渲染 HTML 缓存（目标更新或手动探测后调用）。
+func (s *Service) InvalidateSnapshots() {
+	if s != nil && s.cache != nil {
+		s.cache.InvalidateSnapshots()
+	}
+}
+
+// SnapshotBuildCount 返回实际查库构建快照的累计次数（用于并发防击穿验证与观测）。
+func (s *Service) SnapshotBuildCount() int64 {
+	return s.snapshotBuildCount.Load()
 }
 
 func (s *Service) nowUTC() time.Time {
@@ -138,6 +185,7 @@ func (s *Service) CreateSite(in SiteInput) (*SiteDTO, error) {
 	if err := s.Sites.Create(row); err != nil {
 		return nil, err
 	}
+	s.InvalidateCache()
 	dto := toSiteDTO(row)
 	return &dto, nil
 }
@@ -155,6 +203,7 @@ func (s *Service) UpdateSite(id uint, in SiteInput) (*SiteDTO, error) {
 	if err := s.Sites.Update(row); err != nil {
 		return nil, err
 	}
+	s.InvalidateCache()
 	dto := toSiteDTO(row)
 	return &dto, nil
 }
@@ -164,7 +213,11 @@ func (s *Service) DeleteSite(id uint) error {
 	if _, err := s.Sites.FindByID(id); err != nil {
 		return err
 	}
-	return s.Sites.Delete(id)
+	if err := s.Sites.Delete(id); err != nil {
+		return err
+	}
+	s.InvalidateCache()
+	return nil
 }
 
 // ResolveSite 解析外部请求指定的嵌入站点（仅返回启用站点；未配置任何站点时为 default 提供仅限 'self' 的只读视图）。

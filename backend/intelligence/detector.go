@@ -62,7 +62,9 @@ type DetectorRunResult struct {
 	OutputTokens   int                          `json:"output_tokens"`
 	DetailJSON     string                       `json:"detail_json,omitempty"`
 	ArtifactSVG    string                       `json:"artifact_svg,omitempty"`
+	ErrorClass     string                       `json:"error_class,omitempty"`
 	ErrorMessage   string                       `json:"error_message,omitempty"`
+	RetryAfterSec  int                          `json:"retry_after_sec,omitempty"`
 	LivenessSample *storage.ProbeLivenessSample `json:"liveness_sample,omitempty"`
 }
 
@@ -193,7 +195,7 @@ func (LivenessDetector) Run(ctx context.Context, client LLMClient, req DetectorR
 			llmReq.MaxTokens = p.MaxTokens
 		}
 	}
-	sample := RunLivenessProbe(ctx, client, llmReq, req.TargetID)
+	sample, retryAfter := runLivenessProbeDetailed(ctx, client, llmReq, req.TargetID)
 	status := storage.IntelligenceStatusNormal
 	summary := fmt.Sprintf("TTFT %dms · %.1f t/s", sample.FirstTokenMS, sample.TPS)
 	if !sample.Success {
@@ -209,7 +211,9 @@ func (LivenessDetector) Run(ctx context.Context, client LLMClient, req DetectorR
 		FirstTokenMS:   sample.FirstTokenMS,
 		LatencyMS:      sample.LatencyMS,
 		OutputTokens:   sample.OutputTokens,
+		ErrorClass:     sample.ErrorClass,
 		ErrorMessage:   sample.ErrorMessage,
+		RetryAfterSec:  retryAfter,
 		LivenessSample: sample,
 	}, nil
 }

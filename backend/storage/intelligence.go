@@ -114,6 +114,9 @@ func (r *ProbeDetectorConfigs) Upsert(cfg *ProbeDetectorConfig) error {
 			"alert_threshold",
 			"params_json",
 			"embed_visible",
+			"consecutive_errors",
+			"last_error_class",
+			"backoff_until",
 			"next_run_at",
 			"updated_at",
 		}),
@@ -141,6 +144,56 @@ func (r *ProbeDetectorConfigs) UpdateSchedule(id uint, lastRunAt, nextRunAt time
 		"next_run_at": nextRunAt,
 		"updated_at":  time.Now(),
 	}).Error
+}
+
+// UpdateScheduleWithBackoff 原子更新最近执行时间、下次计划时间与异常指数退避状态。
+func (r *ProbeDetectorConfigs) UpdateScheduleWithBackoff(
+	id uint,
+	lastRunAt, nextRunAt time.Time,
+	consecutiveErrors int,
+	lastErrorClass string,
+	backoffUntil *time.Time,
+) error {
+	return r.db.Model(&ProbeDetectorConfig{}).Where("id = ?", id).Updates(map[string]any{
+		"last_run_at":        lastRunAt,
+		"next_run_at":        nextRunAt,
+		"consecutive_errors": consecutiveErrors,
+		"last_error_class":   strings.TrimSpace(lastErrorClass),
+		"backoff_until":      backoffUntil,
+		"updated_at":         time.Now(),
+	}).Error
+}
+
+// ResetTargetBackoff 清零某目标下所有插件的退避状态，并将已启用插件立刻安排下一轮探测。
+func (r *ProbeDetectorConfigs) ResetTargetBackoff(targetID uint, now time.Time) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&ProbeDetectorConfig{}).Where("target_id = ?", targetID).Updates(map[string]any{
+			"consecutive_errors": 0,
+			"last_error_class":   "",
+			"backoff_until":      nil,
+			"updated_at":         now,
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&ProbeDetectorConfig{}).
+			Where("target_id = ? AND enabled = ?", targetID, true).
+			Updates(map[string]any{
+				"next_run_at": now,
+				"updated_at":  now,
+			}).Error
+	})
+}
+
+// ResetConfigBackoff 清零单条插件配置的退避状态（不改动其下次计划时间）。
+func (r *ProbeDetectorConfigs) ResetConfigBackoff(targetID uint, detectorKey string) error {
+	return r.db.Model(&ProbeDetectorConfig{}).
+		Where("target_id = ? AND detector_key = ?", targetID, strings.TrimSpace(detectorKey)).
+		Updates(map[string]any{
+			"consecutive_errors": 0,
+			"last_error_class":   "",
+			"backoff_until":      nil,
+			"updated_at":         time.Now(),
+		}).Error
 }
 
 // ProbeLivenessSamples 主动测活采样仓储。

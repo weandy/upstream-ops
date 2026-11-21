@@ -126,6 +126,8 @@ func (PelicanDetector) Run(ctx context.Context, client LLMClient, req DetectorRu
 		out.FirstTokenMS = resp.FirstTokenMS
 		out.LatencyMS = resp.LatencyMS
 		out.OutputTokens = resp.OutputTokens
+		out.ErrorClass = resp.ErrorClass
+		out.RetryAfterSec = resp.RetryAfterSec
 	}
 	if err != nil {
 		out.Status = storage.IntelligenceStatusError
