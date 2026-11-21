@@ -2,25 +2,23 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
+> This repository is a fork of [bejix/upstream-ops](https://github.com/bejix/upstream-ops), which is itself based on [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub). The current release is **v0.3.0**. Update checks and the repository URL point to [weandy/upstream-ops](https://github.com/weandy/upstream-ops).
+
 > UpstreamOps is a centralized monitoring and operations dashboard for NewAPI and Sub2API upstream sites. It helps manage upstream accounts, balances, spending, model or group rates, rate changes, upstream API keys, recharge and redeem workflows, subscriptions, announcements, and notification alerts.
 
 It also includes an OpenAI / Claude / Responses compatible request gateway: create gateway API keys, bind monitored channels or direct providers, schedule by rate and weight, convert protocols, fail over on errors, and record per-request usage and cost estimates.
 
-> This project is based on [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub). Thanks to [@worryzyy](https://github.com/worryzyy) for the original open-source work.
+## Changes in this fork
 
-## Sponsor
+Relative to bejix/upstream-ops v0.0.10, v0.3.0 adds model-intelligence monitoring and a public status page, and fixes several scheduler and UI issues:
 
-<details open>
-<summary>Click to expand</summary>
-
-<table>
-<tr>
-<td width="180"><a href="https://cmzi.com/aff/CHTVTQWE"><img src="https://zhenxiansheng-1251032746.file.myqcloud.com/Markdown/2020/12/29/zi-yuan-32.png" alt="cmzi.com" width="150"></a></td>
-<td>Thanks to 触摸云 for sponsoring this project. 触摸云 provides overseas cloud computing services, including Hong Kong cloud servers, US high-defense servers, physical servers, protection services, acceleration CDN, and self-developed CDN systems. UpstreamOps users can use <a href="https://cmzi.com/aff/CHTVTQWE">this link</a>.</td>
-</tr>
-</table>
-
-</details>
+- **Model probes**: active liveness checks, Candy logic, lmfpd numeric fingerprints, and pelican SVG drawings for a selected model. Liveness defaults to 60 seconds; intelligence probes default to 1 hour. Schedules advance from the planned anchor so request duration does not keep drifting the next run.
+- **Numeric fingerprint**: prompts are sent to the model selected on the probe target, then ranked against the whole reference bank. The selected model name, or an explicit claimed model, is used to report that model's rank rather than a blind match.
+- **Pelican drawings**: results render in a zero-JS sandboxed gallery. A scheduled run no longer reuses the same target's previous image, and the gallery lists original drawings only. A manual run waits synchronously; the plugin timeout defaults to 180 seconds. A timeout is stored as a failure and does not keep a partial image.
+- **60-minute availability**: the admin page and `/embed` show 60 one-minute equal-height cells. The public page is server-rendered with no JavaScript.
+- **Anthropic**: `/v1/messages` maps `reasoning_effort` by model generation (`thinking.budget_tokens` for older models, adaptive effort for newer ones).
+- **Login**: authentication is off by default. If the backend is unreachable, the UI says the backend is down instead of asking for a username and password.
+- **Release**: update checks read this repository's GitHub Releases. The Docker image is `ghcr.io/weandy/upstream-ops`.
 
 ## Why Use UpstreamOps
 
@@ -306,7 +304,7 @@ IMAGE_TAG=latest
 For production, pin a specific version:
 
 ```env
-IMAGE_TAG=v0.0.10
+IMAGE_TAG=v0.3.0
 ```
 
 ## MySQL Deployment

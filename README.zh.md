@@ -2,27 +2,22 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-> 本项目基于 [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub) 二次开发，感谢原作者 [@worryzyy](https://github.com/worryzyy) 的开源工作。
+> 本仓库是 [bejix/upstream-ops](https://github.com/bejix/upstream-ops) 的 fork，上游又基于 [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub)。当前版本 **v0.3.0**，仓库与更新检测地址为 [weandy/upstream-ops](https://github.com/weandy/upstream-ops)。
 
 > UpstreamOps 是一个面向 NewAPI / Sub2API 上游站点的集中监控与运维面板，用来统一管理上游账号、查看余额与消费、同步模型倍率、追踪倍率变化、维护上游 API Key、发起充值/兑换，并通过多种通知渠道推送余额告警、倍率变更、登录异常、监控异常和上游公告。
 同时内置 OpenAI / Claude / Responses 兼容的请求转发网关：可创建网关密钥、绑定同步渠道或直连上游、按倍率与权重调度、协议互转、故障自动切换，并记录每次请求的用量与费用参考。
 
+## 本 fork 的改动
 
-## ❤️赞助商
-<details open>
-<summary>点击折叠</summary>
+相对 bejix/upstream-ops v0.0.10，v0.3.0 主要增加了模型降智监测和公开状态页，并修正了几处调度与界面问题：
 
-<table>
-<tr>
-<td width="180"><a href="https://cmzi.com/aff/CHTVTQWE"><img src="https://zhenxiansheng-1251032746.file.myqcloud.com/Markdown/2020/12/29/zi-yuan-32.png" alt="cmzi.com" width="150"></a></td>
-<td>感谢 触摸云 赞助了本项目！触摸云 是一家专注海外云计算服务的品牌，提供香港云服务器、美国高防云服务器、物理服务器、防御与加速 CDN、自研 CDN 系统等产品。触摸云为本软件用户提供了特别优惠，使用
-<a href="https://cmzi.com/aff/CHTVTQWE">此链接</a></td>
-</tr>
-
-
-</table>
-
-</details>
+- **模型监测**：可对选定模型做主动测活、Candy 逻辑题、lmfpd 数字指纹和「画鹈鹕」SVG。测活默认 60 秒，智力类检测默认 1 小时；调度按计划锚点推进，避免请求耗时把周期越推越晚。
+- **数字指纹**：题目发给监测目标选定的模型，再把答案和整份参考库排名；选定模型名（或单独填写的声称模型）用来看它排第几，而不是只做盲目匹配。
+- **画鹈鹕**：结果以零 JS 沙箱画廊展示。定时采样不再复用本目标自己的上一张图；画廊只列出真实作画。单次请求默认同步等待，插件超时默认 180 秒，超时记为失败且不保留半张图。
+- **近 60 分钟可用率**：管理台与 `/embed` 使用 60 个 1 分钟格子的等高热力条，公开页为零 JS 服务端渲染。
+- **Anthropic**：`/v1/messages` 按模型代际映射 `reasoning_effort`（旧模型用 `thinking.budget_tokens`，新模型用 adaptive effort）。
+- **登录**：认证默认关闭。后端连不上时显示「后端没有连上」，不再误当成要输入账号密码。
+- **发布**：更新检测读取本仓库 Release；Docker 镜像为 `ghcr.io/weandy/upstream-ops`。
 
 ## 为什么使用？
 
@@ -320,7 +315,7 @@ IMAGE_TAG=latest
 生产环境建议锁定具体版本，例如：
 
 ```env
-IMAGE_TAG=v0.0.10
+IMAGE_TAG=v0.3.0
 ```
 
 ## MySQL 部署
