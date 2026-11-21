@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/bejix/upstream-ops/backend/intelligence"
@@ -29,6 +30,32 @@ func registerIntelligence(g *gin.RouterGroup, d *Deps) {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": list})
+	})
+
+	ig.GET("/compare", func(c *gin.Context) {
+		window := strings.TrimSpace(c.Query("window"))
+		idsParam := strings.TrimSpace(c.Query("ids"))
+		var ids []uint
+		if idsParam != "" {
+			for _, part := range strings.Split(idsParam, ",") {
+				p := strings.TrimSpace(part)
+				if p == "" {
+					continue
+				}
+				v, err := strconv.ParseUint(p, 10, 64)
+				if err != nil || v == 0 {
+					fail(c, http.StatusBadRequest, errors.New("invalid ids parameter"))
+					return
+				}
+				ids = append(ids, uint(v))
+			}
+		}
+		res, err := d.Intelligence.CompareTargets(ids, window)
+		if err != nil {
+			fail(c, http.StatusInternalServerError, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": res})
 	})
 
 	ig.GET("/targets", func(c *gin.Context) {
@@ -151,6 +178,19 @@ func registerIntelligence(g *gin.RouterGroup, d *Deps) {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"data": ov})
+	})
+
+	ig.GET("/targets/:id/trend", func(c *gin.Context) {
+		id, ok := parseRequiredUintParam(c, "id")
+		if !ok {
+			return
+		}
+		series, err := d.Intelligence.GetTargetPerformanceTrend(id, strings.TrimSpace(c.Query("window")))
+		if err != nil {
+			failLookup(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": series})
 	})
 
 	ig.GET("/targets/:id/detectors", func(c *gin.Context) {

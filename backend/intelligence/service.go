@@ -539,6 +539,161 @@ func (s *Service) ListTargetOverviews() ([]TargetOverview, error) {
 	return out, nil
 }
 
+// TargetCompareItem 多目标横向对比视图中的单个目标摘要与性能曲线。
+type TargetCompareItem struct {
+	Target          *storage.ProbeTarget                    `json:"target"`
+	Performance     PerformanceSummary                      `json:"performance"`
+	CandyPassed24h  int                                     `json:"candy_passed_24h"`
+	CandyChecked24h int                                     `json:"candy_checked_24h"`
+	LMFPDRank1Count int                                     `json:"lmfpd_rank1_count"`
+	LMFPDChecked    int                                     `json:"lmfpd_checked"`
+	LatestRuns      map[string]storage.ProbeIntelligenceRun `json:"latest_runs"`
+	Trend           []PerformanceTrendPoint                 `json:"trend"`
+}
+
+// TargetCompareResult 多目标横向对比响应。
+type TargetCompareResult struct {
+	Window        string              `json:"window"`
+	BucketMinutes int                 `json:"bucket_minutes"`
+	Items         []TargetCompareItem `json:"items"`
+}
+
+// GetTargetPerformanceTrend 查询单个目标在 6h / 24h / 7d 窗口下的分桶性能趋势。
+func (s *Service) GetTargetPerformanceTrend(targetID uint, windowRaw string) (*PerformanceTrendSeries, error) {
+	if _, err := s.Targets.FindByID(targetID); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	_, span, bucketDur, _ := NormalizeTrendWindow(windowRaw)
+	samples, err := s.Liveness.ListByTargetSince(targetID, now.Add(-span-bucketDur))
+	if err != nil {
+		return nil, err
+	}
+	win, bucketMin, points := AggregatePerformanceTrend(samples, windowRaw, now)
+	return &PerformanceTrendSeries{
+		TargetID:      targetID,
+		Window:        win,
+		BucketMinutes: bucketMin,
+		Points:        points,
+	}, nil
+}
+
+// CompareTargets 横向对比指定目标集合（为空时默认取前 6 个启用目标）在同时间轴下的性能与智力表现。
+func (s *Service) CompareTargets(targetIDs []uint, windowRaw string) (*TargetCompareResult, error) {
+	now := time.Now().UTC()
+	win, span, bucketDur, _ := NormalizeTrendWindow(windowRaw)
+	bucketMin := int(bucketDur / time.Minute)
+
+	allTargets, err := s.Targets.List()
+	if err != nil {
+		return nil, err
+	}
+	selected := make([]storage.ProbeTarget, 0, len(allTargets))
+	if len(targetIDs) > 0 {
+		byID := make(map[uint]storage.ProbeTarget, len(allTargets))
+		for _, t := range allTargets {
+			byID[t.ID] = t
+		}
+		seen := make(map[uint]struct{}, len(targetIDs))
+		for _, id := range targetIDs {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			if t, ok := byID[id]; ok {
+				seen[id] = struct{}{}
+				selected = append(selected, t)
+			}
+		}
+	} else {
+		for _, t := range allTargets {
+			if !t.Enabled {
+				continue
+			}
+			selected = append(selected, t)
+			if len(selected) >= 6 {
+				break
+			}
+		}
+	}
+
+	sinceLiveness := now.Add(-span - bucketDur)
+	if span < 24*time.Hour {
+		sinceLiveness = now.Add(-24 * time.Hour)
+	}
+	sinceRuns := now.Add(-span)
+	if span < 24*time.Hour {
+		sinceRuns = now.Add(-24 * time.Hour)
+	}
+
+	items := make([]TargetCompareItem, 0, len(selected))
+	for i := range selected {
+		t := selected[i]
+		samples, err := s.Liveness.ListByTargetSince(t.ID, sinceLiveness)
+		if err != nil {
+			return nil, err
+		}
+		perf, _ := AggregateLiveness(samples, now)
+		_, _, points := AggregatePerformanceTrend(samples, win, now)
+
+		latestRuns := make(map[string]storage.ProbeIntelligenceRun)
+		for _, meta := range s.Registry.ListMeta() {
+			if meta.Category == DetectorCategoryLiveness {
+				continue
+			}
+			runs, err := s.Runs.ListByTargetAndDetector(t.ID, meta.Key, 1)
+			if err == nil && len(runs) > 0 {
+				latestRuns[meta.Key] = runs[0]
+			}
+		}
+
+		candyRuns, err := s.Runs.ListByTargetAndDetectorSince(t.ID, DetectorKeyCandy, sinceRuns)
+		var candyPassed, candyChecked int
+		if err == nil {
+			for _, r := range candyRuns {
+				if r.Status == storage.IntelligenceStatusError {
+					continue
+				}
+				candyChecked++
+				if r.Status == storage.IntelligenceStatusNormal {
+					candyPassed++
+				}
+			}
+		}
+
+		fpRuns, err := s.Runs.ListByTargetAndDetectorSince(t.ID, DetectorKeyLMFPD, sinceRuns)
+		var fpRank1, fpChecked int
+		if err == nil {
+			for _, r := range fpRuns {
+				if r.Status == storage.IntelligenceStatusError {
+					continue
+				}
+				fpChecked++
+				if r.ClaimedRank == 1 || (r.ClaimedRank == 0 && r.Status == storage.IntelligenceStatusNormal) {
+					fpRank1++
+				}
+			}
+		}
+
+		targetCopy := t
+		items = append(items, TargetCompareItem{
+			Target:          &targetCopy,
+			Performance:     perf,
+			CandyPassed24h:  candyPassed,
+			CandyChecked24h: candyChecked,
+			LMFPDRank1Count: fpRank1,
+			LMFPDChecked:    fpChecked,
+			LatestRuns:      latestRuns,
+			Trend:           points,
+		})
+	}
+
+	return &TargetCompareResult{
+		Window:        win,
+		BucketMinutes: bucketMin,
+		Items:         items,
+	}, nil
+}
+
 // GetTargetOverview 获取单目标的 24h 性能汇总、90 分钟趋势、最近采样及检测器配置。
 func (s *Service) GetTargetOverview(targetID uint) (*TargetOverview, error) {
 	target, err := s.Targets.FindByID(targetID)
