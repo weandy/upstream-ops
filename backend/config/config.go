@@ -357,7 +357,7 @@ func (c IntelligenceConfig) WithDefaults() IntelligenceConfig {
 		c.LMFPDDataDir = "./data/lmfpd"
 	}
 	if c.TickIntervalSeconds <= 0 {
-		c.TickIntervalSeconds = 10
+		c.TickIntervalSeconds = 5
 	}
 	if c.Concurrency <= 0 {
 		c.Concurrency = 3
@@ -641,7 +641,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("gateway.streamMaxLineBytes", DefaultGatewayStreamMaxLineBytes)
 
 	v.SetDefault("intelligence.lmfpdDataDir", "./data/lmfpd")
-	v.SetDefault("intelligence.tickIntervalSeconds", 10)
+	v.SetDefault("intelligence.tickIntervalSeconds", 5)
 	v.SetDefault("intelligence.concurrency", 3)
 	v.SetDefault("intelligence.backoffEnabled", true)
 	v.SetDefault("intelligence.backoffTransientMaxSeconds", DefaultBackoffTransientMaxSeconds)

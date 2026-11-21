@@ -38,7 +38,7 @@ func (*LMFPDDetector) Meta() DetectorMeta {
 		Name:               "数字指纹（lmfpd）",
 		Category:           DetectorCategoryIntelligence,
 		Description:        "随机抽取 3 轮 1-355 随机整数生成挑战，按数值分布与序列特征和 lm-detector 参考库比对，给出最像的模型候选排名（结果仅供参考，不作绝对身份证明）。",
-		DefaultIntervalSec: 10800,
+		DefaultIntervalSec: 3600,
 		DefaultTimeoutSec:  120,
 		DefaultAlertThresh: 2,
 		SupportsEmbed:      true,

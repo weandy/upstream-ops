@@ -78,7 +78,7 @@ const defaultGatewayConfig: SystemGatewayConfig = {
 
 const defaultIntelligenceConfig: SystemIntelligenceConfig = {
   lmfpdDataDir: "./data/lmfpd",
-  tickIntervalSeconds: 10,
+  tickIntervalSeconds: 5,
   concurrency: 3,
   backoffEnabled: true,
   backoffTransientMaxSeconds: 3600,
@@ -1315,7 +1315,7 @@ export default function SettingsPage() {
               </Field>
               <Field
                 label="调度扫描间隔（秒）"
-                description="后台检查到期探测任务的周期，默认 10 秒，应用后立即平滑重建。"
+                description="后台检查到期探测任务的周期，默认 5 秒，应用后立即平滑重建。"
               >
                 <Input
                   type="number"

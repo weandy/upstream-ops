@@ -80,9 +80,20 @@ func ComputeNextSchedule(
 	}
 
 	// 成功或 suspected（模型正常返回但智力异常）均清零退避，维持原周期监测。
+	// 为避免请求耗时 + Tick 延迟累加导致时间漂移（从而在 60s 测活下跳过整分钟留下灰格），
+	// 当原计划时间在最近一个周期内且步进后仍晚于当前完成时间时，按原计划锚点推进。
 	if execErr == nil && res != nil && res.Status != storage.IntelligenceStatusError {
+		nextAt := nowUTC.Add(base)
+		if cfg != nil && cfg.NextRunAt != nil && !cfg.NextRunAt.IsZero() {
+			anchor := cfg.NextRunAt.UTC()
+			if !anchor.After(nowUTC) && nowUTC.Sub(anchor) < base {
+				if candidate := anchor.Add(base); candidate.After(nowUTC) {
+					nextAt = candidate
+				}
+			}
+		}
 		return BackoffDecision{
-			NextRunAt:         nowUTC.Add(base),
+			NextRunAt:         nextAt,
 			ConsecutiveErrors: 0,
 			LastErrorClass:    "",
 			BackoffUntil:      nil,

@@ -99,3 +99,28 @@ func TestComputeNextScheduleRateLimitImmediateAndRetryAfterAndAuthCap(t *testing
 		t.Fatalf("backoff disabled should keep base interval, got %+v", dOff)
 	}
 }
+
+func TestComputeNextSchedulePreventsTimeDriftOnNormalRun(t *testing.T) {
+	policy := DefaultBackoffPolicy()
+	planned := time.Date(2026, 11, 21, 15, 0, 0, 0, time.UTC)
+	// 假设 Tick 晚了 3 秒、上游耗时 4 秒，在 15:00:07 才完成：
+	// 下次计划应钉在 15:01:00 而非漂移到 15:01:07。
+	finished := planned.Add(7 * time.Second)
+	cfg := &storage.ProbeDetectorConfig{
+		IntervalSeconds: 60,
+		NextRunAt:       &planned,
+	}
+	dec := ComputeNextSchedule(policy, cfg, &DetectorRunResult{Status: storage.IntelligenceStatusNormal}, nil, finished, noJitter)
+	want := planned.Add(60 * time.Second)
+	if !dec.NextRunAt.Equal(want) {
+		t.Fatalf("expected drift-free NextRunAt=%s, got %s", want, dec.NextRunAt)
+	}
+
+	// 若单次请求极慢（耗时 75 秒超过 60 秒周期），应安全回退为 finished + 60s，避免立即连续重入。
+	slowFinished := planned.Add(75 * time.Second)
+	decSlow := ComputeNextSchedule(policy, cfg, &DetectorRunResult{Status: storage.IntelligenceStatusNormal}, nil, slowFinished, noJitter)
+	wantSlow := slowFinished.Add(60 * time.Second)
+	if !decSlow.NextRunAt.Equal(wantSlow) {
+		t.Fatalf("expected slow fallback NextRunAt=%s, got %s", wantSlow, decSlow.NextRunAt)
+	}
+}

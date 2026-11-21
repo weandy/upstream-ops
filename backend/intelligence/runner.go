@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	DefaultRunnerTickInterval = 10 * time.Second
+	DefaultRunnerTickInterval = 5 * time.Second
 	DefaultRunnerConcurrency  = 3
 	MinDetectorIntervalSec    = 60
 )
