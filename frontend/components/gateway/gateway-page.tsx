@@ -703,7 +703,6 @@ export function GatewayPage() {
     }
     void reloadGroupDetail(selectedGroup)
     // 仅在切换组时重载密钥/路由；使用记录独立，不受网关组影响
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedGroup?.id, reloadGroupDetail])
 
   function openCreateGroup() {

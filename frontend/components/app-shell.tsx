@@ -1,5 +1,6 @@
 "use client"
 
+import { Suspense } from "react"
 import { Outlet } from "react-router-dom"
 import { MonitorHeader } from "@/components/monitor/monitor-header"
 import { DockBar } from "@/components/monitor/dock-bar"
@@ -23,7 +24,15 @@ export function AppShell() {
             : "mx-auto max-w-[120rem] space-y-4 px-3 py-3 sm:space-y-5 sm:px-6 sm:py-5 lg:px-8"
         }
       >
-        <Outlet />
+        <Suspense
+          fallback={
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              页面加载中...
+            </div>
+          }
+        >
+          <Outlet />
+        </Suspense>
       </main>
       {SHOW_DOCK ? <DockBar /> : null}
     </div>

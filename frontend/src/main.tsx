@@ -1,4 +1,4 @@
-import { StrictMode } from 'react'
+import { lazy, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import '@fontsource-variable/geist'
@@ -10,14 +10,15 @@ import { AddChannelProvider } from '@/lib/add-channel-context'
 import { AuthGate } from '@/components/auth/auth-gate'
 import { AppShell } from '@/components/app-shell'
 import { Toaster } from '@/components/ui/sonner'
-import DashboardPage from '@/app/page'
-import CaptchaPage from '@/app/captcha-page'
-import NotificationsPage from '@/app/notifications-page'
-import SettingsPage from '@/app/settings-page'
-import GatewayPage from '@/app/gateway-page'
-import IntelligencePage from '@/app/intelligence-page'
-import EmbedAdminPage from '@/app/embed-admin-page'
 import '@/app/globals.css'
+
+const DashboardPage = lazy(() => import('@/app/page'))
+const CaptchaPage = lazy(() => import('@/app/captcha-page'))
+const NotificationsPage = lazy(() => import('@/app/notifications-page'))
+const SettingsPage = lazy(() => import('@/app/settings-page'))
+const GatewayPage = lazy(() => import('@/app/gateway-page'))
+const IntelligencePage = lazy(() => import('@/app/intelligence-page'))
+const EmbedAdminPage = lazy(() => import('@/app/embed-admin-page'))
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

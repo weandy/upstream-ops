@@ -314,7 +314,6 @@ export function UsagePanel({
   setUsageFrom,
   usageTo,
   setUsageTo,
-  usagePage,
   setUsagePage,
   usagePageSize,
   setUsagePageSize,
