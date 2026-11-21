@@ -40,7 +40,26 @@ func AggregateLiveness(samples []storage.ProbeLivenessSample, now time.Time) (Pe
 	nowUTC := now.UTC()
 	cutoff24h := nowUTC.Add(-24 * time.Hour)
 	currentMinute := nowUTC.Truncate(time.Minute)
-	startMinute := currentMinute.Add(-time.Duration(TrendBucketCount-1) * time.Minute)
+	// 若当前这一分钟刚开始、尚未到达本分钟的采样时刻，且过去 60 分钟内已有历史采样，
+	// 则将趋势条右端对齐到上一已完成分钟，避免每分钟前几十秒最右侧固定露出一格灰色“无采样”。
+	hasCurrentMinuteSample := false
+	hasRecentWindowSample := false
+	recentCutoff := currentMinute.Add(-time.Duration(TrendBucketCount) * time.Minute)
+	for _, s := range samples {
+		ts := s.ObservedAt.UTC()
+		if !ts.Before(currentMinute) && ts.Before(currentMinute.Add(time.Minute)) {
+			hasCurrentMinuteSample = true
+			break
+		}
+		if !ts.Before(recentCutoff) && ts.Before(currentMinute) {
+			hasRecentWindowSample = true
+		}
+	}
+	endMinute := currentMinute
+	if !hasCurrentMinuteSample && hasRecentWindowSample {
+		endMinute = currentMinute.Add(-time.Minute)
+	}
+	startMinute := endMinute.Add(-time.Duration(TrendBucketCount-1) * time.Minute)
 
 	buckets := make([]AvailabilityBucket, TrendBucketCount)
 	for i := 0; i < TrendBucketCount; i++ {

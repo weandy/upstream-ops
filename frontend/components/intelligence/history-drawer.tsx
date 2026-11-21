@@ -216,7 +216,7 @@ export function HistoryDrawer({
                 />
               </div>
               <div className="rounded-lg border border-border/70 bg-muted/15 px-3 py-2">
-                <TrendStrip buckets={overview?.trend ?? []} />
+                <TrendStrip buckets={overview?.trend ?? []} showAxis />
               </div>
             </div>
           ) : null}
