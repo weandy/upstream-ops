@@ -108,27 +108,16 @@ export function formatSuccessRateClass(rate: number, samples: number): string {
 }
 
 function bucketBarClass(tone: AvailabilityBucket["tone"], compact: boolean): string {
+  const sizeClass = compact ? "h-4 rounded-[1.5px]" : "h-6 rounded-[2px]"
   switch (tone) {
     case "ok":
-      return cn(
-        compact ? "h-5" : "h-7",
-        "rounded-[2.5px] bg-emerald-500/90 dark:bg-emerald-400/90",
-      )
+      return cn(sizeClass, "bg-emerald-600/90 dark:bg-emerald-400/90")
     case "warn":
-      return cn(
-        compact ? "h-5" : "h-7",
-        "rounded-[2.5px] bg-amber-500/95 dark:bg-amber-400/95",
-      )
+      return cn(sizeClass, "bg-amber-500/95 dark:bg-amber-400/95")
     case "down":
-      return cn(
-        compact ? "h-5" : "h-7",
-        "rounded-[2.5px] bg-rose-500/95 dark:bg-rose-400/95",
-      )
+      return cn(sizeClass, "bg-rose-500/95 dark:bg-rose-400/95")
     default:
-      return cn(
-        compact ? "h-2.5" : "h-3.5",
-        "rounded-[2px] bg-muted-foreground/20",
-      )
+      return cn(sizeClass, "bg-muted-foreground/22")
   }
 }
 
@@ -146,7 +135,7 @@ function formatBucketTooltip(b: AvailabilityBucket): string {
 export function TrendStrip({
   buckets,
   compact = false,
-  showAxis = true,
+  showAxis = false,
   className,
 }: {
   buckets: AvailabilityBucket[]
@@ -157,14 +146,14 @@ export function TrendStrip({
   const list = buckets.length > 0 ? buckets : []
   const count = Math.max(list.length, 60)
   return (
-    <div className={cn("w-full space-y-1.5", className)}>
+    <div className={cn("w-full space-y-1", className)}>
       <div
         className={cn(
-          "grid w-full items-center gap-[2px] sm:gap-[3px]",
-          compact ? "h-6" : "h-8",
+          "grid w-full items-center gap-[1.5px] sm:gap-[2px]",
+          compact ? "h-4" : "h-6",
         )}
         style={{
-          gridTemplateColumns: `repeat(${count}, minmax(2px, 1fr))`,
+          gridTemplateColumns: `repeat(${count}, minmax(1px, 1fr))`,
         }}
         aria-label="近 60 分钟逐分钟可用率"
       >
@@ -173,8 +162,8 @@ export function TrendStrip({
               <span
                 key={idx}
                 className={cn(
-                  "block rounded-[2px] bg-muted-foreground/20",
-                  compact ? "h-2.5" : "h-3.5",
+                  "block bg-muted-foreground/20",
+                  compact ? "h-4 rounded-[1.5px]" : "h-6 rounded-[2px]",
                 )}
               />
             ))
@@ -183,7 +172,7 @@ export function TrendStrip({
                 key={`${b.timestamp}-${idx}`}
                 title={formatBucketTooltip(b)}
                 className={cn(
-                  "block transition-transform duration-150 hover:scale-y-125",
+                  "block transition-transform duration-150 hover:scale-y-115",
                   bucketBarClass(b.tone, compact),
                 )}
               />
@@ -192,7 +181,7 @@ export function TrendStrip({
       {showAxis ? (
         <div className="flex items-center justify-between font-mono text-[10px] leading-none text-muted-foreground/80">
           <span>60 分钟前</span>
-          <span className="hidden sm:inline">30 分钟前</span>
+          <span>30 分钟前</span>
           <span>现在</span>
         </div>
       ) : null}

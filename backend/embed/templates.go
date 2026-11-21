@@ -172,31 +172,30 @@ var embedFuncMap = template.FuncMap{
 
 const sharedCSS = `
 :root {
-  --bg: #f6f2ea;
-  --bg-accent: radial-gradient(circle at 12% 0%, rgba(200, 82, 50, 0.055), transparent 44%), radial-gradient(circle at 88% 0%, rgba(23, 114, 82, 0.05), transparent 42%);
+  color-scheme: light;
+  --bg: #f7f5ef;
   --surface: #fffefa;
-  --surface-alt: #f3eee4;
-  --surface-hover: #f8f4ec;
-  --border: #e5ded0;
-  --border-strong: #d4cab6;
-  --ink: #22201c;
-  --ink-muted: #625d54;
-  --ink-subtle: #8b857a;
-  --accent: #c85232;
-  --accent-soft: #f9eae4;
-  --ok: #137a52;
-  --ok-bg: #e2f4ec;
-  --warn: #b46910;
-  --warn-bg: #faeed7;
-  --down: #c4362f;
-  --down-bg: #fce6e4;
-  --none: #d8d0c1;
-  --shadow: 0 10px 30px rgba(45, 38, 26, 0.055), 0 1px 2px rgba(45, 38, 26, 0.04);
-  --radius: 16px;
+  --surface-alt: #f2efe7;
+  --surface-hover: #faf7f0;
+  --border: #e7e2d8;
+  --border-strong: #d5cec0;
+  --ink: #25231f;
+  --ink-muted: #706c64;
+  --ink-subtle: #948f85;
+  --accent: #d8593a;
+  --ok: #0eaf78;
+  --ok-bg: #e3f6ee;
+  --warn: #d89a20;
+  --warn-bg: #fcf2dc;
+  --down: #d94a42;
+  --down-bg: #fce7e5;
+  --none: #cfc8bc;
+  --shadow: 0 12px 35px rgba(45, 38, 26, 0.05);
+  --radius: 18px;
 }
 body.theme-light {
+  color-scheme: light;
   --bg: #f4f7fb;
-  --bg-accent: radial-gradient(circle at 10% 0%, rgba(15, 118, 110, 0.06), transparent 45%);
   --surface: #ffffff;
   --surface-alt: #f1f5f9;
   --surface-hover: #f8fafc;
@@ -207,56 +206,56 @@ body.theme-light {
   --ink-subtle: #64748b;
   --accent: #0f766e;
   --accent-soft: #ccfbf1;
-  --ok: #15803d;
+  --ok: #10b981;
   --ok-bg: #dcfce7;
-  --warn: #b45309;
+  --warn: #d97706;
   --warn-bg: #fef3c7;
-  --down: #dc2626;
+  --down: #e11d48;
   --down-bg: #fee2e2;
-  --none: #d8e1ec;
-  --shadow: 0 8px 26px rgba(15, 23, 42, 0.05), 0 1px 2px rgba(15, 23, 42, 0.03);
+  --none: #cbd5e1;
+  --shadow: 0 10px 28px rgba(15, 23, 42, 0.045);
 }
 body.theme-dark {
+  color-scheme: dark;
   --bg: #0c1016;
-  --bg-accent: radial-gradient(circle at 15% 0%, rgba(63, 185, 132, 0.09), transparent 45%), radial-gradient(circle at 85% 0%, rgba(56, 139, 253, 0.07), transparent 42%);
   --surface: #131922;
   --surface-alt: #1a222e;
-  --surface-hover: #1e2736;
-  --border: #263142;
+  --surface-hover: #1c2533;
+  --border: #253041;
   --border-strong: #36455c;
   --ink: #e9eff6;
   --ink-muted: #98a6b8;
   --ink-subtle: #6f7f94;
   --accent: #3fb984;
-  --accent-soft: rgba(63, 185, 132, 0.14);
-  --ok: #34d399;
-  --ok-bg: rgba(52, 211, 153, 0.14);
-  --warn: #f0b429;
-  --warn-bg: rgba(240, 180, 41, 0.16);
-  --down: #f87171;
-  --down-bg: rgba(248, 113, 113, 0.16);
-  --none: #2c3849;
+  --ok: #22c55e;
+  --ok-bg: rgba(34, 197, 94, 0.14);
+  --warn: #eab308;
+  --warn-bg: rgba(234, 179, 8, 0.16);
+  --down: #f43f5e;
+  --down-bg: rgba(244, 63, 94, 0.16);
+  --none: #2b3648;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
 }
 * { box-sizing: border-box; }
 html, body {
   margin: 0;
   padding: 0;
-  background-color: var(--bg);
-  background-image: var(--bg-accent);
+  background: var(--bg);
   color: var(--ink);
-  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 a { color: inherit; text-decoration: none; }
 .wrap {
-  max-width: 1280px;
+  max-width: 1220px;
   margin: 0 auto;
-  padding: 16px 18px 22px;
+  padding: 12px;
 }
 .shell {
+  display: flex;
+  flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -267,31 +266,29 @@ a { color: inherit; text-decoration: none; }
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
   flex-wrap: wrap;
-  padding: 18px 22px 15px;
-  border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, var(--surface) 0%, var(--surface-hover) 100%);
+  padding: 20px 22px 14px;
 }
 .eyebrow {
-  font-size: 10px;
-  letter-spacing: 0.16em;
+  margin: 0 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--accent);
   font-weight: 700;
 }
 .title {
-  margin: 3px 0 0;
+  margin: 0;
   font-family: "Songti SC", "Noto Serif SC", "STSong", Georgia, serif;
   font-size: 22px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.01em;
   line-height: 1.25;
 }
 body.theme-light .title,
 body.theme-dark .title {
-  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-  letter-spacing: -0.02em;
+  font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
 .meta-bar {
   display: flex;
@@ -299,32 +296,27 @@ body.theme-dark .title {
   gap: 8px;
   flex-wrap: wrap;
   color: var(--ink-muted);
-  font-size: 11.5px;
+  font-size: 11px;
 }
 .pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 10px;
+  padding: 2px 9px;
   border-radius: 999px;
-  background: var(--surface);
+  background: var(--surface-alt);
   border: 1px solid var(--border);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-@keyframes livePulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.45; transform: scale(0.84); }
-}
 .dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--ok);
   display: inline-block;
-  box-shadow: 0 0 0 3px var(--ok-bg);
-  animation: livePulse 2.4s ease-in-out infinite;
 }
+
 .table-wrap {
   width: 100%;
   overflow-x: auto;
@@ -332,231 +324,242 @@ body.theme-dark .title {
 table.perf-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
 }
-table.perf-table thead th {
-  text-align: left;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-subtle);
-  background: var(--surface-alt);
-  border-bottom: 1px solid var(--border);
-  padding: 10px 14px;
-  white-space: nowrap;
-}
-table.perf-table thead th.col-num { text-align: right; }
-table.perf-table tbody td {
-  padding: 13px 14px;
-  border-bottom: 1px solid var(--border);
+table.perf-table .col-channel  { width: 14%; }
+table.perf-table .col-tps      { width: 10%; }
+table.perf-table .col-first    { width: 11%; }
+table.perf-table .col-latency  { width: 10%; }
+table.perf-table .col-success  { width: 10%; }
+table.perf-table .col-identity { width: 20%; }
+table.perf-table .col-trend    { width: 25%; }
+table.perf-table.no-identity .col-channel { width: 17%; }
+table.perf-table.no-identity .col-tps     { width: 11%; }
+table.perf-table.no-identity .col-first   { width: 13%; }
+table.perf-table.no-identity .col-latency { width: 12%; }
+table.perf-table.no-identity .col-success { width: 11%; }
+table.perf-table.no-identity .col-trend   { width: 36%; }
+
+table.perf-table th,
+table.perf-table td {
+  padding: 11px 10px;
+  border-top: 1px solid var(--border);
+  text-align: center;
   vertical-align: middle;
 }
-table.perf-table tbody tr:last-child td { border-bottom: none; }
-table.perf-table tbody tr {
-  transition: background-color 0.14s ease;
+table.perf-table th:first-child,
+table.perf-table td:first-child {
+  padding-left: 20px;
+  text-align: left;
+}
+table.perf-table th:last-child,
+table.perf-table td:last-child {
+  padding-right: 20px;
+}
+table.perf-table thead th {
+  color: var(--ink-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+table.perf-table tbody td {
+  font-size: 12px;
 }
 table.perf-table tbody tr:hover {
   background: var(--surface-hover);
 }
+
 .num {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 650;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-td.cell-num {
-  text-align: right;
-  font-size: 13px;
-  font-weight: 600;
-}
 .unit {
-  font-size: 10.5px;
   font-weight: 500;
-  color: var(--ink-subtle);
+  color: var(--ink-muted);
   margin-left: 2px;
+  font-size: 11px;
 }
-.target-cell {
+
+/* 渠道名胶囊（复刻圆点+家族柔和色） */
+.channel-pill {
   display: inline-flex;
-  align-items: center;
-  gap: 8px;
   max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 11.5px;
+  white-space: nowrap;
+  background: var(--fam-bg, #eef0f2);
+  color: var(--fam-fg, #59616c);
 }
+.channel-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+.channel-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fam-codex    { --fam-fg: #087c89; --fam-bg: #e7f4f5; }
+.fam-claude   { --fam-fg: #ad542f; --fam-bg: #f8ece6; }
+.fam-grok     { --fam-fg: #46505e; --fam-bg: #edf0f3; }
+.fam-domestic { --fam-fg: #7252ad; --fam-bg: #f1ecf8; }
+.fam-other    { --fam-fg: #59616c; --fam-bg: #eef0f2; }
+body.theme-dark .fam-codex    { --fam-fg: #5bd6e0; --fam-bg: rgba(14, 124, 137, 0.22); }
+body.theme-dark .fam-claude   { --fam-fg: #f3a177; --fam-bg: rgba(173, 84, 47, 0.22); }
+body.theme-dark .fam-grok     { --fam-fg: #9fb3c8; --fam-bg: rgba(70, 80, 94, 0.28); }
+body.theme-dark .fam-domestic { --fam-fg: #c4a7f2; --fam-bg: rgba(114, 82, 173, 0.24); }
+body.theme-dark .fam-other    { --fam-fg: #9aa7b8; --fam-bg: rgba(89, 97, 108, 0.24); }
+
 .fam-tag {
   display: inline-flex;
   align-items: center;
   padding: 2px 7px;
-  border-radius: 6px;
+  border-radius: 5px;
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  flex-shrink: 0;
+  background: var(--fam-bg, #eef0f2);
+  color: var(--fam-fg, #59616c);
 }
-.fam-claude { background: rgba(194, 96, 48, 0.14); color: #b54e20; }
-.fam-codex { background: rgba(14, 124, 134, 0.14); color: #0a6f78; }
-.fam-grok { background: rgba(61, 90, 128, 0.15); color: #365277; }
-.fam-domestic { background: rgba(114, 82, 173, 0.14); color: #67449a; }
-.fam-other { background: var(--surface-alt); color: var(--ink-muted); }
-body.theme-dark .fam-claude { color: #f3a177; }
-body.theme-dark .fam-codex { color: #5bd6e0; }
-body.theme-dark .fam-grok { color: #8cb4e6; }
-body.theme-dark .fam-domestic { color: #c4a7f2; }
-.target-name {
-  font-weight: 700;
-  font-size: 13.5px;
-  color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.st-ok { color: var(--ok); }
-.st-warn { color: var(--warn); }
-.st-down { color: var(--down); }
-.st-muted { color: var(--ink-subtle); }
-.rate-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 2px 8px;
-  border-radius: 7px;
-  font-weight: 700;
-  font-size: 12.5px;
-}
-.rate-pill.st-ok { background: var(--ok-bg); color: var(--ok); }
-.rate-pill.st-warn { background: var(--warn-bg); color: var(--warn); }
-.rate-pill.st-down { background: var(--down-bg); color: var(--down); }
-.rate-pill.st-muted { background: var(--surface-alt); color: var(--ink-subtle); }
 
-.intel-cell {
+.st-ok    { color: var(--ok); }
+.st-warn  { color: var(--warn); }
+.st-down  { color: var(--down); }
+.st-muted { color: var(--ink-subtle); }
+
+/* 模型检测列：左侧 Pelican 缩略图 + 右侧紧凑圆点状态行 */
+td.identity-cell {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+.checks {
   display: flex;
+  width: 230px;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0 auto;
   align-items: center;
   gap: 8px;
+  text-align: left;
 }
-.intel-stack {
+.check-lines {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
   min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2.5px;
 }
-.badge {
-  display: inline-flex;
+.check {
+  display: flex;
+  min-width: 0;
   align-items: center;
   gap: 5px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  border: 1px solid transparent;
+  color: var(--ink);
+  font-size: 10.5px;
+  line-height: 1.35;
   white-space: nowrap;
-  max-width: 100%;
+}
+.check::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--tone, var(--ink-subtle));
+}
+.check.st-ok    { --tone: var(--ok); }
+.check.st-warn  { --tone: var(--warn); }
+.check.st-down  { --tone: var(--down); }
+.check.st-muted { --tone: var(--none); }
+a.check:hover .check-text {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
+}
+.check-text {
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: transform 0.12s ease, filter 0.12s ease;
 }
-.badge::before {
-  content: "";
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  flex-shrink: 0;
-}
-.badge.st-ok { background: var(--ok-bg); color: var(--ok); }
-.badge.st-warn { background: var(--warn-bg); color: var(--warn); }
-.badge.st-down { background: var(--down-bg); color: var(--down); }
-.badge.st-muted { background: var(--surface-alt); color: var(--ink-muted); border-color: var(--border); }
-a.badge:hover { filter: brightness(0.95); transform: translateY(-0.5px); }
+.check-key   { color: var(--ink-muted); }
+.check-state { color: var(--tone); font-weight: 650; }
+.check-count { color: var(--ink-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.check-value { color: var(--tone); font-weight: 650; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .pelican-thumb {
-  display: inline-block;
   position: relative;
-  width: 44px;
-  height: 33px;
-  border-radius: 6px;
-  border: 1px solid var(--border-strong);
-  background: #f4f7f4;
+  display: block;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 30px;
   overflow: hidden;
-  flex-shrink: 0;
-  vertical-align: middle;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: #f4f7f4;
   transition: border-color 0.15s ease, transform 0.15s ease;
 }
 .pelican-thumb:hover {
   border-color: var(--accent);
-  transform: scale(1.06);
+  transform: scale(1.05);
 }
 .pelican-thumb iframe {
   position: absolute;
   top: 0;
   left: 0;
-  width: 440px;
-  height: 330px;
+  width: 400px;
+  height: 300px;
   border: 0;
   transform: scale(0.1);
   transform-origin: 0 0;
   pointer-events: none;
 }
 
-/* 可用率 60 分钟热力条：更宽、更疏朗、层级更分明 */
-th.col-trend,
-td.cell-trend {
-  width: 34%;
-  min-width: 280px;
-}
-.trend-box {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-}
+/* 近 60 分钟可用率：等高齐整胶囊条，告别高低锯齿 */
 .trend-grid {
   display: grid;
-  grid-template-columns: repeat(60, minmax(2.5px, 1fr));
-  gap: 2.5px;
-  width: 100%;
-  height: 24px;
+  height: 22px;
+  grid-template-columns: repeat(60, minmax(1px, 1fr));
   align-items: center;
+  gap: 2px;
 }
 .tbar {
   display: block;
-  height: 22px;
-  border-radius: 2.5px;
+  height: 18px;
+  border-radius: 2px;
+  opacity: 0.85;
   background: var(--none);
-  transition: transform 0.12s ease, opacity 0.12s ease;
+  transition: opacity 0.15s ease, transform 0.15s ease;
 }
 .tbar:hover {
-  transform: scaleY(1.18);
-  opacity: 1 !important;
+  opacity: 1;
+  transform: scaleY(1.16);
 }
-.tbar.ok { background: var(--ok); opacity: 0.92; }
-.tbar.warn { background: var(--warn); opacity: 0.95; }
-.tbar.down { background: var(--down); opacity: 0.95; }
-.tbar.none {
-  height: 11px;
-  border-radius: 2px;
-  background: var(--none);
-  opacity: 0.52;
-}
-.trend-axis {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 9.5px;
-  color: var(--ink-subtle);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-}
+.tbar.ok   { background: #17803d; }
+.tbar.warn { background: #b4690e; }
+.tbar.down { background: #d93036; }
+.tbar.none { background: var(--none); opacity: 0.55; }
+body.theme-dark .tbar.ok   { background: #22c55e; }
+body.theme-dark .tbar.warn { background: #eab308; }
+body.theme-dark .tbar.down { background: #f43f5e; }
 
 .ftr {
-  padding: 11px 22px;
+  padding: 10px 22px 12px;
   border-top: 1px solid var(--border);
-  background: var(--surface-alt);
   display: flex;
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px 16px;
   font-size: 11px;
-  color: var(--ink-subtle);
+  color: var(--ink-muted);
 }
 .legend {
   display: inline-flex;
@@ -576,7 +579,7 @@ td.cell-trend {
   display: inline-block;
 }
 .empty {
-  padding: 44px 18px;
+  padding: 42px 18px;
   text-align: center;
   color: var(--ink-muted);
 }
@@ -609,6 +612,26 @@ td.cell-trend {
   color: var(--ink-muted);
   margin: 0 0 12px;
 }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge.st-ok    { background: var(--ok-bg); color: var(--ok); }
+.badge.st-warn  { background: var(--warn-bg); color: var(--warn); }
+.badge.st-down  { background: var(--down-bg); color: var(--down); }
+.badge.st-muted { background: var(--surface-alt); color: var(--ink-muted); }
+.intel-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .strip-48 {
   display: flex;
   flex-wrap: wrap;
@@ -626,7 +649,7 @@ td.cell-trend {
   transition: transform 0.12s ease;
 }
 .strip-cell:hover { transform: scaleY(1.14); }
-.strip-cell.st-ok { background: var(--ok); }
+.strip-cell.st-ok   { background: var(--ok); }
 .strip-cell.st-warn { background: var(--warn); }
 .strip-cell.st-down { background: var(--down); }
 details.run-item {
@@ -722,21 +745,23 @@ pre.answer-box {
   border-top: 1px solid var(--border);
 }
 
-/* 平板尺寸：稍微紧凑内边距，仍保持宽敞的 60 分钟热力条 */
-@media (max-width: 1024px) {
-  .wrap { padding: 12px; }
-  .hdr { padding: 14px 16px 12px; }
-  table.perf-table thead th,
-  table.perf-table tbody td { padding: 10px 10px; }
-  th.col-trend, td.cell-trend { min-width: 236px; }
-  .trend-grid { gap: 2px; }
+/* 中屏平板自适应 */
+@media (max-width: 960px) {
+  .hdr { padding: 16px 16px 12px; }
+  table.perf-table th,
+  table.perf-table td { padding: 9px 7px; }
+  table.perf-table th:first-child,
+  table.perf-table td:first-child { padding-left: 14px; }
+  table.perf-table th:last-child,
+  table.perf-table td:last-child { padding-right: 14px; }
   .unit { display: none; }
+  .trend-grid { gap: 1.5px; }
 }
 
-/* 手机端 / 窄侧边栏 iframe：零横向滚动，纯 CSS 自动转为精致多端卡片布局 */
-@media (max-width: 760px) {
-  .wrap { padding: 10px; }
-  .hdr { padding: 14px 14px 12px; align-items: flex-start; }
+/* 手机端 / 窄侧边栏 iframe：零横向滚动，自动切换为紧凑双列/三列卡片 */
+@media (max-width: 720px) {
+  .wrap { padding: 8px; }
+  .hdr { padding: 14px 14px 10px; }
   .title { font-size: 18px; }
   .ftr { padding: 10px 14px; }
   .table-wrap { overflow-x: visible; }
@@ -745,16 +770,18 @@ pre.answer-box {
     display: block;
     width: 100%;
   }
+  table.perf-table colgroup,
   table.perf-table thead { display: none; }
   table.perf-table tbody tr {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px 10px;
-    padding: 14px;
-    border-bottom: 1px solid var(--border);
+    gap: 8px;
+    padding: 13px 14px;
+    border-top: 1px solid var(--border);
   }
-  table.perf-table tbody tr:hover { background: transparent; }
-  table.perf-table tbody td {
+  table.perf-table tbody td,
+  table.perf-table tbody td:first-child,
+  table.perf-table tbody td:last-child {
     display: block;
     padding: 0;
     border: none;
@@ -769,53 +796,53 @@ pre.answer-box {
     grid-column: 3 / 4;
     text-align: right;
     align-self: center;
+    font-size: 14px;
   }
   table.perf-table tbody td.cell-metric {
     background: var(--surface-alt);
     border: 1px solid var(--border);
-    border-radius: 9px;
-    padding: 7px 9px;
-    text-align: left;
+    border-radius: 8px;
+    padding: 6px 8px;
   }
   table.perf-table tbody td.cell-metric::before {
     content: attr(data-label);
     display: block;
-    font-size: 10px;
+    font-size: 9.5px;
     font-weight: 600;
-    color: var(--ink-subtle);
-    margin-bottom: 2px;
+    color: var(--ink-muted);
+    margin-bottom: 1px;
     font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
   }
-  table.perf-table tbody td.cell-intel {
+  table.perf-table tbody td.identity-cell {
     grid-column: 1 / -1;
     padding-top: 2px;
   }
-  .intel-stack {
+  .checks {
+    width: 100%;
+    margin: 0;
+  }
+  .check-lines {
     flex-direction: row;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: 6px 12px;
   }
   table.perf-table tbody td.cell-trend {
     grid-column: 1 / -1;
-    min-width: 0;
-    width: 100%;
-    padding-top: 4px;
+    padding-top: 2px;
   }
   table.perf-table tbody td.cell-trend::before {
     content: attr(data-label);
     display: block;
-    font-size: 10px;
+    font-size: 9.5px;
     font-weight: 600;
-    color: var(--ink-subtle);
-    margin-bottom: 5px;
+    color: var(--ink-muted);
+    margin-bottom: 4px;
   }
   .trend-grid {
-    grid-template-columns: repeat(60, minmax(2px, 1fr));
     gap: 2px;
-    height: 22px;
+    height: 20px;
   }
-  .tbar { height: 20px; border-radius: 2px; }
-  .tbar.none { height: 10px; }
+  .tbar { height: 16px; }
   .cand-row {
     grid-template-columns: 28px minmax(110px, 1fr) 76px 48px;
     gap: 6px;
@@ -840,7 +867,7 @@ const tplOverview = `<!doctype html>
   <div class="shell">
     <header class="hdr">
       <div>
-        <div class="eyebrow">{{ .Site.Eyebrow }}</div>
+        <p class="eyebrow">{{ .Site.Eyebrow }}</p>
         <h1 class="title">{{ .Site.Title }}</h1>
       </div>
       <div class="meta-bar">
@@ -854,86 +881,90 @@ const tplOverview = `<!doctype html>
       <div class="empty">暂无可公开展示的监测渠道，请在管理台启用目标并勾选「对外 Embed 展示」。</div>
       {{- else }}
       <div class="table-wrap">
-        <table class="perf-table">
+        <table class="perf-table {{ if .Site.ShowIdentityColumn }}has-identity{{ else }}no-identity{{ end }}">
+          <colgroup>
+            <col class="col-channel">
+            <col class="col-tps">
+            <col class="col-first">
+            <col class="col-latency">
+            <col class="col-success">
+            {{- if .Site.ShowIdentityColumn }}
+            <col class="col-identity">
+            {{- end }}
+            <col class="col-trend">
+          </colgroup>
           <thead>
             <tr>
               <th>渠道</th>
-              <th class="col-num">TPS</th>
-              <th class="col-num">首字 TTFT</th>
-              <th class="col-num">平均延迟</th>
-              <th class="col-num">24h 成功率</th>
+              <th>TPS</th>
+              <th>平均首 TOKEN 延迟</th>
+              <th>平均延迟</th>
+              <th>成功率 · 24h</th>
               {{- if .Site.ShowIdentityColumn }}
               <th>模型检测</th>
               {{- end }}
-              <th class="col-trend">近 60 分钟可用率</th>
+              <th>近 60 分钟可用率</th>
             </tr>
           </thead>
           <tbody>
             {{- range .Targets }}
             <tr>
               <td class="cell-channel" data-label="渠道">
-                <div class="target-cell">
-                  <span class="fam-tag {{ familyClass .Family }}">{{ familyLabel .Family }}</span>
-                  <span class="target-name" title="{{ .Name }}">{{ .Name }}</span>
-                </div>
-              </td>
-              <td class="num cell-num cell-metric" data-label="TPS">
-                {{ fmtFloat1 .Performance.TPS }}{{- if gt .Performance.TPS 0.0 }}<span class="unit">t/s</span>{{- end }}
-              </td>
-              <td class="num cell-num cell-metric" data-label="首字 TTFT">{{ fmtMS .Performance.AvgFirstTokenMS }}</td>
-              <td class="num cell-num cell-metric" data-label="平均延迟">{{ fmtMS .Performance.AvgLatencyMS }}</td>
-              <td class="num cell-num cell-rate" data-label="24h 成功率">
-                <span class="rate-pill {{ rateClass .Performance.SuccessRate .Performance.SampleCount }}">
-                  {{ fmtPct .Performance.SuccessRate .Performance.SampleCount }}
+                <span class="channel-pill {{ familyClass .Family }}" title="{{ .Name }}">
+                  <span class="channel-name">{{ .Name }}</span>
                 </span>
               </td>
+              <td class="num cell-metric" data-label="TPS">
+                {{ fmtFloat1 .Performance.TPS }}{{- if gt .Performance.TPS 0.0 }}<span class="unit">t/s</span>{{- end }}
+              </td>
+              <td class="num cell-metric" data-label="平均首字">{{ fmtMS .Performance.AvgFirstTokenMS }}</td>
+              <td class="num cell-metric" data-label="平均延迟">{{ fmtMS .Performance.AvgLatencyMS }}</td>
+              <td class="num cell-rate {{ rateClass .Performance.SuccessRate .Performance.SampleCount }}" data-label="24h 成功率">
+                {{ fmtPct .Performance.SuccessRate .Performance.SampleCount }}
+              </td>
               {{- if $.Site.ShowIdentityColumn }}
-              <td class="cell-intel" data-label="模型检测">
-                <div class="intel-cell">
-                  {{- if .Pelican }}
-                    {{- if .Pelican.LatestRunUUID }}
-                    <a class="pelican-thumb" href="/embed/pelican?site={{ queryEscape $.Site.Slug }}&amp;target={{ queryEscape .Slug }}" title="查看最近画鹈鹕 SVG 沙箱画廊">
-                      <iframe sandbox="" loading="lazy" tabindex="-1" title="Pelican Preview" src="/embed/pelican/{{ queryEscape .Pelican.LatestRunUUID }}?site={{ queryEscape $.Site.Slug }}"></iframe>
-                    </a>
-                    {{- else }}
-                    <a class="badge st-muted" href="/embed/pelican?site={{ queryEscape $.Site.Slug }}&amp;target={{ queryEscape .Slug }}" title="查看画鹈鹕记录">鹈鹕 待测</a>
-                    {{- end }}
+              <td class="identity-cell" data-label="模型检测">
+                <div class="checks">
+                  {{- if and .Pelican .Pelican.LatestRunUUID }}
+                  <a class="pelican-thumb" href="/embed/pelican?site={{ queryEscape $.Site.Slug }}&amp;target={{ queryEscape .Slug }}" title="查看最近的画鹈鹕 SVG 画廊">
+                    <iframe sandbox="" loading="lazy" referrerpolicy="no-referrer" tabindex="-1" title="Pelican Preview" src="/embed/pelican/{{ queryEscape .Pelican.LatestRunUUID }}?site={{ queryEscape $.Site.Slug }}"></iframe>
+                  </a>
                   {{- end }}
-                  {{- if or .Candy .Fingerprint }}
-                  <div class="intel-stack">
+                  <div class="check-lines">
                     {{- if .Candy }}
-                    <a class="badge {{ statusClass .Candy.LatestStatus }}" href="/embed/candy?site={{ queryEscape $.Site.Slug }}&amp;target={{ queryEscape .Slug }}" title="查看最近 48 次 Candy 逻辑题详情">
-                      Candy {{ if gt .Candy.Checked24h 0 }}{{ .Candy.Passed24h }}/{{ .Candy.Checked24h }}{{ else }}待测{{ end }}
+                    <a class="check {{ statusClass .Candy.LatestStatus }}" href="/embed/candy?site={{ queryEscape $.Site.Slug }}&amp;target={{ queryEscape .Slug }}" title="查看最近 Candy 逻辑题抽检回答">
+                      <span class="check-text">
+                        <span class="check-key">Candy </span>
+                        <span class="check-state">{{ statusLabel .Candy.LatestStatus }}</span>
+                        {{- if gt .Candy.Checked24h 0 }} <span class="check-count">{{ .Candy.Passed24h }}/{{ .Candy.Checked24h }}</span>{{- end }}
+                      </span>
                     </a>
                     {{- end }}
                     {{- if .Fingerprint }}
-                    <a class="badge {{ statusClass .Fingerprint.LatestStatus }}" href="/embed/fingerprint?site={{ queryEscape $.Site.Slug }}&amp;target={{ queryEscape .Slug }}" title="查看数字指纹 Top-K 候选排名（仅供参考）">
-                      {{- if .Fingerprint.TopCandidate }}
-                        指纹 {{ if gt .Fingerprint.ClaimedRank 0 }}#{{ .Fingerprint.ClaimedRank }} {{ end }}{{ .Fingerprint.TopCandidate }}
-                      {{- else }}
-                        指纹 待测
-                      {{- end }}
+                    <a class="check {{ statusClass .Fingerprint.LatestStatus }}" href="/embed/fingerprint?site={{ queryEscape $.Site.Slug }}&amp;target={{ queryEscape .Slug }}" title="查看数字指纹 Top-K 候选排名（结果仅供参考）">
+                      <span class="check-text">
+                        <span class="check-key">指纹最像 </span>
+                        <span class="check-value">{{ if .Fingerprint.TopCandidate }}{{ .Fingerprint.TopCandidate }}{{ else }}待测{{ end }}</span>
+                      </span>
                     </a>
                     {{- end }}
+                    {{- if and .Pelican (not .Pelican.LatestRunUUID) }}
+                    <a class="check st-muted" href="/embed/pelican?site={{ queryEscape $.Site.Slug }}&amp;target={{ queryEscape .Slug }}">
+                      <span class="check-text"><span class="check-key">画鹈鹕 </span><span class="check-state">待测</span></span>
+                    </a>
+                    {{- end }}
+                    {{- if and (not .Candy) (not .Fingerprint) (not .Pelican) }}
+                    <span class="st-muted">--</span>
+                    {{- end }}
                   </div>
-                  {{- end }}
-                  {{- if and (not .Candy) (not .Fingerprint) (not .Pelican) }}
-                  <span class="st-muted">--</span>
-                  {{- end }}
                 </div>
               </td>
               {{- end }}
               <td class="cell-trend" data-label="近 60 分钟可用率">
-                <div class="trend-box">
-                  <div class="trend-grid" aria-label="近 60 分钟逐分钟可用率">
-                    {{- range .Trend }}
-                    <span class="tbar {{ .Tone }}" title="{{ bucketTitle .Timestamp .SampleCount .SuccessCount .SuccessRate }}"></span>
-                    {{- end }}
-                  </div>
-                  <div class="trend-axis">
-                    <span>60 分钟前</span>
-                    <span>现在</span>
-                  </div>
+                <div class="trend-grid" role="img" aria-label="{{ .Name }} 近 60 分钟逐分钟可用率">
+                  {{- range .Trend }}
+                  <span class="tbar {{ .Tone }}" title="{{ bucketTitle .Timestamp .SampleCount .SuccessCount .SuccessRate }}"></span>
+                  {{- end }}
                 </div>
               </td>
             </tr>
@@ -946,10 +977,11 @@ const tplOverview = `<!doctype html>
 
     <footer class="ftr">
       <div class="legend">
-        <span class="legend-item"><span class="legend-swatch" style="background:var(--ok)"></span>正常</span>
-        <span class="legend-item"><span class="legend-swatch" style="background:var(--warn)"></span>波动</span>
-        <span class="legend-item"><span class="legend-swatch" style="background:var(--down)"></span>异常</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#17803d"></span>正常</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#b4690e"></span>波动</span>
+        <span class="legend-item"><span class="legend-swatch" style="background:#d93036"></span>异常</span>
         <span class="legend-item"><span class="legend-swatch" style="background:var(--none)"></span>无采样</span>
+        <span>· 左→右：60 分钟前至现在</span>
         {{- if gt .Site.RefreshSeconds 0 }}<span>· 每 {{ .Site.RefreshSeconds }}s 刷新</span>{{- end }}
       </div>
       <div>最后数据时间：{{ fmtTimePtr .LatestData }}{{- if .Site.ShowIdentityColumn }} · 指纹排名仅供参考{{- end }}</div>

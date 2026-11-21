@@ -428,10 +428,10 @@ export default function IntelligencePage() {
                   !target.enabled && "opacity-65",
                 )}
               >
-                <CardContent className="space-y-3.5 p-4 sm:p-5">
-                  {/* 上栏：身份元信息 + 快捷操作 */}
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="min-w-0 space-y-1">
+                <CardContent className="p-4">
+                  <div className="flex flex-col gap-3.5 xl:flex-row xl:items-center xl:justify-between">
+                    {/* 左侧：身份与元信息 */}
+                    <div className="min-w-0 space-y-1 xl:w-[250px] xl:shrink-0">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Badge
                           variant="outline"
@@ -439,7 +439,7 @@ export default function IntelligencePage() {
                         >
                           {family.label}
                         </Badge>
-                        <span className="truncate text-sm font-semibold text-foreground sm:text-[15px]">
+                        <span className="truncate text-sm font-semibold text-foreground">
                           {target.name}
                         </span>
                         {!target.enabled ? (
@@ -456,11 +456,10 @@ export default function IntelligencePage() {
                           </Badge>
                         ) : null}
                       </div>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
-                        <span className="max-w-full truncate font-mono">
-                          {sourceText}
-                        </span>
-                        <span className="hidden sm:inline">·</span>
+                      <p className="truncate font-mono text-[11px] text-muted-foreground">
+                        {sourceText}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
                         <span>
                           {PROTOCOL_LABELS[target.protocol] ?? target.protocol}
                         </span>
@@ -473,6 +472,67 @@ export default function IntelligencePage() {
                       </div>
                     </div>
 
+                    {/* 中部：4 项性能指标 + 紧凑等高 60 分钟胶囊条（控制最大宽度，不抢占大面积空间） */}
+                    <div className="flex flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between xl:justify-start xl:gap-6">
+                      <div className="grid grid-cols-4 gap-3 sm:w-[270px] sm:shrink-0">
+                        <div>
+                          <p className="text-[10px] text-muted-foreground">TPS</p>
+                          <p className="font-mono text-sm font-semibold tabular-nums">
+                            {ov && ov.performance.tps > 0
+                              ? ov.performance.tps.toFixed(1)
+                              : "—"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-muted-foreground">首字</p>
+                          <p className="font-mono text-sm font-semibold tabular-nums">
+                            {ov && ov.performance.avg_first_token_ms > 0
+                              ? formatDurationMS(ov.performance.avg_first_token_ms)
+                              : "—"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-muted-foreground">延迟</p>
+                          <p className="font-mono text-sm font-semibold tabular-nums">
+                            {ov && ov.performance.avg_latency_ms > 0
+                              ? formatDurationMS(ov.performance.avg_latency_ms)
+                              : "—"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-muted-foreground">24h 成功</p>
+                          <p
+                            className={cn(
+                              "font-mono text-sm font-semibold tabular-nums",
+                              ov
+                                ? formatSuccessRateClass(
+                                    ov.performance.success_rate,
+                                    ov.performance.sample_count,
+                                  )
+                                : "text-muted-foreground",
+                            )}
+                          >
+                            {ov && ov.performance.sample_count > 0
+                              ? `${ov.performance.success_rate.toFixed(1)}%`
+                              : "—"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="w-full min-w-0 sm:max-w-[235px] xl:max-w-[255px]">
+                        <div className="mb-1 flex items-center justify-between text-[10px] text-muted-foreground">
+                          <span>近 60 分钟可用率</span>
+                          <span>
+                            {ov?.recent_samples?.[0]
+                              ? relativeTime(ov.recent_samples[0].observed_at)
+                              : "待采样"}
+                          </span>
+                        </div>
+                        <TrendStrip buckets={ov?.trend ?? []} compact />
+                      </div>
+                    </div>
+
+                    {/* 右侧：操作按钮 */}
                     <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                       <Button
                         size="sm"
@@ -532,70 +592,8 @@ export default function IntelligencePage() {
                     </div>
                   </div>
 
-                  {/* 中栏：24h 性能指标 + 宽敞舒展的 60 分钟热力条 */}
-                  <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(300px,360px)_1fr] lg:items-center">
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      <div className="rounded-lg border border-border/70 bg-muted/25 px-2.5 py-2">
-                        <p className="text-[10px] text-muted-foreground">TPS</p>
-                        <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums">
-                          {ov && ov.performance.tps > 0
-                            ? ov.performance.tps.toFixed(1)
-                            : "—"}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-border/70 bg-muted/25 px-2.5 py-2">
-                        <p className="text-[10px] text-muted-foreground">首字</p>
-                        <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums">
-                          {ov && ov.performance.avg_first_token_ms > 0
-                            ? formatDurationMS(ov.performance.avg_first_token_ms)
-                            : "—"}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-border/70 bg-muted/25 px-2.5 py-2">
-                        <p className="text-[10px] text-muted-foreground">延迟</p>
-                        <p className="mt-0.5 font-mono text-sm font-semibold tabular-nums">
-                          {ov && ov.performance.avg_latency_ms > 0
-                            ? formatDurationMS(ov.performance.avg_latency_ms)
-                            : "—"}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-border/70 bg-muted/25 px-2.5 py-2">
-                        <p className="text-[10px] text-muted-foreground">24h 成功</p>
-                        <p
-                          className={cn(
-                            "mt-0.5 font-mono text-sm font-semibold tabular-nums",
-                            ov
-                              ? formatSuccessRateClass(
-                                  ov.performance.success_rate,
-                                  ov.performance.sample_count,
-                                )
-                              : "text-muted-foreground",
-                          )}
-                        >
-                          {ov && ov.performance.sample_count > 0
-                            ? `${ov.performance.success_rate.toFixed(1)}%`
-                            : "—"}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="min-w-0 rounded-lg border border-border/70 bg-muted/15 px-3 py-2">
-                      <div className="mb-1.5 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-                        <span className="font-medium text-foreground/85">
-                          近 60 分钟可用率
-                        </span>
-                        <span className="font-mono text-[10px]">
-                          {ov?.recent_samples?.[0]
-                            ? `最近 ${relativeTime(ov.recent_samples[0].observed_at)}`
-                            : "等待首次采样"}
-                        </span>
-                      </div>
-                      <TrendStrip buckets={ov?.trend ?? []} compact />
-                    </div>
-                  </div>
-
                   {/* 底部：模型智力检测结果摘要行 */}
-                  <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-2.5 text-xs">
+                  <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border/60 pt-2.5 text-xs">
                     <span className="text-[11px] font-medium text-muted-foreground">
                       模型智力检测：
                     </span>
