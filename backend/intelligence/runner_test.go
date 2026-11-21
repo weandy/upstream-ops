@@ -100,6 +100,33 @@ func TestSaveTargetDetectorsAndSharedCacheDeduplication(t *testing.T) {
 		t.Fatal("expected error for unregistered detector_key")
 	}
 
+	// 未启用的 custom_prompt 即使携带前端默认参数（无 prompt/expected）也绝不应阻塞其他插件保存；
+	// 但若显式启用 custom_prompt 且缺必填项则必须拒绝。
+	if _, err := svc.SaveTargetDetectors(t1.ID, []DetectorConfigInput{
+		{
+			DetectorKey: DetectorKeyLiveness,
+			Enabled:     true,
+			ModelName:   "gpt-6.2-sol",
+		},
+		{
+			DetectorKey: DetectorKeyCustomPrompt,
+			Enabled:     false,
+			ParamsJSON:  `{"match_mode":"contains","case_sensitive":false,"max_tokens":1024}`,
+		},
+	}); err != nil {
+		t.Fatalf("expected disabled custom_prompt with default params to save cleanly, got: %v", err)
+	}
+	if _, err := svc.SaveTargetDetectors(t1.ID, []DetectorConfigInput{
+		{
+			DetectorKey: DetectorKeyCustomPrompt,
+			Enabled:     true,
+			ModelName:   "gpt-6.2-sol",
+			ParamsJSON:  `{"match_mode":"contains","case_sensitive":false,"max_tokens":1024}`,
+		},
+	}); err == nil {
+		t.Fatal("expected error when enabling custom_prompt without required prompt/expected")
+	}
+
 	// 开启两个目标的 candy 监测。
 	for _, tid := range []uint{t1.ID, t2.ID} {
 		if _, err := svc.SaveTargetDetectors(tid, []DetectorConfigInput{

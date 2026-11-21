@@ -246,9 +246,23 @@ export function DetectorsDrawer({
     for (const meta of detectors) {
       const row = rows[meta.key]
       if (!row) continue
-      if (row.enabled && !row.model_name.trim()) {
-        toast.error(`请为已开启的「${meta.name}」填写测试模型 ID`)
-        return
+      if (row.enabled) {
+        if (!row.model_name.trim()) {
+          toast.error(`请为已开启的「${meta.name}」填写测试模型 ID`)
+          return
+        }
+        for (const field of meta.params_schema ?? []) {
+          if (!field.required) continue
+          const val = row.params[field.key]
+          if (
+            val === undefined ||
+            val === null ||
+            (typeof val === "string" && val.trim() === "")
+          ) {
+            toast.error(`请为已开启的「${meta.name}」填写「${field.label}」`)
+            return
+          }
+        }
       }
       items.push({
         detector_key: meta.key,

@@ -104,7 +104,7 @@ func (s *Service) SaveTargetDetectors(targetID uint, items []DetectorConfigInput
 		if in.Enabled && modelName == "" {
 			return nil, fmt.Errorf("detector %q requires model_name when enabled", key)
 		}
-		if in.Enabled || strings.TrimSpace(in.ParamsJSON) != "" {
+		if in.Enabled {
 			if err := det.ValidateParams(in.ParamsJSON); err != nil {
 				return nil, fmt.Errorf("detector %q invalid params: %w", key, err)
 			}
