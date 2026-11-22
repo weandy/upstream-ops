@@ -139,3 +139,101 @@ func TestSaveAndGetSettingsEmbedAndBackoffFalseValues(t *testing.T) {
 		}
 	}
 }
+
+func TestGetSettingsRedactsSecretsAndPutEmptyPreservesExisting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	initCfg := &config.Config{
+		App: config.AppConfig{Title: "Ops", NotificationPrefix: "[Ops] "},
+		Auth: config.AuthConfig{
+			Enabled:         true,
+			Username:        "admin",
+			Password:        "super-secret-admin-pass",
+			TokenSecret:     "super-secret-token-key",
+			SessionTTLHours: 168,
+		},
+		Proxy: config.ProxyConfig{
+			Enabled:  true,
+			Protocol: "http",
+			Host:     "127.0.0.1",
+			Port:     7890,
+			Username: "proxyuser",
+			Password: "super-secret-proxy-pass",
+		},
+	}
+	if err := config.Save(path, initCfg); err != nil {
+		t.Fatalf("save init config: %v", err)
+	}
+
+	r := gin.New()
+	apiGroup := r.Group("/api")
+	registerSettings(apiGroup, &Deps{
+		Runtime: runtimeconfig.New(path, "", nil, nil, nil, nil, nil, nil, initCfg.Proxy, config.UpstreamConfig{}, config.GatewayConfig{}, nil),
+	})
+
+	// 1. GET 不得返回明文密码/签名密钥，必须返回脱敏状态标记。
+	getRec := httptest.NewRecorder()
+	r.ServeHTTP(getRec, httptest.NewRequest(http.MethodGet, "/api/settings/config", nil))
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, body = %s", getRec.Code, getRec.Body.String())
+	}
+	respBody := getRec.Body.String()
+	for _, secret := range []string{"super-secret-admin-pass", "super-secret-token-key", "super-secret-proxy-pass"} {
+		if strings.Contains(respBody, secret) {
+			t.Fatalf("GET /api/settings/config leaked plaintext secret %q in response: %s", secret, respBody)
+		}
+	}
+	for _, want := range []string{`"auth_password_set":true`, `"auth_token_secret_set":true`, `"proxy_password_set":true`} {
+		if !strings.Contains(respBody, want) {
+			t.Fatalf("expected GET response to include %s, got %s", want, respBody)
+		}
+	}
+
+	// 2. PUT 提交空的密码/密钥字段时，应保留原值，不被误清空。
+	putBody := `{
+		"app":{"title":"Ops2","notificationPrefix":"[Ops2] "},
+		"auth":{"enabled":true,"username":"admin","password":"","tokenSecret":"","sessionTTLHours":168},
+		"scheduler":{"balanceCron":"","rateCron":"","concurrency":4,"retention":{"cron":"","monitorLogsDays":30,"balanceSnapshotsDays":90,"notificationLogsDays":90,"announcementsDays":90}},
+		"notifications":{"minChangePct":0,"balanceLowCooldownMinutes":60,"sendMaxAttempts":3},
+		"proxy":{"enabled":true,"protocol":"http","host":"127.0.0.1","port":7890,"username":"proxyuser","password":""},
+		"upstream":{"timeoutSeconds":30,"userAgent":"upstream-ops/0.1"}
+	}`
+	putReq := httptest.NewRequest(http.MethodPut, "/api/settings/config", strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putRec := httptest.NewRecorder()
+	r.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body = %s", putRec.Code, putRec.Body.String())
+	}
+
+	got, err := config.LoadFile(path)
+	if err != nil {
+		t.Fatalf("load config after empty-secret PUT: %v", err)
+	}
+	if got.Auth.Password != "super-secret-admin-pass" || got.Auth.TokenSecret != "super-secret-token-key" || got.Proxy.Password != "super-secret-proxy-pass" {
+		t.Fatalf("expected existing secrets preserved when PUT sends empty strings, got auth=%+v proxy=%+v", got.Auth, got.Proxy)
+	}
+
+	// 3. 传入 clear 标记时可显式清除可选密钥。
+	clearBody := `{
+		"app":{"title":"Ops2","notificationPrefix":"[Ops2] "},
+		"auth":{"enabled":true,"username":"admin","password":"","tokenSecret":"","sessionTTLHours":168},
+		"scheduler":{"balanceCron":"","rateCron":"","concurrency":4,"retention":{"cron":"","monitorLogsDays":30,"balanceSnapshotsDays":90,"notificationLogsDays":90,"announcementsDays":90}},
+		"notifications":{"minChangePct":0,"balanceLowCooldownMinutes":60,"sendMaxAttempts":3},
+		"proxy":{"enabled":true,"protocol":"http","host":"127.0.0.1","port":7890,"username":"proxyuser","password":""},
+		"clear_auth_token_secret":true,
+		"clear_proxy_password":true
+	}`
+	clearReq := httptest.NewRequest(http.MethodPut, "/api/settings/config", strings.NewReader(clearBody))
+	clearReq.Header.Set("Content-Type", "application/json")
+	clearRec := httptest.NewRecorder()
+	r.ServeHTTP(clearRec, clearReq)
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("clear PUT status = %d, body = %s", clearRec.Code, clearRec.Body.String())
+	}
+	cleared, _ := config.LoadFile(path)
+	if cleared.Auth.Password != "super-secret-admin-pass" || cleared.Auth.TokenSecret != "" || cleared.Proxy.Password != "" {
+		t.Fatalf("expected explicit clear flags to clear only specified secrets, got auth=%+v proxy=%+v", cleared.Auth, cleared.Proxy)
+	}
+}

@@ -93,7 +93,7 @@
 
 ### 板块 3（P2）：安全边界与前端/嵌入体验优化
 
-- [ ] **P2-1：系统设置敏感字段脱敏回显 + `config.Save` 权限收紧与原子写入**
+- [x] **P2-1：系统设置敏感字段脱敏回显 + `config.Save` 权限收紧与原子写入**
   - **位置**：`backend/api/settings.go`、`backend/config/config.go`、`frontend/app/settings-page.tsx`、`frontend/lib/api-types.ts`
   - **问题**：`GET /api/settings/config` 明文回传 `auth.password`、`auth.tokenSecret`、`proxy.password`；`config.Save` 使用 `0o644` 直接覆写文件。
   - **方案**：
@@ -103,19 +103,19 @@
     - `config.Save` 改为同目录临时文件 + `0o600` 权限 + 原子重命名替换（兼容 Windows）。
   - **验证**：`backend/api/settings_test.go`、`backend/config/config_test.go` 新增脱敏/留空保留/原子写盘单测；前端 `tsc` + `lint` 通过。
 
-- [ ] **P2-2：登录接口按 IP 防爆破限流 + 移除 URL Query `?token=` 鉴权入口**
+- [x] **P2-2：登录接口按 IP 防爆破限流 + 移除 URL Query `?token=` 鉴权入口**
   - **位置**：`backend/auth/auth.go`、`backend/api/auth.go`
   - **问题**：开启鉴权后 `/api/auth/login` 无防爆破限制；`extractToken` 接受 `?token=` 易泄露至日志与历史记录（已核查全前端均使用 `Authorization: Bearer` 头，无任何 `?token=` 调用）。
   - **方案**：新增轻量按 IP 登录失败计数器与指数退避/冷却限制（有界容量防 OOM，登录成功后清零，超限返回 `429` + `Retry-After`）；移除 `extractToken` 中的 Query `token` 提取，仅保留 `Authorization: Bearer` 与 `uh_token` Cookie。
   - **验证**：新增 `backend/auth/auth_test.go` 覆盖防爆破限流、成功复位、拒绝 Query Token 与接受 Bearer/Cookie。
 
-- [ ] **P2-3：公开 `/embed` 触发 429 时保留对应站点的 `frame-ancestors` 白名单**
+- [x] **P2-3：公开 `/embed` 触发 429 时保留对应站点的 `frame-ancestors` 白名单**
   - **位置**：`backend/embed/ratelimit.go`
   - **问题**：429 响应调用 `ApplyEmbedHeaders(c, nil)`，跨域嵌入站触发限流时会因 `frame-ancestors 'self'` 被浏览器拦截成白屏/拒绝连接。
   - **方案**：在 HTML 429 分支尝试从缓存中轻量查找当前 `?site=` 对应的 `AllowedOrigins`（不穿透查库避免被 429 流量反打数据库），命中则写入该站点的 `frame-ancestors`。
   - **验证**：`backend/embed/ratelimit_test.go` 新增带白名单站点触发 429 后响应头仍含合法 `frame-ancestors` 的单测。
 
-- [ ] **P2-4：前端多目标独立手动触发状态**
+- [x] **P2-4：前端多目标独立手动触发状态**
   - **位置**：`frontend/app/intelligence-page.tsx`
   - **问题**：`runningTargetID` 为单个 `number | null`，长耗时目标（如画鹈鹕）运行期间无法独立展示/触发其他目标的运行态。
   - **方案**：升级为 `Set<number>`（`runningTargetIDs`），各目标按钮独立 loading、互不阻塞。

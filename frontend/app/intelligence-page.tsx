@@ -72,7 +72,9 @@ export default function IntelligencePage() {
     target: ProbeTarget | null
     tab: string
   }>({ target: null, tab: "liveness" })
-  const [runningTargetID, setRunningTargetID] = useState<number | null>(null)
+  const [runningTargetIDs, setRunningTargetIDs] = useState<Set<number>>(
+    () => new Set(),
+  )
   const [nowMs, setNowMs] = useState<number>(() => Date.now())
 
   useEffect(() => {
@@ -167,7 +169,11 @@ export default function IntelligencePage() {
   }, [targets, familyFilter, search, onlyAlert, overviews, channelNameMap])
 
   async function handleRunAllEnabled(target: ProbeTarget) {
-    setRunningTargetID(target.id)
+    setRunningTargetIDs((prev) => {
+      const next = new Set(prev)
+      next.add(target.id)
+      return next
+    })
     try {
       const results = await apiFetch<Record<string, DetectorRunResult>>(
         `/intelligence/targets/${target.id}/run`,
@@ -190,7 +196,11 @@ export default function IntelligencePage() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "触发检测失败")
     } finally {
-      setRunningTargetID(null)
+      setRunningTargetIDs((prev) => {
+        const next = new Set(prev)
+        next.delete(target.id)
+        return next
+      })
     }
   }
 
@@ -543,10 +553,10 @@ export default function IntelligencePage() {
                         size="sm"
                         variant="outline"
                         className="h-8 gap-1 text-xs"
-                        disabled={runningTargetID === target.id}
+                        disabled={runningTargetIDs.has(target.id)}
                         onClick={() => handleRunAllEnabled(target)}
                       >
-                        {runningTargetID === target.id ? (
+                        {runningTargetIDs.has(target.id) ? (
                           <Loader2 className="size-3.5 animate-spin" />
                         ) : (
                           <Play className="size-3.5" />

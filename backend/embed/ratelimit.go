@@ -196,7 +196,15 @@ func (s *Service) rateLimitMiddleware(isJSON bool) gin.HandlerFunc {
 			return
 		}
 		// HTML 429 页刻意不含 <meta http-equiv="refresh">，防止客户端继续死循环撞 429。
-		ApplyEmbedHeaders(c, nil)
+		// 仅从进程内站点缓存轻量读取 AllowedOrigins（不穿透查库），避免跨域嵌入页因 frame-ancestors 退化为 'self' 而出现拒绝连接白屏。
+		var allowedOrigins []string
+		if s.cache != nil {
+			siteKey := "site:" + normalizeSlug(c.Query("site"))
+			if site, ok := s.cache.sites.Get(siteKey, s.nowUTC()); ok && site != nil {
+				allowedOrigins = site.AllowedOrigins
+			}
+		}
+		ApplyEmbedHeaders(c, allowedOrigins)
 		c.Data(http.StatusTooManyRequests, "text/html; charset=utf-8", []byte(fmt.Sprintf(rateLimitHTMLBody, retryAfter)))
 		c.Abort()
 	}

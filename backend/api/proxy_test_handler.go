@@ -53,10 +53,24 @@ var proxyIPProviders = []proxyIPProvider{
 }
 
 func testProxy(c *gin.Context) {
+	testProxyWithDeps(c, nil)
+}
+
+func testProxyWithDeps(c *gin.Context, d *Deps) {
 	var in config.ProxyConfig
 	if err := c.ShouldBindJSON(&in); err != nil {
 		fail(c, http.StatusBadRequest, err)
 		return
+	}
+	// 设置页密码脱敏回显为空时，若主机/端口/账号与已保存配置一致，自动补回已保存的代理密码再测连通性。
+	if in.Password == "" && d != nil && d.Runtime != nil {
+		if savedCfg, err := config.LoadFile(d.Runtime.ConfigPath()); err == nil &&
+			savedCfg.Proxy.Password != "" &&
+			savedCfg.Proxy.Host == in.Host &&
+			savedCfg.Proxy.Port == in.Port &&
+			savedCfg.Proxy.Username == in.Username {
+			in.Password = savedCfg.Proxy.Password
+		}
 	}
 	proxyURL, err := in.URL()
 	if err != nil {

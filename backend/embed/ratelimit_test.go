@@ -129,3 +129,55 @@ func TestEmbedPublicRoutesRateLimitResponses(t *testing.T) {
 		t.Fatalf("expected 200 after disabling rate limit, got %d", recUnblocked.Code)
 	}
 }
+
+func TestEmbedRateLimit429PreservesCachedSiteFrameAncestors(t *testing.T) {
+	svc, _ := openTestEmbedEnv(t)
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	svc.NowFunc = func() time.Time { return now }
+
+	if _, err := svc.CreateSite(SiteInput{
+		Slug:               "portal",
+		Title:              "Portal",
+		Enabled:            true,
+		RefreshSeconds:     15,
+		AllowedOrigins:     []string{"https://portal.example.com"},
+		Theme:              "paper",
+		ShowIdentityColumn: true,
+	}); err != nil {
+		t.Fatalf("create portal site: %v", err)
+	}
+
+	on := true
+	ttl := 10
+	svc.UpdateRuntimeConfig(config.EmbedConfig{
+		CacheTTLSeconds:  &ttl,
+		RateLimitEnabled: &on,
+		RateLimitRPS:     1.0,
+		RateLimitBurst:   1,
+	})
+
+	router := gin.New()
+	svc.RegisterPublic(router)
+
+	// 第 1 次成功并填充站点缓存。
+	req1 := httptest.NewRequest(http.MethodGet, "/embed?site=portal", nil)
+	req1.RemoteAddr = "203.0.113.5:12345"
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first request expected 200, got %d", rec1.Code)
+	}
+
+	// 第 2 次触发 429：CSP frame-ancestors 必须保留 https://portal.example.com，避免跨域嵌入页出现拒绝连接白屏。
+	req2 := httptest.NewRequest(http.MethodGet, "/embed?site=portal", nil)
+	req2.RemoteAddr = "203.0.113.5:12345"
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request expected 429, got %d", rec2.Code)
+	}
+	csp := rec2.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "https://portal.example.com") {
+		t.Fatalf("expected 429 HTML CSP to preserve cached site's frame-ancestors, got %q", csp)
+	}
+}

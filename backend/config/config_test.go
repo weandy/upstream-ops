@@ -112,3 +112,30 @@ func TestEmbedAndIntelligenceBackoffConfigDefaults(t *testing.T) {
 		t.Fatalf("explicit backoffEnabled=false should be preserved")
 	}
 }
+
+func TestSaveAtomicReplacesWithoutLeavingTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	if err := Save(path, &Config{App: AppConfig{Title: "First"}}); err != nil {
+		t.Fatalf("first Save: %v", err)
+	}
+	if err := Save(path, &Config{App: AppConfig{Title: "Second"}}); err != nil {
+		t.Fatalf("second Save: %v", err)
+	}
+
+	got, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if got.App.Title != "Second" {
+		t.Fatalf("expected updated title Second, got %q", got.App.Title)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "*"))
+	if err != nil {
+		t.Fatalf("glob dir: %v", err)
+	}
+	if len(matches) != 1 || matches[0] != path {
+		t.Fatalf("expected only %s in dir after atomic save, got %v", path, matches)
+	}
+}

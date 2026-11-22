@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -161,11 +163,146 @@ func extractToken(r *http.Request) string {
 	if strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 	}
-	if t := r.URL.Query().Get("token"); t != "" {
-		return t
-	}
 	if c, err := r.Cookie("uh_token"); err == nil {
 		return c.Value
 	}
 	return ""
+}
+
+const (
+	defaultMaxTrackedLoginIPs = 4096
+	loginRecordIdleExpiry     = 30 * time.Minute
+)
+
+type loginAttemptRecord struct {
+	failures    int
+	lockedUntil time.Time
+	lastSeen    time.Time
+}
+
+// LoginRateLimiter 轻量按 IP 登录防爆破限流器，支持失败锁定、成功清零与有界容量防 OOM。
+type LoginRateLimiter struct {
+	mu           sync.Mutex
+	maxFailures  int
+	lockDuration time.Duration
+	maxTracked   int
+	records      map[string]*loginAttemptRecord
+	nowFunc      func() time.Time
+}
+
+// NewLoginRateLimiter 构造按 IP 防爆破限流器。
+func NewLoginRateLimiter(maxFailures int, lockDuration time.Duration, nowFunc func() time.Time) *LoginRateLimiter {
+	if maxFailures <= 0 {
+		maxFailures = 5
+	}
+	if lockDuration <= 0 {
+		lockDuration = 5 * time.Minute
+	}
+	if nowFunc == nil {
+		nowFunc = func() time.Time { return time.Now().UTC() }
+	}
+	return &LoginRateLimiter{
+		maxFailures:  maxFailures,
+		lockDuration: lockDuration,
+		maxTracked:   defaultMaxTrackedLoginIPs,
+		records:      make(map[string]*loginAttemptRecord),
+		nowFunc:      nowFunc,
+	}
+}
+
+// Allow 判断给定 IP 当前是否允许发起登录尝试；被锁定时返回建议等待秒数（>= 1）。
+func (l *LoginRateLimiter) Allow(ip string) (bool, int) {
+	if l == nil {
+		return true, 0
+	}
+	key := normalizeLoginIP(ip)
+	now := l.nowFunc()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	rec, ok := l.records[key]
+	if !ok {
+		return true, 0
+	}
+	rec.lastSeen = now
+	if !rec.lockedUntil.IsZero() && now.Before(rec.lockedUntil) {
+		sec := int(math.Ceil(rec.lockedUntil.Sub(now).Seconds()))
+		if sec < 1 {
+			sec = 1
+		}
+		return false, sec
+	}
+	if !rec.lockedUntil.IsZero() && !now.Before(rec.lockedUntil) {
+		// 锁定期已过，重置计数允许重新尝试。
+		rec.failures = 0
+		rec.lockedUntil = time.Time{}
+	}
+	return true, 0
+}
+
+// RecordFailure 记录一次登录失败；连续失败达到阈值时启动冷却锁定。
+func (l *LoginRateLimiter) RecordFailure(ip string) {
+	if l == nil {
+		return
+	}
+	key := normalizeLoginIP(ip)
+	now := l.nowFunc()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	rec, ok := l.records[key]
+	if !ok {
+		if len(l.records) >= l.maxTracked {
+			l.evictLocked(now)
+		}
+		rec = &loginAttemptRecord{}
+		l.records[key] = rec
+	}
+	rec.lastSeen = now
+	rec.failures++
+	if rec.failures >= l.maxFailures {
+		rec.lockedUntil = now.Add(l.lockDuration)
+	}
+}
+
+// RecordSuccess 登录成功后清零该 IP 的失败计数。
+func (l *LoginRateLimiter) RecordSuccess(ip string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	delete(l.records, normalizeLoginIP(ip))
+	l.mu.Unlock()
+}
+
+func (l *LoginRateLimiter) evictLocked(now time.Time) {
+	for k, rec := range l.records {
+		if now.Sub(rec.lastSeen) >= loginRecordIdleExpiry {
+			delete(l.records, k)
+		}
+	}
+	if len(l.records) < l.maxTracked {
+		return
+	}
+	var oldestKey string
+	var oldestSeen time.Time
+	first := true
+	for k, rec := range l.records {
+		if first || rec.lastSeen.Before(oldestSeen) {
+			oldestKey = k
+			oldestSeen = rec.lastSeen
+			first = false
+		}
+	}
+	if oldestKey != "" {
+		delete(l.records, oldestKey)
+	}
+}
+
+func normalizeLoginIP(ip string) string {
+	key := strings.TrimSpace(ip)
+	if key == "" {
+		return "unknown"
+	}
+	return key
 }

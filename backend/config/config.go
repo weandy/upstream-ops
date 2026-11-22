@@ -524,16 +524,42 @@ func Save(path string, cfg *Config) error {
 	if path == "" {
 		return fmt.Errorf("config path is empty")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir config dir: %w", err)
 	}
 	body, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	if err := os.WriteFile(path, body, 0o644); err != nil {
-		return fmt.Errorf("write config: %w", err)
+	// 先写入同目录临时文件（收紧权限 0600）再原子替换，避免写入中断损坏原配置文件或权限过宽。
+	tmpFile, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	_ = tmpFile.Chmod(0o600)
+	if _, err := tmpFile.Write(body); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("sync temp config: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replace config: %w", err)
+	}
+	cleanup = false
 	return nil
 }
 

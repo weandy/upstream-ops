@@ -2,12 +2,16 @@ package api
 
 import (
 	"net/http"
+	"strconv"
+	"time"
 
+	"github.com/bejix/upstream-ops/backend/auth"
 	"github.com/gin-gonic/gin"
 )
 
 func registerAuth(g *gin.RouterGroup, d *Deps) {
-	g.POST("/auth/login", func(c *gin.Context) { login(c, d) })
+	loginLimiter := auth.NewLoginRateLimiter(5, 5*time.Minute, nil)
+	g.POST("/auth/login", func(c *gin.Context) { login(c, d, loginLimiter) })
 	g.GET("/auth/me", func(c *gin.Context) { whoami(c, d) })
 	g.POST("/auth/logout", func(c *gin.Context) {
 		// 无状态 token，客户端丢弃即可；这个接口仅作语义存在。
@@ -20,7 +24,7 @@ type loginInput struct {
 	Password string `json:"password" binding:"required"`
 }
 
-func login(c *gin.Context, d *Deps) {
+func login(c *gin.Context, d *Deps, limiter *auth.LoginRateLimiter) {
 	// 鉴权关闭：任何登录请求都直接成功；前端在 /auth/me 已经知道无需登录。
 	authSvc := d.Runtime.CurrentAuth()
 	if authSvc == nil {
@@ -32,6 +36,15 @@ func login(c *gin.Context, d *Deps) {
 		})
 		return
 	}
+	clientIP := c.ClientIP()
+	if ok, retryAfter := limiter.Allow(clientIP); !ok {
+		c.Header("Retry-After", strconv.Itoa(retryAfter))
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error":               "登录失败次数过多，请稍后再试",
+			"retry_after_seconds": retryAfter,
+		})
+		return
+	}
 	var in loginInput
 	if err := c.ShouldBindJSON(&in); err != nil {
 		fail(c, http.StatusBadRequest, err)
@@ -39,9 +52,11 @@ func login(c *gin.Context, d *Deps) {
 	}
 	token, exp, err := authSvc.Login(in.Username, in.Password)
 	if err != nil {
+		limiter.RecordFailure(clientIP)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
 	}
+	limiter.RecordSuccess(clientIP)
 	c.JSON(http.StatusOK, gin.H{
 		"data": gin.H{
 			"token":      token,

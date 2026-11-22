@@ -546,9 +546,19 @@ export default function SettingsPage() {
                 </Field>
                 <Field
                   label="管理员密码"
-                  description="保存后写入配置文件，应用后用于新登录。"
+                  description={
+                    query.data?.secrets_status?.auth_password_set
+                      ? "已设置（留空保存将保留原密码，输入新值则覆盖）。"
+                      : "保存后写入配置文件，应用后用于新登录。"
+                  }
                 >
                   <Input
+                    type="password"
+                    placeholder={
+                      query.data?.secrets_status?.auth_password_set
+                        ? "已设置，留空保持不变"
+                        : "请输入管理员密码"
+                    }
                     value={form.auth.password}
                     onChange={(e) =>
                       setForm((prev) =>
@@ -564,9 +574,19 @@ export default function SettingsPage() {
                 </Field>
                 <Field
                   label="令牌签名密钥"
-                  description="留空时回退使用安全主密钥。"
+                  description={
+                    query.data?.secrets_status?.auth_token_secret_set
+                      ? "已设置自定义签名密钥（留空保存将保留原值）。"
+                      : "留空时回退使用安全主密钥。"
+                  }
                 >
                   <Input
+                    type="password"
+                    placeholder={
+                      query.data?.secrets_status?.auth_token_secret_set
+                        ? "已设置，留空保持不变"
+                        : "可选，留空回退 APP_SECRET"
+                    }
                     value={form.auth.tokenSecret}
                     onChange={(e) =>
                       setForm((prev) =>
@@ -1705,9 +1725,21 @@ export default function SettingsPage() {
                   }
                 />
               </Field>
-              <Field label="密码（可选）" description="代理认证密码。">
+              <Field
+                label="密码（可选）"
+                description={
+                  query.data?.secrets_status?.proxy_password_set
+                    ? "已设置代理密码（留空保存将保留原值）。"
+                    : "代理认证密码。"
+                }
+              >
                 <Input
                   type="password"
+                  placeholder={
+                    query.data?.secrets_status?.proxy_password_set
+                      ? "已设置，留空保持不变"
+                      : ""
+                  }
                   value={form.proxy.password}
                   onChange={(e) =>
                     setForm((prev) =>

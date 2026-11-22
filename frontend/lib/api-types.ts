@@ -346,8 +346,15 @@ export interface SystemConfig {
   embed?: SystemEmbedConfig
 }
 
+export interface SystemSecretsStatus {
+  auth_password_set?: boolean
+  auth_token_secret_set?: boolean
+  proxy_password_set?: boolean
+}
+
 export interface SystemConfigResponse {
   config_path: string
+  secrets_status?: SystemSecretsStatus
   config: SystemConfig
 }
 
