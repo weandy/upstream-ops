@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +32,7 @@ func TestSetHTTPConfigAppliesUserAgentAndTimeout(t *testing.T) {
 	if c.http.GetClient().Timeout != 45*time.Second {
 		t.Fatalf("timeout = %s", c.http.GetClient().Timeout)
 	}
-	if _, err := c.getJSON(context.Background(), srv.URL, nil); err != nil {
+	if _, err := c.getJSON(context.Background(), &connector.Channel{SiteURL: srv.URL}, srv.URL, nil); err != nil {
 		t.Fatalf("getJSON: %v", err)
 	}
 }
@@ -835,4 +838,184 @@ func TestCreateAPIKeyFallsBackToListWhenSearchMisses(t *testing.T) {
 
 func strPtr(v string) *string {
 	return &v
+}
+
+func TestLoginRequireVerificationDoesNotPersistSession(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/user/login", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"require_verification":true}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	_, err := New().Login(context.Background(), &connector.Channel{SiteURL: srv.URL, Username: "u", Password: "p"})
+	if err == nil || !strings.Contains(err.Error(), "verification") {
+		t.Fatalf("err = %v, want verification", err)
+	}
+}
+
+func TestCheckAuthPersonalAccessTokenDiscoversUserID(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/user/self", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer nap_test" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if got := r.Header.Get("New-Api-User"); got != "" {
+			t.Fatalf("user header = %q, want empty before discovery", got)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"id":42,"quota":1}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	session := &connector.AuthSession{AccessToken: "nap_test"}
+	err := New().CheckAuth(context.Background(), &connector.Channel{SiteURL: srv.URL}, session)
+	if err != nil {
+		t.Fatalf("CheckAuth: %v", err)
+	}
+	if session.UserID != "42" {
+		t.Fatalf("user id = %q, want 42", session.UserID)
+	}
+}
+
+func TestCheckAuthLegacyTokenRequiresUserID(t *testing.T) {
+	err := New().CheckAuth(context.Background(), &connector.Channel{SiteURL: "https://example.com"}, &connector.AuthSession{AccessToken: "legacy-token"})
+	if err == nil || !strings.Contains(err.Error(), "旧版令牌需要填写用户 ID") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUnauthorizedRefreshesOnceAndPersists(t *testing.T) {
+	var selfCalls atomic.Int32
+	var refreshCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/user/self", func(w http.ResponseWriter, r *http.Request) {
+		if selfCalls.Add(1) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"success":false,"message":"expired"}`))
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer new-jwt" {
+			t.Errorf("retry authorization = %q", got)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"id":9,"quota":1}}`))
+	})
+	mux.HandleFunc("/api/user/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+		refreshCalls.Add(1)
+		if !strings.Contains(r.Header.Get("Cookie"), "new_api_refresh=old-refresh") {
+			t.Errorf("cookie = %q", r.Header.Get("Cookie"))
+		}
+		http.SetCookie(w, &http.Cookie{Name: "new_api_refresh", Value: "rotated-refresh"})
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"access_token":"new-jwt","access_expires_at":1900000000,"user":{"id":9}}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var persisted *connector.AuthSession
+	session := &connector.AuthSession{
+		UserID:       "9",
+		AccessToken:  "old-jwt",
+		RefreshToken: "old-refresh",
+		PersistRefresh: func(updated *connector.AuthSession) error {
+			copy := *updated
+			persisted = &copy
+			return nil
+		},
+	}
+	err := New().CheckAuth(context.Background(), &connector.Channel{ID: 41, SiteURL: srv.URL}, session)
+	if err != nil {
+		t.Fatalf("CheckAuth: %v", err)
+	}
+	if refreshCalls.Load() != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refreshCalls.Load())
+	}
+	if persisted == nil || persisted.RefreshToken != "rotated-refresh" || persisted.AccessToken != "new-jwt" {
+		t.Fatalf("persisted = %#v", persisted)
+	}
+	if session.RefreshToken != "rotated-refresh" {
+		t.Fatalf("session refresh = %q", session.RefreshToken)
+	}
+}
+
+func TestConcurrentUnauthorizedSharesOneRefresh(t *testing.T) {
+	var refreshCalls atomic.Int32
+	var first atomic.Bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/user/self", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer old-jwt" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"id":9}}`))
+	})
+	mux.HandleFunc("/api/user/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+		refreshCalls.Add(1)
+		if !first.CompareAndSwap(false, true) {
+			t.Errorf("refresh overlapped")
+		}
+		time.Sleep(50 * time.Millisecond)
+		first.Store(false)
+		http.SetCookie(w, &http.Cookie{Name: "new_api_refresh", Value: "rotated-refresh"})
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"access_token":"new-jwt","access_expires_at":1900000000,"user":{"id":9}}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ch := &connector.Channel{ID: 42, SiteURL: srv.URL}
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			session := &connector.AuthSession{UserID: "9", AccessToken: "old-jwt", RefreshToken: "old-refresh"}
+			errCh <- New().CheckAuth(context.Background(), ch, session)
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("CheckAuth: %v", err)
+		}
+	}
+	if refreshCalls.Load() != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refreshCalls.Load())
+	}
+}
+
+func TestCreateAPIKeyFindsNameOnSecondPage(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/user/self/groups", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{}}`))
+	})
+	mux.HandleFunc("/api/token/search", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[],"total":0,"page":1,"page_size":100,"pages":0}}`))
+	})
+	mux.HandleFunc("/api/token/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_, _ = w.Write([]byte(`{"success":true,"message":""}`))
+			return
+		}
+		page := r.URL.Query().Get("p")
+		if page == "2" {
+			_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[{"id":202,"status":1,"name":"main","expired_time":-1,"group":"default"}],"total":101,"page":2,"page_size":100,"pages":2}}`))
+			return
+		}
+		items := make([]string, 0, 100)
+		for id := 1; id <= 100; id++ {
+			items = append(items, `{"id":`+strconv.Itoa(id)+`,"status":1,"name":"old-`+strconv.Itoa(id)+`","expired_time":-1,"group":"default"}`)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"items":[` + strings.Join(items, ",") + `],"total":101,"page":1,"page_size":100,"pages":2}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	created, err := New().CreateAPIKey(context.Background(), &connector.Channel{SiteURL: srv.URL}, &connector.AuthSession{UserID: "7", Cookie: "session=1"}, connector.APIKeyCreateRequest{Name: "main"})
+	if err != nil {
+		t.Fatalf("CreateAPIKey: %v", err)
+	}
+	if created.ID != 202 {
+		t.Fatalf("created id = %d, want 202", created.ID)
+	}
 }

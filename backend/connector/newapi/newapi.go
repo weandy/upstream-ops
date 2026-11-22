@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bejix/upstream-ops/backend/connector"
@@ -65,7 +66,7 @@ type newapiResp struct {
 }
 
 func (c *Client) GetTurnstileSiteKey(ctx context.Context, ch *connector.Channel) (string, error) {
-	body, err := c.getJSON(ctx, strings.TrimRight(ch.SiteURL, "/")+"/api/status", nil)
+	body, err := c.getJSON(ctx, ch, strings.TrimRight(ch.SiteURL, "/")+"/api/status", nil)
 	if err != nil {
 		return "", fmt.Errorf("newapi status: %w", err)
 	}
@@ -126,17 +127,18 @@ func (c *Client) Login(ctx context.Context, ch *connector.Channel) (*connector.A
 	// 老版本 NewAPI 仍以 `Set-Cookie: session=...` + `data.id` 形式响应对接，
 	// 这里保留双模式解析：优先 access_token，回退 cookie + data.id。
 	var data struct {
-		Require2FA      bool   `json:"require_2fa"`
-		ID              int64  `json:"id"`
-		AccessToken     string `json:"access_token"`
-		AccessExpiresAt int64  `json:"access_expires_at"`
-		User            struct {
+		Require2FA          bool   `json:"require_2fa"`
+		RequireVerification bool   `json:"require_verification"`
+		ID                  int64  `json:"id"`
+		AccessToken         string `json:"access_token"`
+		AccessExpiresAt     int64  `json:"access_expires_at"`
+		User                struct {
 			ID int64 `json:"id"`
 		} `json:"user"`
 	}
 	_ = json.Unmarshal(wrapped.Data, &data)
-	if data.Require2FA {
-		return nil, errors.New("newapi account requires 2FA; please disable it for monitoring accounts")
+	if data.Require2FA || data.RequireVerification {
+		return nil, errors.New("newapi account requires 2FA or verification; disable it for monitoring accounts, or use a personal access token")
 	}
 
 	// 优先新版 access_token 鉴权路径：登录响应里只要带了 access_token就走 JWT 模式。
@@ -181,8 +183,26 @@ func (c *Client) CheckAuth(ctx context.Context, ch *connector.Channel, session *
 	if session == nil || !newAPIHasAuth(session) {
 		return errors.New("missing newapi credential: 需要提供 Cookie 或系统访问令牌")
 	}
-	_, err := c.getJSON(ctx, strings.TrimRight(ch.SiteURL, "/")+"/api/user/self", session)
-	return err
+	token := ""
+	if session != nil {
+		token = strings.TrimSpace(session.AccessToken)
+	}
+	if token != "" && !strings.HasPrefix(token, "nap_") && strings.TrimSpace(session.UserID) == "" && strings.TrimSpace(session.Cookie) == "" {
+		return errors.New("旧版令牌需要填写用户 ID")
+	}
+	body, err := c.getJSON(ctx, ch, strings.TrimRight(ch.SiteURL, "/")+"/api/user/self", session)
+	if err != nil {
+		return err
+	}
+	if session != nil && strings.TrimSpace(session.UserID) == "" {
+		var self struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.Unmarshal(body, &self); err == nil && self.ID > 0 {
+			session.UserID = strconv.FormatInt(self.ID, 10)
+		}
+	}
+	return nil
 }
 
 // RefreshSession 实现 connector.SessionRefresher。
@@ -310,7 +330,7 @@ func applyNewAPIAuth(req *resty.Request, session *connector.AuthSession) {
 
 func (c *Client) GetBalance(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) (*connector.BalanceResult, error) {
 	site := strings.TrimRight(ch.SiteURL, "/")
-	statusBody, err := c.getJSON(ctx, site+"/api/status", nil)
+	statusBody, err := c.getJSON(ctx, ch, site+"/api/status", nil)
 	if err != nil {
 		return nil, fmt.Errorf("newapi status: %w", err)
 	}
@@ -325,7 +345,7 @@ func (c *Client) GetBalance(ctx context.Context, ch *connector.Channel, session 
 		status.QuotaPerUnit = 500000
 	}
 
-	selfBody, err := c.getJSON(ctx, site+"/api/user/self", session)
+	selfBody, err := c.getJSON(ctx, ch, site+"/api/user/self", session)
 	if err != nil {
 		return nil, fmt.Errorf("newapi self: %w", err)
 	}
@@ -345,7 +365,7 @@ func (c *Client) GetBalance(ctx context.Context, ch *connector.Channel, session 
 
 func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) (*connector.CostResult, error) {
 	site := strings.TrimRight(ch.SiteURL, "/")
-	statusBody, err := c.getJSON(ctx, site+"/api/status", nil)
+	statusBody, err := c.getJSON(ctx, ch, site+"/api/status", nil)
 	if err != nil {
 		return nil, fmt.Errorf("newapi status: %w", err)
 	}
@@ -363,7 +383,7 @@ func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *c
 	now := time.Now()
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
 	end := now.Unix()
-	logBody, err := c.getJSON(ctx, site+"/api/log/self/stat?type=0&token_name=&model_name=&start_timestamp="+strconv.FormatInt(start, 10)+"&end_timestamp="+strconv.FormatInt(end, 10)+"&group=", session)
+	logBody, err := c.getJSON(ctx, ch, site+"/api/log/self/stat?type=0&token_name=&model_name=&start_timestamp="+strconv.FormatInt(start, 10)+"&end_timestamp="+strconv.FormatInt(end, 10)+"&group=", session)
 	if err != nil {
 		return nil, fmt.Errorf("newapi self stat: %w", err)
 	}
@@ -374,7 +394,7 @@ func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *c
 		return nil, fmt.Errorf("newapi self stat decode: %w", err)
 	}
 
-	usageBody, err := c.getJSON(ctx, site+"/api/user/self", session)
+	usageBody, err := c.getJSON(ctx, ch, site+"/api/user/self", session)
 	if err != nil {
 		return nil, fmt.Errorf("newapi self total: %w", err)
 	}
@@ -395,7 +415,7 @@ func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *c
 }
 
 func (c *Client) GetRates(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) ([]connector.RateResult, error) {
-	body, err := c.getJSON(ctx, strings.TrimRight(ch.SiteURL, "/")+"/api/user/self/groups", session)
+	body, err := c.getJSON(ctx, ch, strings.TrimRight(ch.SiteURL, "/")+"/api/user/self/groups", session)
 	if err != nil {
 		return nil, fmt.Errorf("newapi groups: %w", err)
 	}
@@ -427,7 +447,7 @@ func (c *Client) GetAnnouncements(ctx context.Context, ch *connector.Channel, se
 	site := strings.TrimRight(ch.SiteURL, "/")
 	var items []connector.AnnouncementResult
 
-	if body, err := c.getJSON(ctx, site+"/api/status", nil); err == nil {
+	if body, err := c.getJSON(ctx, ch, site+"/api/status", nil); err == nil {
 		var status struct {
 			Announcements []struct {
 				ID              any             `json:"id"`
@@ -460,7 +480,7 @@ func (c *Client) GetAnnouncements(ctx context.Context, ch *connector.Channel, se
 		}
 	}
 
-	if body, err := c.getRaw(ctx, site+"/api/notice", nil); err == nil {
+	if body, err := c.getRaw(ctx, ch, site+"/api/notice", nil); err == nil {
 		var wrapped newapiResp
 		if err := json.Unmarshal(body, &wrapped); err == nil && wrapped.Success {
 			text := strings.TrimSpace(newAPIStringFromRaw(wrapped.Data))
@@ -480,7 +500,7 @@ func (c *Client) GetAnnouncements(ctx context.Context, ch *connector.Channel, se
 
 func (c *Client) RedeemCode(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, code string) (*connector.RedeemResult, error) {
 	site := strings.TrimRight(ch.SiteURL, "/")
-	statusBody, err := c.getJSON(ctx, site+"/api/status", nil)
+	statusBody, err := c.getJSON(ctx, ch, site+"/api/status", nil)
 	if err != nil {
 		return nil, fmt.Errorf("newapi status: %w", err)
 	}
@@ -495,12 +515,9 @@ func (c *Client) RedeemCode(ctx context.Context, ch *connector.Channel, session 
 		status.QuotaPerUnit = 500000
 	}
 
-	req := c.http.R().
-		SetContext(ctx).
-		SetHeader("Content-Type", "application/json").
-		SetBody(map[string]string{"key": code})
-	applyNewAPIAuth(req, session)
-	resp, err := req.Post(site + "/api/user/topup")
+	resp, err := c.authedDo(ctx, ch, session, func(req *resty.Request) (*resty.Response, error) {
+		return req.SetHeader("Content-Type", "application/json").SetBody(map[string]string{"key": code}).Post(site + "/api/user/topup")
+	})
 	if err != nil {
 		return nil, fmt.Errorf("newapi redeem http: %w", err)
 	}
@@ -529,7 +546,7 @@ func (c *Client) RedeemCode(ctx context.Context, ch *connector.Channel, session 
 }
 
 func (c *Client) GetRechargeInfo(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) (*connector.RechargeInfo, error) {
-	body, err := c.getJSON(ctx, strings.TrimRight(ch.SiteURL, "/")+"/api/user/topup/info", session)
+	body, err := c.getJSON(ctx, ch, strings.TrimRight(ch.SiteURL, "/")+"/api/user/topup/info", session)
 	if err != nil {
 		return nil, fmt.Errorf("newapi topup info: %w", err)
 	}
@@ -593,15 +610,12 @@ func (c *Client) CreateRecharge(ctx context.Context, ch *connector.Channel, sess
 	if req.Amount <= 0 || math.Trunc(req.Amount) != req.Amount {
 		return nil, errors.New("newapi 充值数量必须是正整数")
 	}
-	r := c.http.R().
-		SetContext(ctx).
-		SetHeader("Content-Type", "application/json").
-		SetBody(map[string]any{
+	resp, err := c.authedDo(ctx, ch, session, func(r *resty.Request) (*resty.Response, error) {
+		return r.SetHeader("Content-Type", "application/json").SetBody(map[string]any{
 			"amount":         int64(req.Amount),
 			"payment_method": req.PaymentMethod,
-		})
-	applyNewAPIAuth(r, session)
-	resp, err := r.Post(strings.TrimRight(ch.SiteURL, "/") + "/api/user/pay")
+		}).Post(strings.TrimRight(ch.SiteURL, "/") + "/api/user/pay")
+	})
 	if err != nil {
 		return nil, fmt.Errorf("newapi create recharge http: %w", err)
 	}
@@ -673,7 +687,7 @@ func (c *Client) ListAPIKeys(ctx context.Context, ch *connector.Channel, session
 		params.Set("keyword", search)
 		params.Set("token", search)
 	}
-	body, err := c.getJSON(ctx, site+path+"?"+params.Encode(), session)
+	body, err := c.getJSON(ctx, ch, site+path+"?"+params.Encode(), session)
 	if err != nil {
 		return nil, fmt.Errorf("newapi api keys: %w", err)
 	}
@@ -733,20 +747,18 @@ func (c *Client) CreateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 		return nil, errors.New("密钥名称不能为空")
 	}
 	beforeIDs := map[int64]struct{}{}
-	if before, err := c.ListAPIKeys(ctx, ch, session, connector.APIKeyQuery{Page: 1, PageSize: 100}); err == nil {
-		for _, item := range before.Items {
-			if item.ID > 0 {
-				beforeIDs[item.ID] = struct{}{}
-			}
+	_ = connector.WalkAPIKeyPages(ctx, connector.DefaultAPIKeyPageSize, connector.MaxAPIKeyListPages, func(ctx context.Context, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
+		return c.ListAPIKeys(ctx, ch, session, query)
+	}, connector.APIKeyQuery{}, func(item connector.APIKey) bool {
+		if item.ID > 0 {
+			beforeIDs[item.ID] = struct{}{}
 		}
-	}
+		return false
+	})
 	body := buildNewAPICreateToken(req)
-	restyReq := c.http.R().
-		SetContext(ctx).
-		SetHeader("Content-Type", "application/json").
-		SetBody(body)
-	applyNewAPIAuth(restyReq, session)
-	resp, err := restyReq.Post(strings.TrimRight(ch.SiteURL, "/") + "/api/token/")
+	resp, err := c.authedDo(ctx, ch, session, func(req *resty.Request) (*resty.Response, error) {
+		return req.SetHeader("Content-Type", "application/json").SetBody(body).Post(strings.TrimRight(ch.SiteURL, "/") + "/api/token/")
+	})
 	if err != nil {
 		return nil, fmt.Errorf("newapi create api key http: %w", err)
 	}
@@ -760,32 +772,28 @@ func (c *Client) CreateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if key := newAPIKeyFromCreateData(data, req); key != nil && key.ID > 0 {
 		return key, nil
 	}
-	page, err := c.ListAPIKeys(ctx, ch, session, connector.APIKeyQuery{Page: 1, PageSize: 20, Search: req.Name})
+	name := strings.TrimSpace(req.Name)
+	found, err := c.findAPIKeyByName(ctx, ch, session, name)
 	if err != nil {
 		return nil, fmt.Errorf("newapi create api key lookup: %w", err)
 	}
-	name := strings.TrimSpace(req.Name)
-	for i := range page.Items {
-		if strings.TrimSpace(page.Items[i].Name) == name && page.Items[i].ID > 0 {
-			return &page.Items[i], nil
-		}
+	if found != nil {
+		return found, nil
 	}
-	page, err = c.ListAPIKeys(ctx, ch, session, connector.APIKeyQuery{Page: 1, PageSize: 100})
+	found, err = connector.FindAPIKeyPage(ctx, connector.DefaultAPIKeyPageSize, connector.MaxAPIKeyListPages, func(ctx context.Context, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
+		return c.ListAPIKeys(ctx, ch, session, query)
+	}, connector.APIKeyQuery{}, func(item connector.APIKey) bool {
+		if item.ID <= 0 {
+			return false
+		}
+		_, existed := beforeIDs[item.ID]
+		return !existed
+	})
 	if err != nil {
 		return nil, fmt.Errorf("newapi create api key list lookup: %w", err)
 	}
-	for i := range page.Items {
-		if strings.TrimSpace(page.Items[i].Name) == name && page.Items[i].ID > 0 {
-			return &page.Items[i], nil
-		}
-	}
-	for i := range page.Items {
-		if page.Items[i].ID <= 0 {
-			continue
-		}
-		if _, existed := beforeIDs[page.Items[i].ID]; !existed {
-			return &page.Items[i], nil
-		}
+	if found != nil {
+		return found, nil
 	}
 	return nil, errors.New("newapi create api key: missing key id")
 }
@@ -795,12 +803,9 @@ func (c *Client) UpdateAPIKey(ctx context.Context, ch *connector.Channel, sessio
 		return nil, errors.New("密钥 ID 无效")
 	}
 	body := buildNewAPIUpdateToken(id, req)
-	restyReq := c.http.R().
-		SetContext(ctx).
-		SetHeader("Content-Type", "application/json").
-		SetBody(body)
-	applyNewAPIAuth(restyReq, session)
-	resp, err := restyReq.Put(strings.TrimRight(ch.SiteURL, "/") + "/api/token/")
+	resp, err := c.authedDo(ctx, ch, session, func(req *resty.Request) (*resty.Response, error) {
+		return req.SetHeader("Content-Type", "application/json").SetBody(body).Put(strings.TrimRight(ch.SiteURL, "/") + "/api/token/")
+	})
 	if err != nil {
 		return nil, fmt.Errorf("newapi update api key http: %w", err)
 	}
@@ -832,9 +837,9 @@ func (c *Client) DeleteAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if id <= 0 {
 		return errors.New("密钥 ID 无效")
 	}
-	delReq := c.http.R().SetContext(ctx)
-	applyNewAPIAuth(delReq, session)
-	resp, err := delReq.Delete(strings.TrimRight(ch.SiteURL, "/") + "/api/token/" + strconv.FormatInt(id, 10))
+	resp, err := c.authedDo(ctx, ch, session, func(req *resty.Request) (*resty.Response, error) {
+		return req.Delete(strings.TrimRight(ch.SiteURL, "/") + "/api/token/" + strconv.FormatInt(id, 10))
+	})
 	if err != nil {
 		return fmt.Errorf("newapi delete api key http: %w", err)
 	}
@@ -848,9 +853,9 @@ func (c *Client) RevealAPIKey(ctx context.Context, ch *connector.Channel, sessio
 	if id <= 0 {
 		return "", errors.New("密钥 ID 无效")
 	}
-	revealReq := c.http.R().SetContext(ctx)
-	applyNewAPIAuth(revealReq, session)
-	resp, err := revealReq.Post(strings.TrimRight(ch.SiteURL, "/") + "/api/token/" + strconv.FormatInt(id, 10) + "/key")
+	resp, err := c.authedDo(ctx, ch, session, func(req *resty.Request) (*resty.Response, error) {
+		return req.Post(strings.TrimRight(ch.SiteURL, "/") + "/api/token/" + strconv.FormatInt(id, 10) + "/key")
+	})
 	if err != nil {
 		return "", fmt.Errorf("newapi reveal api key http: %w", err)
 	}
@@ -1008,8 +1013,24 @@ func decodeNewAPIPaymentResponse(body []byte, prefix string) (json.RawMessage, s
 	return wrapped.Data, strings.TrimSpace(wrapped.URL), strings.TrimSpace(wrapped.Message), nil
 }
 
-func (c *Client) getJSON(ctx context.Context, url string, session *connector.AuthSession) ([]byte, error) {
-	body, err := c.getRaw(ctx, url, session)
+func (c *Client) findAPIKeyByName(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, name string) (*connector.APIKey, error) {
+	list := func(ctx context.Context, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
+		return c.ListAPIKeys(ctx, ch, session, query)
+	}
+	match := func(item connector.APIKey) bool {
+		return strings.TrimSpace(item.Name) == name && item.ID > 0
+	}
+	if name != "" {
+		found, err := connector.FindAPIKeyPage(ctx, connector.DefaultAPIKeyPageSize, connector.MaxAPIKeyListPages, list, connector.APIKeyQuery{Search: name}, match)
+		if err != nil || found != nil {
+			return found, err
+		}
+	}
+	return connector.FindAPIKeyPage(ctx, connector.DefaultAPIKeyPageSize, connector.MaxAPIKeyListPages, list, connector.APIKeyQuery{}, match)
+}
+
+func (c *Client) getJSON(ctx context.Context, ch *connector.Channel, rawURL string, session *connector.AuthSession) ([]byte, error) {
+	body, err := c.getRaw(ctx, ch, rawURL, session)
 	if err != nil {
 		return nil, err
 	}
@@ -1023,13 +1044,10 @@ func (c *Client) getJSON(ctx context.Context, url string, session *connector.Aut
 	return wrapped.Data, nil
 }
 
-func (c *Client) postJSON(ctx context.Context, url string, session *connector.AuthSession, body any) ([]byte, error) {
-	req := c.http.R().
-		SetContext(ctx).
-		SetHeader("Content-Type", "application/json").
-		SetBody(body)
-	applyNewAPIAuth(req, session)
-	resp, err := req.Post(url)
+func (c *Client) postJSON(ctx context.Context, ch *connector.Channel, rawURL string, session *connector.AuthSession, body any) ([]byte, error) {
+	resp, err := c.authedDo(ctx, ch, session, func(req *resty.Request) (*resty.Response, error) {
+		return req.SetHeader("Content-Type", "application/json").SetBody(body).Post(rawURL)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1039,11 +1057,10 @@ func (c *Client) postJSON(ctx context.Context, url string, session *connector.Au
 	return resp.Body(), nil
 }
 
-func (c *Client) getRaw(ctx context.Context, url string, session *connector.AuthSession) ([]byte, error) {
-	req := c.http.R().SetContext(ctx)
-	applyNewAPIAuth(req, session)
-	// NewAPI 即便用 session 鉴权也要求带 New-Api-User 头（"unauthorized, New-Api-User header not provided"）。
-	resp, err := req.Get(url)
+func (c *Client) getRaw(ctx context.Context, ch *connector.Channel, rawURL string, session *connector.AuthSession) ([]byte, error) {
+	resp, err := c.authedDo(ctx, ch, session, func(req *resty.Request) (*resty.Response, error) {
+		return req.Get(rawURL)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -1051,6 +1068,138 @@ func (c *Client) getRaw(ctx context.Context, url string, session *connector.Auth
 		return nil, connector.HTTPStatusError(resp.StatusCode(), resp.Body())
 	}
 	return resp.Body(), nil
+}
+
+func (c *Client) authedDo(ctx context.Context, ch *connector.Channel, session *connector.AuthSession, send func(*resty.Request) (*resty.Response, error)) (*resty.Response, error) {
+	issue := func() (*resty.Response, error) {
+		req := c.http.R().SetContext(ctx)
+		applyNewAPIAuth(req, session)
+		return send(req)
+	}
+	resp, err := issue()
+	if err != nil || resp == nil || resp.StatusCode() != http.StatusUnauthorized {
+		return resp, err
+	}
+	if rerr := c.refreshAfterUnauthorized(ctx, ch, session); rerr != nil {
+		if errors.Is(rerr, errRefreshSkipped) {
+			return resp, nil
+		}
+		return nil, rerr
+	}
+	return issue()
+}
+
+var errRefreshSkipped = errors.New("newapi refresh skipped")
+
+const refreshedSessionReuse = 30 * time.Second
+
+type refreshFlight struct {
+	done chan struct{}
+	err  error
+	next connector.AuthSession
+}
+
+type rememberedRefresh struct {
+	at   time.Time
+	from string
+	next connector.AuthSession
+}
+
+type refreshMemory struct {
+	mu       sync.Mutex
+	inflight map[string]*refreshFlight
+	recent   map[string]rememberedRefresh
+}
+
+var newAPIRefresh refreshMemory
+
+func refreshFlightKey(ch *connector.Channel, refreshToken string) string {
+	if ch != nil && ch.ID != 0 {
+		return fmt.Sprintf("id:%d", ch.ID)
+	}
+	return "tok:" + refreshToken
+}
+
+func adoptSession(dst *connector.AuthSession, src connector.AuthSession) {
+	if dst == nil {
+		return
+	}
+	keep := dst.PersistRefresh
+	src.PersistRefresh = keep
+	*dst = src
+}
+
+func (c *Client) refreshAfterUnauthorized(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) error {
+	if ch == nil || session == nil {
+		return errRefreshSkipped
+	}
+	old := strings.TrimSpace(session.RefreshToken)
+	if old == "" || strings.HasPrefix(strings.TrimSpace(session.AccessToken), "nap_") {
+		return errRefreshSkipped
+	}
+	key := refreshFlightKey(ch, old)
+
+	newAPIRefresh.mu.Lock()
+	if newAPIRefresh.inflight == nil {
+		newAPIRefresh.inflight = map[string]*refreshFlight{}
+	}
+	if newAPIRefresh.recent == nil {
+		newAPIRefresh.recent = map[string]rememberedRefresh{}
+	}
+	now := time.Now()
+	for id, item := range newAPIRefresh.recent {
+		if now.Sub(item.at) >= refreshedSessionReuse {
+			delete(newAPIRefresh.recent, id)
+		}
+	}
+	if item, ok := newAPIRefresh.recent[key]; ok && item.from == old {
+		adoptSession(session, item.next)
+		newAPIRefresh.mu.Unlock()
+		return nil
+	}
+	if flight, ok := newAPIRefresh.inflight[key]; ok {
+		newAPIRefresh.mu.Unlock()
+		select {
+		case <-flight.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if flight.err != nil {
+			return flight.err
+		}
+		adoptSession(session, flight.next)
+		return nil
+	}
+	flight := &refreshFlight{done: make(chan struct{})}
+	newAPIRefresh.inflight[key] = flight
+	newAPIRefresh.mu.Unlock()
+
+	next, err := c.RefreshSession(ctx, ch, session)
+	if err == nil && session.PersistRefresh != nil {
+		persisted := *next
+		persisted.PersistRefresh = nil
+		if perr := session.PersistRefresh(&persisted); perr != nil {
+			err = fmt.Errorf("persist refreshed session: %w", perr)
+		}
+	}
+
+	newAPIRefresh.mu.Lock()
+	defer newAPIRefresh.mu.Unlock()
+	defer close(flight.done)
+	delete(newAPIRefresh.inflight, key)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "persist refreshed session:") {
+			flight.err = err
+		} else {
+			flight.err = errRefreshSkipped
+		}
+		return flight.err
+	}
+	adoptSession(session, *next)
+	flight.next = *session
+	flight.next.PersistRefresh = nil
+	newAPIRefresh.recent[key] = rememberedRefresh{at: time.Now(), from: old, next: flight.next}
+	return nil
 }
 
 func (c *Client) quotaToUSD(quota float64, quotaPerUnit float64) float64 {
@@ -1192,7 +1341,7 @@ func dedupeAnnouncements(items []connector.AnnouncementResult) []connector.Annou
 }
 
 func (c *Client) newAPIGroupMap(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) (map[string]connector.APIKeyGroup, error) {
-	body, err := c.getJSON(ctx, strings.TrimRight(ch.SiteURL, "/")+"/api/user/self/groups", session)
+	body, err := c.getJSON(ctx, ch, strings.TrimRight(ch.SiteURL, "/")+"/api/user/self/groups", session)
 	if err != nil {
 		return nil, fmt.Errorf("newapi api key groups: %w", err)
 	}

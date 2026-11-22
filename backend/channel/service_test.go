@@ -554,3 +554,120 @@ func newStoredNewAPIChannel(t *testing.T, siteURL string) (*Service, *storage.Ch
 	}
 	return svc, ch, resolved, conn
 }
+
+func TestBuildSessionFromNewAPIPersonalAccessTokenAllowsEmptyUserID(t *testing.T) {
+	svc, cipher := testService(t)
+	enc, err := cipher.Encrypt(`{"access_token":"nap_live","user_id":""}`)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	session, err := svc.buildSessionFromToken(&storage.Channel{
+		Type:           storage.ChannelTypeNewAPI,
+		PasswordCipher: enc,
+		CredentialMode: storage.CredentialModeToken,
+	})
+	if err != nil {
+		t.Fatalf("buildSessionFromToken: %v", err)
+	}
+	if session.AccessToken != "nap_live" {
+		t.Fatalf("access token = %q", session.AccessToken)
+	}
+}
+
+func TestBuildSessionFromLegacyNewAPITokenRequiresUserID(t *testing.T) {
+	svc, cipher := testService(t)
+	enc, err := cipher.Encrypt(`{"access_token":"legacy-token","user_id":""}`)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	_, err = svc.buildSessionFromToken(&storage.Channel{
+		Type:           storage.ChannelTypeNewAPI,
+		PasswordCipher: enc,
+		CredentialMode: storage.CredentialModeToken,
+	})
+	if err == nil || !strings.Contains(err.Error(), "旧版令牌需要填写用户 ID") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestNewAPIBusinessUnauthorizedRefreshesAndSavesCookie(t *testing.T) {
+	var selfCalls atomic.Int32
+	var refreshCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"quota_per_unit":500000,"price":1}}`))
+	})
+	mux.HandleFunc("/api/user/self", func(w http.ResponseWriter, r *http.Request) {
+		n := selfCalls.Add(1)
+		if n == 2 {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"expired"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"id":9,"quota":500000}}`))
+	})
+	mux.HandleFunc("/api/user/auth/refresh", func(w http.ResponseWriter, r *http.Request) {
+		refreshCalls.Add(1)
+		if !strings.Contains(r.Header.Get("Cookie"), "new_api_refresh=old-refresh") {
+			t.Errorf("cookie = %q", r.Header.Get("Cookie"))
+		}
+		http.SetCookie(w, &http.Cookie{Name: "new_api_refresh", Value: "rotated-refresh"})
+		_, _ = w.Write([]byte(`{"success":true,"message":"","data":{"access_token":"new-jwt","access_expires_at":1900000000,"user":{"id":9}}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	svc, cipher := testService(t)
+	passwordCipher, err := cipher.Encrypt("password")
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	ch := &storage.Channel{
+		Name:           "newapi-mid-request",
+		Type:           storage.ChannelTypeNewAPI,
+		SiteURL:        srv.URL,
+		Username:       "user",
+		PasswordCipher: passwordCipher,
+		CredentialMode: storage.CredentialModePassword,
+	}
+	if err := svc.Channels.Create(ch); err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+	if err := svc.persistSession(ch.ID, &connector.AuthSession{
+		UserID:       "9",
+		AccessToken:  "old-jwt",
+		RefreshToken: "old-refresh",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("persist session: %v", err)
+	}
+	resolved, err := svc.Resolve(context.Background(), ch)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	conn, err := connector.For(connector.TypeNewAPI)
+	if err != nil {
+		t.Fatalf("connector: %v", err)
+	}
+	session, err := svc.EnsureSession(context.Background(), ch, resolved, conn)
+	if err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+	if _, err := conn.GetBalance(context.Background(), resolved, session); err != nil {
+		t.Fatalf("GetBalance: %v", err)
+	}
+	if refreshCalls.Load() != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refreshCalls.Load())
+	}
+	saved, err := svc.AuthSessions.FindByChannel(ch.ID)
+	if err != nil {
+		t.Fatalf("find session: %v", err)
+	}
+	got, err := svc.decryptSession(saved)
+	if err != nil {
+		t.Fatalf("decrypt: %v", err)
+	}
+	if got.RefreshToken != "rotated-refresh" || got.AccessToken != "new-jwt" {
+		t.Fatalf("saved session access=%q refresh=%q", got.AccessToken, got.RefreshToken)
+	}
+}

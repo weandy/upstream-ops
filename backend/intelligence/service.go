@@ -53,14 +53,15 @@ type TargetInput struct {
 
 // TargetOverview 单目标实时总览（24h 性能 + 60 分钟趋势 + 最近采样 + 检测器配置与最新智力检测结果）。
 type TargetOverview struct {
-	Target          *storage.ProbeTarget                    `json:"target"`
-	Performance     PerformanceSummary                      `json:"performance"`
-	Trend           []AvailabilityBucket                    `json:"trend"`
-	RecentSamples   []storage.ProbeLivenessSample           `json:"recent_samples"`
-	DetectorConfig  []storage.ProbeDetectorConfig           `json:"detector_configs"`
-	LatestRuns      map[string]storage.ProbeIntelligenceRun `json:"latest_runs"`
-	CandyPassed24h  int                                     `json:"candy_passed_24h"`
-	CandyChecked24h int                                     `json:"candy_checked_24h"`
+	Target             *storage.ProbeTarget                    `json:"target"`
+	Performance        PerformanceSummary                      `json:"performance"`
+	Trend              []AvailabilityBucket                    `json:"trend"`
+	TrendWindowMinutes int                                     `json:"trend_window_minutes"`
+	RecentSamples      []storage.ProbeLivenessSample           `json:"recent_samples"`
+	DetectorConfig     []storage.ProbeDetectorConfig           `json:"detector_configs"`
+	LatestRuns         map[string]storage.ProbeIntelligenceRun `json:"latest_runs"`
+	CandyPassed24h     int                                     `json:"candy_passed_24h"`
+	CandyChecked24h    int                                     `json:"candy_checked_24h"`
 }
 
 // ResultHook 单次检测完成并落库后的扩展回调（Phase 3 告警状态机由此挂载）。
@@ -355,32 +356,21 @@ func (s *Service) EnsureChannelKey(ctx context.Context, targetID uint) (*storage
 	unlock := s.lockKeyName(keyName)
 	defer unlock()
 
-	page, err := s.ChannelAPI.ListAPIKeys(ctx, target.ChannelID, connector.APIKeyQuery{
-		Page:     1,
-		PageSize: 100,
-		Search:   keyName,
+	listKeys := func(ctx context.Context, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
+		return s.ChannelAPI.ListAPIKeys(ctx, target.ChannelID, query)
+	}
+	existingKey, err := connector.FindAPIKeyPage(ctx, connector.DefaultAPIKeyPageSize, connector.MaxAPIKeyListPages, listKeys, connector.APIKeyQuery{Search: keyName}, func(item connector.APIKey) bool {
+		return strings.EqualFold(strings.TrimSpace(item.Name), keyName)
 	})
 	if err != nil {
 		return nil, err
 	}
-	var existingKey *connector.APIKey
-	for i := range page.Items {
-		if strings.EqualFold(strings.TrimSpace(page.Items[i].Name), keyName) {
-			k := page.Items[i]
-			existingKey = &k
-			break
-		}
-	}
 	if existingKey == nil && target.APIKeyID > 0 {
-		fullPage, err := s.ChannelAPI.ListAPIKeys(ctx, target.ChannelID, connector.APIKeyQuery{Page: 1, PageSize: 100})
-		if err == nil && fullPage != nil {
-			for i := range fullPage.Items {
-				if fullPage.Items[i].ID == target.APIKeyID || strings.EqualFold(strings.TrimSpace(fullPage.Items[i].Name), keyName) {
-					k := fullPage.Items[i]
-					existingKey = &k
-					break
-				}
-			}
+		existingKey, err = connector.FindAPIKeyPage(ctx, connector.DefaultAPIKeyPageSize, connector.MaxAPIKeyListPages, listKeys, connector.APIKeyQuery{}, func(item connector.APIKey) bool {
+			return item.ID == target.APIKeyID || strings.EqualFold(strings.TrimSpace(item.Name), keyName)
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -680,7 +670,7 @@ func (s *Service) CompareTargets(targetIDs []uint, windowRaw string) (*TargetCom
 		if err != nil {
 			return nil, err
 		}
-		perf, _ := AggregateLiveness(samples, now)
+		perf, _ := AggregateLiveness(samples, now, LivenessBucketDuration(0))
 		_, _, points := AggregatePerformanceTrend(samples, win, now)
 
 		latestRuns := make(map[string]storage.ProbeIntelligenceRun)
@@ -752,16 +742,27 @@ func (s *Service) GetTargetOverview(targetID uint) (*TargetOverview, error) {
 }
 
 func (s *Service) buildTargetOverview(target *storage.ProbeTarget, now time.Time) (*TargetOverview, error) {
-	samples24h, err := s.Liveness.ListByTargetSince(target.ID, now.Add(-24*time.Hour))
-	if err != nil {
-		return nil, err
-	}
-	perf, trend := AggregateLiveness(samples24h, now)
-	recent, err := s.Liveness.ListRecentByTarget(target.ID, 20)
-	if err != nil {
-		return nil, err
-	}
 	cfgs, err := s.Configs.ListByTarget(target.ID)
+	if err != nil {
+		return nil, err
+	}
+	intervalSec := 0
+	for _, cfg := range cfgs {
+		if cfg.DetectorKey == DetectorKeyLiveness && cfg.IntervalSeconds > 0 {
+			intervalSec = cfg.IntervalSeconds
+			break
+		}
+	}
+	since := now.Add(-24 * time.Hour)
+	if lookback := TrendLookback(intervalSec); lookback > 24*time.Hour {
+		since = now.Add(-lookback)
+	}
+	samples, err := s.Liveness.ListByTargetSince(target.ID, since)
+	if err != nil {
+		return nil, err
+	}
+	perf, trend := AggregateLiveness(samples, now, LivenessBucketDuration(intervalSec))
+	recent, err := s.Liveness.ListRecentByTarget(target.ID, 20)
 	if err != nil {
 		return nil, err
 	}
@@ -789,14 +790,15 @@ func (s *Service) buildTargetOverview(target *storage.ProbeTarget, now time.Time
 		}
 	}
 	return &TargetOverview{
-		Target:          target,
-		Performance:     perf,
-		Trend:           trend,
-		RecentSamples:   recent,
-		DetectorConfig:  cfgs,
-		LatestRuns:      latestRuns,
-		CandyPassed24h:  candyPassed,
-		CandyChecked24h: candyChecked,
+		Target:             target,
+		Performance:        perf,
+		Trend:              trend,
+		TrendWindowMinutes: TrendWindowMinutes(intervalSec),
+		RecentSamples:      recent,
+		DetectorConfig:     cfgs,
+		LatestRuns:         latestRuns,
+		CandyPassed24h:     candyPassed,
+		CandyChecked24h:    candyChecked,
 	}, nil
 }
 

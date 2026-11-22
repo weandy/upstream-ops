@@ -338,28 +338,27 @@ func (a *AdminService) ensureSourceAPIKey(ctx context.Context, groupID uint, rou
 	unlimitedQuota := boolPtr(sourceChannel.Type == storage.ChannelTypeNewAPI)
 	neverExpire := int64PtrIf(sourceChannel.Type == storage.ChannelTypeNewAPI, -1)
 
-	// 优先按统一名搜索
-	page, err := a.ChannelAPI.ListAPIKeys(ctx, route.SourceChannelID, connector.APIKeyQuery{
-		Page: 1, PageSize: 100, Search: keyName,
+	listKeys := func(ctx context.Context, query connector.APIKeyQuery) (*connector.APIKeyPage, error) {
+		return a.ChannelAPI.ListAPIKeys(ctx, route.SourceChannelID, query)
+	}
+	key, err := connector.FindAPIKeyPage(ctx, connector.DefaultAPIKeyPageSize, connector.MaxAPIKeyListPages, listKeys, connector.APIKeyQuery{Search: keyName}, func(item connector.APIKey) bool {
+		return strings.TrimSpace(item.Name) == keyName
 	})
 	if err != nil {
 		return err
 	}
-	var key *connector.APIKey
-	key = a.findAPIKeyByName(page.Items, keyName)
-
-	// 全量页再找：统一名 / 路由上已记的 key id / 旧名
 	if key == nil {
-		page, err = a.ChannelAPI.ListAPIKeys(ctx, route.SourceChannelID, connector.APIKeyQuery{Page: 1, PageSize: 100})
+		key, err = connector.FindAPIKeyPage(ctx, connector.DefaultAPIKeyPageSize, connector.MaxAPIKeyListPages, listKeys, connector.APIKeyQuery{}, func(item connector.APIKey) bool {
+			if strings.TrimSpace(item.Name) == keyName {
+				return true
+			}
+			if route.SourceAPIKeyID > 0 && item.ID == route.SourceAPIKeyID {
+				return true
+			}
+			return legacyName != "" && legacyName != keyName && strings.TrimSpace(item.Name) == legacyName
+		})
 		if err != nil {
 			return err
-		}
-		key = a.findAPIKeyByName(page.Items, keyName)
-		if key == nil && route.SourceAPIKeyID > 0 {
-			key = a.findAPIKeyByID(page.Items, route.SourceAPIKeyID)
-		}
-		if key == nil && legacyName != "" && legacyName != keyName {
-			key = a.findAPIKeyByName(page.Items, legacyName)
 		}
 	}
 

@@ -110,6 +110,9 @@ type AuthSession struct {
 	Cookie       string
 	CSRFToken    string
 	ExpiresAt    time.Time
+	// PersistRefresh 由 channel 层注入。刷新令牌轮换后先落库，再重放业务请求。
+	// 不参与序列化，也不写入上游。
+	PersistRefresh func(*AuthSession) error
 }
 
 // BalanceResult 一次余额采集结果。Balance 已经换算成显示单位（一般是 USD 等值）。

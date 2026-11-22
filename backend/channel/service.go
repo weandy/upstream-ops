@@ -147,27 +147,27 @@ type Sub2APITokenCredential struct {
 //   - password: Password 必填；Username 为登录账号
 //   - token:    TokenCredential 必填（已序列化为 JSON 字符串）；Username 仅作展示备注
 type CreateInput struct {
-	Name                   string
-	Type                   storage.ChannelType
-	SiteURL                string
-	Username               string
-	SortOrder              int
-	Password               string
-	CredentialMode         storage.CredentialMode
-	TokenCredential        string // JSON：password 模式时为空
-	LoginExtraParams       string
-	TurnstileEnabled       bool
-	IgnoreAnnouncements    bool
-	SubscriptionEnabled    bool
-	ProxyEnabled           bool
-	CaptchaConfigID        *uint
-	BalanceThreshold       float64
-	RechargeMultiplier     *float64
-	RechargeMultiplierMode string
-	MonitorEnabled         bool
+	Name                        string
+	Type                        storage.ChannelType
+	SiteURL                     string
+	Username                    string
+	SortOrder                   int
+	Password                    string
+	CredentialMode              storage.CredentialMode
+	TokenCredential             string // JSON：password 模式时为空
+	LoginExtraParams            string
+	TurnstileEnabled            bool
+	IgnoreAnnouncements         bool
+	SubscriptionEnabled         bool
+	ProxyEnabled                bool
+	CaptchaConfigID             *uint
+	BalanceThreshold            float64
+	RechargeMultiplier          *float64
+	RechargeMultiplierMode      string
+	MonitorEnabled              bool
 	OnlyCreatedKeyGroupsEnabled bool
-	Tags                   []string
-	Notes                  string
+	Tags                        []string
+	Notes                       string
 }
 
 func (s *Service) Create(in CreateInput) (*storage.Channel, error) {
@@ -192,26 +192,26 @@ func (s *Service) Create(in CreateInput) (*storage.Channel, error) {
 		return nil, fmt.Errorf("encrypt credential: %w", err)
 	}
 	c := &storage.Channel{
-		Name:                   in.Name,
-		Type:                   in.Type,
-		SiteURL:                in.SiteURL,
-		Username:               in.Username,
-		SortOrder:              normalizeSortOrder(in.SortOrder),
-		PasswordCipher:         enc,
-		CredentialMode:         mode,
-		LoginExtraParams:       loginExtraParams,
-		TurnstileEnabled:       in.TurnstileEnabled && mode == storage.CredentialModePassword, // token 模式不需要打码
-		IgnoreAnnouncements:    in.IgnoreAnnouncements,
-		SubscriptionEnabled:    in.SubscriptionEnabled,
-		ProxyEnabled:           in.ProxyEnabled,
-		CaptchaConfigID:        in.CaptchaConfigID,
-		BalanceThreshold:       in.BalanceThreshold,
-		RechargeMultiplier:     normalizeRechargeMultiplier(in.RechargeMultiplier),
-		RechargeMultiplierMode: connector.NormalizeRechargeMultiplierMode(in.RechargeMultiplierMode),
-		MonitorEnabled:         in.MonitorEnabled,
+		Name:                        in.Name,
+		Type:                        in.Type,
+		SiteURL:                     in.SiteURL,
+		Username:                    in.Username,
+		SortOrder:                   normalizeSortOrder(in.SortOrder),
+		PasswordCipher:              enc,
+		CredentialMode:              mode,
+		LoginExtraParams:            loginExtraParams,
+		TurnstileEnabled:            in.TurnstileEnabled && mode == storage.CredentialModePassword, // token 模式不需要打码
+		IgnoreAnnouncements:         in.IgnoreAnnouncements,
+		SubscriptionEnabled:         in.SubscriptionEnabled,
+		ProxyEnabled:                in.ProxyEnabled,
+		CaptchaConfigID:             in.CaptchaConfigID,
+		BalanceThreshold:            in.BalanceThreshold,
+		RechargeMultiplier:          normalizeRechargeMultiplier(in.RechargeMultiplier),
+		RechargeMultiplierMode:      connector.NormalizeRechargeMultiplierMode(in.RechargeMultiplierMode),
+		MonitorEnabled:              in.MonitorEnabled,
 		OnlyCreatedKeyGroupsEnabled: in.OnlyCreatedKeyGroupsEnabled,
-		Tags:                   storage.NormalizeChannelTags(in.Tags),
-		Notes:                  strings.TrimSpace(in.Notes),
+		Tags:                        storage.NormalizeChannelTags(in.Tags),
+		Notes:                       strings.TrimSpace(in.Notes),
 	}
 	if mode == storage.CredentialModeToken {
 		// token 模式不依赖打码 provider
@@ -225,26 +225,26 @@ func (s *Service) Create(in CreateInput) (*storage.Channel, error) {
 
 // UpdateInput 编辑渠道的可选字段。Password / TokenCredential 为空表示不修改凭据。
 type UpdateInput struct {
-	Name                   *string
-	SiteURL                *string
-	Username               *string
-	SortOrder              *int
-	Password               *string
-	CredentialMode         *storage.CredentialMode
-	TokenCredential        *string // JSON
-	LoginExtraParams       *string
-	TurnstileEnabled       *bool
-	IgnoreAnnouncements    *bool
-	SubscriptionEnabled    *bool
-	ProxyEnabled           *bool
-	CaptchaConfigID        *uint
-	BalanceThreshold       *float64
-	RechargeMultiplier     *float64
-	RechargeMultiplierMode *string
-	MonitorEnabled         *bool
+	Name                        *string
+	SiteURL                     *string
+	Username                    *string
+	SortOrder                   *int
+	Password                    *string
+	CredentialMode              *storage.CredentialMode
+	TokenCredential             *string // JSON
+	LoginExtraParams            *string
+	TurnstileEnabled            *bool
+	IgnoreAnnouncements         *bool
+	SubscriptionEnabled         *bool
+	ProxyEnabled                *bool
+	CaptchaConfigID             *uint
+	BalanceThreshold            *float64
+	RechargeMultiplier          *float64
+	RechargeMultiplierMode      *string
+	MonitorEnabled              *bool
 	OnlyCreatedKeyGroupsEnabled *bool
-	Tags                   *[]string // nil 表示不修改；空切片表示清空
-	Notes                  *string
+	Tags                        *[]string // nil 表示不修改；空切片表示清空
+	Notes                       *string
 }
 
 func (s *Service) Update(id uint, in UpdateInput) (*storage.Channel, error) {
@@ -564,10 +564,15 @@ func (s *Service) buildSessionFromToken(c *storage.Channel) (*connector.AuthSess
 		if err := json.Unmarshal([]byte(raw), &cred); err != nil {
 			return nil, fmt.Errorf("parse newapi token credential: %w", err)
 		}
+		token := strings.TrimSpace(cred.AccessToken)
+		userID := strings.TrimSpace(cred.UserID)
+		if token != "" && !strings.HasPrefix(token, "nap_") && userID == "" && strings.TrimSpace(cred.Cookie) == "" {
+			return nil, errors.New("旧版令牌需要填写用户 ID")
+		}
 		return &connector.AuthSession{
-			UserID:      cred.UserID,
-			Cookie:      cred.Cookie,
-			AccessToken: cred.AccessToken,
+			UserID:      userID,
+			Cookie:      strings.TrimSpace(cred.Cookie),
+			AccessToken: token,
 			ExpiresAt:   time.Now().Add(tokenSessionTTL),
 		}, nil
 	case storage.ChannelTypeSub2API:
@@ -674,7 +679,7 @@ func (s *Service) EnsureSession(
 				_ = s.Channels.SetLastError(c.ID, refreshErr.Error())
 				return nil, refreshErr
 			} else if ok {
-				return refreshed, nil
+				return s.bindRefreshPersist(c, refreshed), nil
 			}
 			msg := "token 已失效，请重新粘贴凭据：" + err.Error()
 			progress.Fail(ctx, progress.StageSession, msg)
@@ -700,14 +705,14 @@ func (s *Service) EnsureSession(
 			progress.Start(ctx, progress.StageSession, "校验已有会话…")
 			if err := conn.CheckAuth(ctx, resolved, session); err == nil {
 				progress.OK(ctx, progress.StageSession, "复用现有会话")
-				return session, nil
+				return s.bindRefreshPersist(c, session), nil
 			}
 			progress.OK(ctx, progress.StageSession, "会话校验失败，尝试刷新")
 		}
 		if refreshed, ok, err := s.refreshStoredSession(ctx, c, resolved, conn, session); err != nil {
 			return nil, err
 		} else if ok {
-			return refreshed, nil
+			return s.bindRefreshPersist(c, refreshed), nil
 		}
 	}
 	return s.login(ctx, c, resolved, conn)
@@ -864,7 +869,21 @@ func (s *Service) login(
 	}
 	_ = s.Channels.SetLastError(c.ID, "")
 	progress.OK(ctx, progress.StageLogin, "登录成功")
-	return session, nil
+	return s.bindRefreshPersist(c, session), nil
+}
+
+func (s *Service) bindRefreshPersist(c *storage.Channel, session *connector.AuthSession) *connector.AuthSession {
+	if c == nil || session == nil || c.CredentialMode == storage.CredentialModeToken {
+		return session
+	}
+	channelID := c.ID
+	session.PersistRefresh = func(updated *connector.AuthSession) error {
+		if updated == nil {
+			return errors.New("empty refreshed session")
+		}
+		return s.persistSession(channelID, updated)
+	}
+	return session
 }
 
 func (s *Service) persistSession(channelID uint, session *connector.AuthSession) error {
