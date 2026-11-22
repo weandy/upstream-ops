@@ -122,6 +122,9 @@ func TestPelicanDetectorExtractionAndValidation(t *testing.T) {
 	if err := d.ValidateParams(`{"variant":"original"}`); err != nil {
 		t.Fatalf("valid variant failed: %v", err)
 	}
+	if err := d.ValidateParams(`{"variant":"all-in-one"}`); err != nil {
+		t.Fatalf("legacy all-in-one should still validate: %v", err)
+	}
 	if err := d.ValidateParams(`{"variant":"invalid-x"}`); err == nil {
 		t.Fatal("expected invalid variant error")
 	}
@@ -152,8 +155,51 @@ func TestPelicanDetectorExtractionAndValidation(t *testing.T) {
 	if len(stubSVG.reqs) != 1 || stubSVG.reqs[0].MaxTokens != 4096 {
 		t.Fatalf("expected default pelican max_tokens=4096 for upstream compatibility, got %+v", stubSVG.reqs)
 	}
+	if !strings.Contains(stubSVG.reqs[0].Prompt, "```html") || strings.Contains(stubSVG.reqs[0].Prompt, "秦始皇") {
+		t.Fatalf("expected original html prompt, got %q", stubSVG.reqs[0].Prompt)
+	}
 	if !strings.Contains(res.ArtifactSVG, "<svg") || !strings.Contains(strings.ToLower(res.ArtifactSVG), "<!doctype html>") {
 		t.Fatalf("expected wrapped HTML containing svg, got %q", res.ArtifactSVG)
+	}
+	resLegacy, err := d.Run(context.Background(), stubSVG, DetectorRunRequest{
+		TargetID:   1,
+		ParamsJSON: `{"variant":"all-in-one"}`,
+		Request:    llmclient.Request{BaseURL: "https://a.test", APIKey: "sk-1", Model: "gpt-6.2-sol"},
+	})
+	if err != nil {
+		t.Fatalf("legacy all-in-one run: %v", err)
+	}
+	if resLegacy.Status != storage.IntelligenceStatusNormal {
+		t.Fatalf("legacy all-in-one status = %s", resLegacy.Status)
+	}
+	if !strings.Contains(stubSVG.reqs[len(stubSVG.reqs)-1].Prompt, "```html") {
+		t.Fatalf("legacy all-in-one prompt = %q", stubSVG.reqs[len(stubSVG.reqs)-1].Prompt)
+	}
+
+	override := "只画一只静止的鹈鹕，放在 html 代码块里。"
+	if _, err := d.Run(context.Background(), stubSVG, DetectorRunRequest{
+		TargetID:   1,
+		ParamsJSON: `{"version":"鹈鹕原版html","prompt":"` + override + `"}`,
+		Request:    llmclient.Request{BaseURL: "https://a.test", APIKey: "sk-1", Model: "gpt-6.2-sol"},
+	}); err != nil {
+		t.Fatalf("override run: %v", err)
+	}
+	if got := stubSVG.reqs[len(stubSVG.reqs)-1].Prompt; got != override {
+		t.Fatalf("override prompt = %q", got)
+	}
+
+	if _, err := d.Run(context.Background(), stubSVG, DetectorRunRequest{
+		TargetID:   1,
+		ParamsJSON: `{"version":"夜骑","versions":[{"name":"夜骑","prompt":"夜色里的鹈鹕"}]}`,
+		Request:    llmclient.Request{BaseURL: "https://a.test", APIKey: "sk-1", Model: "gpt-6.2-sol"},
+	}); err != nil {
+		t.Fatalf("custom version run: %v", err)
+	}
+	if got := stubSVG.reqs[len(stubSVG.reqs)-1].Prompt; got != "夜色里的鹈鹕" {
+		t.Fatalf("custom prompt = %q", got)
+	}
+	if err := d.ValidateParams(`{"version":"不存在"}`); err == nil {
+		t.Fatal("expected missing version error")
 	}
 
 	// 2. 无 SVG 内容 -> suspected

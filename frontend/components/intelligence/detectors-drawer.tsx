@@ -77,7 +77,73 @@ function buildDefaultParams(meta: DetectorMeta): Record<string, unknown> {
       out[f.key] = f.default
     }
   }
-  return out
+  return normalizePelicanParams(meta, out)
+}
+
+function normalizeSelectParams(
+  meta: DetectorMeta,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  const out = { ...params }
+  for (const field of meta.params_schema ?? []) {
+    if (field.type !== "select" || !field.options?.length) continue
+    const current = String(out[field.key] ?? "")
+    if (!field.options.includes(current)) {
+      out[field.key] = field.default ?? field.options[0]
+    }
+  }
+  return normalizePelicanParams(meta, out)
+}
+
+const pelicanBuiltinVersion = "鹈鹕原版html"
+
+interface PelicanVersion {
+  name: string
+  prompt: string
+}
+
+function pelicanVersions(params: Record<string, unknown>): PelicanVersion[] {
+  if (!Array.isArray(params.versions)) return []
+  return params.versions.flatMap((item) => {
+    if (!item || typeof item !== "object") return []
+    const row = item as { name?: unknown; prompt?: unknown }
+    const name = String(row.name ?? "").trim()
+    const prompt = String(row.prompt ?? "")
+    return name ? [{ name, prompt }] : []
+  })
+}
+
+function pelicanBuiltinPrompt(meta: DetectorMeta): string {
+  const field = meta.params_schema?.find((item) => item.key === "prompt")
+  return String(field?.default ?? "")
+}
+
+function normalizePelicanParams(
+  meta: DetectorMeta,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  if (meta.key !== "pelican") return params
+  const versions = pelicanVersions(params)
+  const names = new Set(versions.map((item) => item.name))
+  let version = String(params.version ?? "").trim()
+  if (!version) {
+    const legacy = String(params.variant ?? "").trim().toLowerCase()
+    version =
+      legacy === "original" || legacy === "all-in-one" || legacy === ""
+        ? pelicanBuiltinVersion
+        : String(params.variant ?? "").trim()
+  }
+  if (version !== pelicanBuiltinVersion && !names.has(version)) {
+    version = pelicanBuiltinVersion
+  }
+  const builtin = pelicanBuiltinPrompt(meta)
+  let prompt = String(params.prompt ?? "")
+  if (version !== pelicanBuiltinVersion) {
+    prompt = versions.find((item) => item.name === version)?.prompt ?? prompt
+  } else if (!prompt.trim()) {
+    prompt = builtin
+  }
+  return { ...params, version, prompt, versions }
 }
 
 function serializeParams(
@@ -101,6 +167,24 @@ function serializeParams(
       continue
     }
     out[field.key] = val
+  }
+  if (meta.key === "pelican") {
+    const builtin = pelicanBuiltinPrompt(meta).trim()
+    const version = String(params.version ?? pelicanBuiltinVersion).trim() || pelicanBuiltinVersion
+    const prompt = String(params.prompt ?? "").trim()
+    const versions = pelicanVersions(params).map((item) =>
+      item.name === version ? { ...item, prompt } : item,
+    )
+    out.version = version
+    if (version === pelicanBuiltinVersion) {
+      if (prompt && prompt !== builtin) out.prompt = prompt
+      else delete out.prompt
+      if (versions.length > 0) out.versions = versions
+    } else {
+      delete out.prompt
+      out.versions = versions
+    }
+    delete out.variant
   }
   return Object.keys(out).length > 0 ? JSON.stringify(out) : ""
 }
@@ -149,10 +233,10 @@ export function DetectorsDrawer({
             embed_visible: existing
               ? existing.embed_visible
               : meta.supports_embed,
-            params: {
+            params: normalizeSelectParams(meta, {
               ...buildDefaultParams(meta),
               ...parseParamsObject(existing?.params_json),
-            },
+            }),
           }
         }
         setRows(next)
@@ -178,7 +262,7 @@ export function DetectorsDrawer({
     })
   }
 
-  function updateParam(detectorKey: string, paramKey: string, value: unknown) {
+  function updateParams(detectorKey: string, patch: Record<string, unknown>) {
     setRows((prev) => {
       const cur = prev[detectorKey]
       if (!cur) return prev
@@ -186,10 +270,13 @@ export function DetectorsDrawer({
         ...prev,
         [detectorKey]: {
           ...cur,
-          params: { ...cur.params, [paramKey]: value },
+          params: { ...cur.params, ...patch },
         },
       }
     })
+  }
+  function updateParam(detectorKey: string, paramKey: string, value: unknown) {
+    updateParams(detectorKey, { [paramKey]: value })
   }
 
   function applyModelToAll(modelName: string) {
@@ -555,6 +642,13 @@ export function DetectorsDrawer({
                         插件专属参数
                       </p>
                       <div className="grid gap-2.5 sm:grid-cols-2">
+                        {meta.key === "pelican" ? (
+                          <PelicanVersionControls
+                            params={row.params}
+                            builtinPrompt={pelicanBuiltinPrompt(meta)}
+                            onChange={(patch) => updateParams(meta.key, patch)}
+                          />
+                        ) : null}
                         {meta.params_schema.map((field) => (
                           <DynamicParamControl
                             key={field.key}
@@ -673,6 +767,148 @@ function DynamicParamControl({
         <p className="text-[11px] leading-4 text-muted-foreground">
           {field.description}
         </p>
+      ) : null}
+    </div>
+  )
+}
+
+function PelicanVersionControls({
+  params,
+  builtinPrompt,
+  onChange,
+}: {
+  params: Record<string, unknown>
+  builtinPrompt: string
+  onChange: (patch: Record<string, unknown>) => void
+}) {
+  const [naming, setNaming] = useState(false)
+  const [draftName, setDraftName] = useState("")
+  const versions = pelicanVersions(params)
+  const version = String(params.version ?? pelicanBuiltinVersion)
+  const prompt = String(params.prompt ?? "")
+  const custom = version !== pelicanBuiltinVersion
+  const dirtyBuiltin = !custom && prompt.trim() !== builtinPrompt.trim()
+
+  function rememberCurrent(nextVersions = versions) {
+    if (!custom) return nextVersions
+    return nextVersions.map((item) =>
+      item.name === version ? { ...item, prompt } : item,
+    )
+  }
+
+  function selectVersion(next: string) {
+    const stored = rememberCurrent()
+    if (next === pelicanBuiltinVersion) {
+      const restored = String(params.builtin_prompt ?? "").trim()
+        ? String(params.builtin_prompt)
+        : builtinPrompt
+      onChange({
+        version: next,
+        versions: stored,
+        prompt: restored,
+        builtin_prompt: "",
+      })
+      return
+    }
+    onChange({
+      version: next,
+      versions: stored,
+      prompt: stored.find((item) => item.name === next)?.prompt ?? "",
+      builtin_prompt:
+        !custom && prompt !== builtinPrompt ? prompt : params.builtin_prompt ?? "",
+    })
+  }
+
+  function saveAs() {
+    const name = draftName.trim()
+    if (!name) return
+    if (name === pelicanBuiltinVersion || versions.some((item) => item.name === name)) {
+      toast.error("版本名称已存在")
+      return
+    }
+    if (!prompt.trim()) {
+      toast.error("题目不能为空")
+      return
+    }
+    onChange({
+      version: name,
+      versions: [...rememberCurrent(), { name, prompt: prompt.trim() }],
+      prompt,
+    })
+    setDraftName("")
+    setNaming(false)
+  }
+
+  function removeVersion() {
+    if (!custom) return
+    onChange({
+      version: pelicanBuiltinVersion,
+      versions: versions.filter((item) => item.name !== version),
+      prompt: builtinPrompt,
+    })
+  }
+
+  return (
+    <div className="space-y-1 sm:col-span-2">
+      <div className="flex items-center gap-1.5">
+        <Label className="shrink-0 text-xs">题型版本</Label>
+        <Select value={version} onValueChange={selectVersion}>
+          <SelectTrigger className="h-8 min-w-0 flex-1 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={pelicanBuiltinVersion}>{pelicanBuiltinVersion}</SelectItem>
+            {versions.map((item) => (
+              <SelectItem key={item.name} value={item.name}>
+                {item.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {dirtyBuiltin ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-8 shrink-0 px-2 text-xs"
+            onClick={() => onChange({ prompt: builtinPrompt })}
+          >
+            恢复默认
+          </Button>
+        ) : null}
+        {custom ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-8 shrink-0 px-2 text-xs"
+            onClick={removeVersion}
+          >
+            删除
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-8 shrink-0 px-2 text-xs"
+          onClick={() => setNaming((open) => !open)}
+        >
+          另存
+        </Button>
+      </div>
+      {naming ? (
+        <div className="flex items-center gap-1.5">
+          <Input
+            className="h-8 text-xs"
+            value={draftName}
+            placeholder="新版本名称"
+            onChange={(e) => setDraftName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveAs()
+            }}
+          />
+          <Button type="button" variant="outline" className="h-8 px-2 text-xs" onClick={saveAs}>
+            确认
+          </Button>
+        </div>
       ) : null}
     </div>
   )

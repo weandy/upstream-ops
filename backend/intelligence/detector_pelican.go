@@ -14,13 +14,13 @@ import (
 
 const (
 	pelicanMaxArtifactBytes = 256 << 10
+	pelicanBuiltinVersion   = "鹈鹕原版html"
+	pelicanMaxPromptRunes   = 8000
+	pelicanMaxVersions      = 20
 	pelicanPreamble         = "不使用任何工具，也不要创建或修改文件，直接在回复中完成以下任务：\n\n"
 	pelicanPromptOriginal   = pelicanPreamble +
 		"创建一个完整的 HTML 文件，使用内联 SVG 绘制一个鹈鹕骑自行车的 2D 动画，不要使用任何外部图片、脚本或字体资源。\n\n" +
 		"请在一个 ```html 代码块中给出完整的 HTML 文件。"
-	pelicanPromptAllInOne = pelicanPreamble +
-		"做一张精细的 SVG 图片，内容是鹈鹕骑着自行车在孙悟空开的大型飞机机翼上骑行，鹈鹕展开翅膀托着骑在北极熊上打螺丝的秦始皇，同时在画面中标出标准糖果逻辑题答案 21。\n\n" +
-		"不要使用任何外部资源，请在一个 ```svg 代码块中给出完整的 SVG 文件。"
 )
 
 var (
@@ -28,9 +28,94 @@ var (
 	rawSVGBlockRe     = regexp.MustCompile(`(?is)<svg\b[^>]*>.*?</svg>`)
 )
 
+type pelicanVersion struct {
+	Name   string `json:"name"`
+	Prompt string `json:"prompt"`
+}
+
 type pelicanParams struct {
-	Variant   string `json:"variant,omitempty"` // original | all-in-one
-	MaxTokens int    `json:"max_tokens,omitempty"`
+	Variant   string           `json:"variant,omitempty"`
+	Version   string           `json:"version,omitempty"`
+	Prompt    string           `json:"prompt,omitempty"`
+	Versions  []pelicanVersion `json:"versions,omitempty"`
+	MaxTokens int              `json:"max_tokens,omitempty"`
+}
+
+func (p pelicanParams) selectedName() string {
+	if name := strings.TrimSpace(p.Version); name != "" {
+		return name
+	}
+	if name := strings.TrimSpace(p.Variant); name != "" {
+		return name
+	}
+	return pelicanBuiltinVersion
+}
+
+func knownPelicanVariant(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "original", "all-in-one", "鹈鹕原版html":
+		return true
+	default:
+		return false
+	}
+}
+
+func validatePelicanParams(p pelicanParams) error {
+	if len(p.Versions) > pelicanMaxVersions {
+		return fmt.Errorf("pelican versions exceed %d", pelicanMaxVersions)
+	}
+	seen := map[string]struct{}{}
+	for _, item := range p.Versions {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			return errors.New("pelican version name is empty")
+		}
+		if knownPelicanVariant(name) {
+			return fmt.Errorf("pelican version %q is reserved", name)
+		}
+		if _, ok := seen[name]; ok {
+			return fmt.Errorf("duplicate pelican version %q", name)
+		}
+		seen[name] = struct{}{}
+		if strings.TrimSpace(item.Prompt) == "" {
+			return fmt.Errorf("pelican version %q has empty prompt", name)
+		}
+		if runeLen(item.Prompt) > pelicanMaxPromptRunes {
+			return fmt.Errorf("pelican version %q prompt is too long", name)
+		}
+	}
+	if runeLen(p.Prompt) > pelicanMaxPromptRunes {
+		return errors.New("pelican prompt is too long")
+	}
+	name := p.selectedName()
+	if knownPelicanVariant(name) {
+		return nil
+	}
+	if _, ok := seen[name]; !ok {
+		return fmt.Errorf("unsupported pelican variant %q", name)
+	}
+	return nil
+}
+
+func resolvePelicanPrompt(p pelicanParams) (string, string) {
+	name := p.selectedName()
+	if knownPelicanVariant(name) {
+		prompt := strings.TrimSpace(p.Prompt)
+		if prompt == "" || prompt == pelicanPromptOriginal {
+			return pelicanBuiltinVersion, pelicanPromptOriginal
+		}
+		return pelicanBuiltinVersion, prompt
+	}
+	for _, item := range p.Versions {
+		if strings.TrimSpace(item.Name) == name {
+			return name, strings.TrimSpace(item.Prompt)
+		}
+	}
+	return pelicanBuiltinVersion, pelicanPromptOriginal
+}
+
+func runeLen(s string) int {
+	return len([]rune(s))
 }
 
 // PelicanDetector 「画鹈鹕」SVG 空间推理与视觉直观检测插件。
@@ -45,7 +130,7 @@ func (PelicanDetector) Meta() DetectorMeta {
 		Key:                DetectorKeyPelican,
 		Name:               "画鹈鹕 SVG",
 		Category:           DetectorCategoryIntelligence,
-		Description:        "定时请求模型绘制「鹈鹕骑自行车」SVG 动画，结果落库并通过双层沙箱 iframe 隔离渲染，直观观察模型空间与编码能力。",
+		Description:        "定时请求模型绘制「鹈鹕骑自行车」的 HTML 动画，结果落库并通过双层沙箱 iframe 隔离渲染。",
 		DefaultIntervalSec: 3600,
 		DefaultTimeoutSec:  180,
 		DefaultAlertThresh: 3,
@@ -53,12 +138,10 @@ func (PelicanDetector) Meta() DetectorMeta {
 		SupportsReasoning:  true,
 		ParamsSchema: []ParamField{
 			{
-				Key:         "variant",
-				Label:       "题型版本",
-				Type:        "select",
-				Default:     "original",
-				Options:     []string{"original", "all-in-one"},
-				Description: "original 为经典鹈鹕骑自行车动画；all-in-one 为复杂多元素场景 SVG。",
+				Key:     "prompt",
+				Label:   "题目",
+				Type:    "textarea",
+				Default: pelicanPromptOriginal,
 			},
 			{
 				Key:         "max_tokens",
@@ -80,10 +163,8 @@ func (PelicanDetector) ValidateParams(rawJSON string) error {
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
 		return fmt.Errorf("invalid pelican params: %w", err)
 	}
-	switch strings.ToLower(strings.TrimSpace(p.Variant)) {
-	case "", "original", "all-in-one":
-	default:
-		return fmt.Errorf("unsupported pelican variant %q (want original or all-in-one)", p.Variant)
+	if err := validatePelicanParams(p); err != nil {
+		return err
 	}
 	if p.MaxTokens < 0 || p.MaxTokens > 32768 {
 		return errors.New("max_tokens must be between 0 and 32768")
@@ -92,27 +173,25 @@ func (PelicanDetector) ValidateParams(rawJSON string) error {
 }
 
 func (PelicanDetector) Run(ctx context.Context, client LLMClient, req DetectorRunRequest) (*DetectorRunResult, error) {
-	variant := "original"
+	variant := pelicanBuiltinVersion
 	maxTokens := 4096
+	prompt := pelicanPromptOriginal
 	if raw := strings.TrimSpace(req.ParamsJSON); raw != "" && raw != "{}" {
 		var p pelicanParams
 		if err := json.Unmarshal([]byte(raw), &p); err != nil {
 			return nil, fmt.Errorf("invalid pelican params: %w", err)
 		}
-		if v := strings.ToLower(strings.TrimSpace(p.Variant)); v != "" {
-			variant = v
+		if err := validatePelicanParams(p); err != nil {
+			return nil, err
 		}
+		variant, prompt = resolvePelicanPrompt(p)
 		if p.MaxTokens > 0 {
 			maxTokens = p.MaxTokens
 		}
 	}
 
 	llmReq := req.Request
-	if variant == "all-in-one" {
-		llmReq.Prompt = pelicanPromptAllInOne
-	} else {
-		llmReq.Prompt = pelicanPromptOriginal
-	}
+	llmReq.Prompt = prompt
 	if llmReq.MaxTokens <= 0 {
 		llmReq.MaxTokens = maxTokens
 	}

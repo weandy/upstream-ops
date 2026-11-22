@@ -26,7 +26,7 @@ The `liveness` plugin sends a short sentence every 60 seconds by default, with a
 | --- | --- | --- | --- |
 | `candy` | 3600s | 90s | Candy logic puzzle. Only a final standalone integer `21` passes. Values such as `121`, `21.0`, or `21 or 22` fail |
 | `lmfpd` | 3600s | 120s | Three numeric-sequence rounds, ranked against the whole reference bank. An empty `claimed_model` uses the model selected on the target. Rank 1 is normal; a bank hit that is not rank 1 is suspected degradation; a name missing from the bank still reports the closest model. Names are normalized, with fixed aliases for `gpt-6.1-sol` and `deepseek-flash` |
-| `pelican` | 3600s | 180s | Asks the model to reply with an HTML/SVG drawing of a pelican on a bicycle, without tools. `original` is the classic animation; `all-in-one` is a denser scene. Only a complete document up to 256KiB is stored |
+| `pelican` | 3600s | 180s | Asks the model to reply with the classic pelican-on-a-bicycle HTML animation (inline SVG, no tools). Only a complete document up to 256KiB is stored |
 | `custom_prompt` | 3600s | 90s | Custom prompt with `exact_number`, `contains`, or `regex`, plus an optional forbidden string. Disabled configs do not block saving other plugins; enabling one requires both prompt and expected answer. It is not shown on the public page |
 
 Intelligence plugins accept `reasoning_effort`. For Anthropic `/v1/messages`, older Claude models use `thinking.budget_tokens`, while 4.6+ and 5.x use adaptive effort. `none` disables thinking, and `omit` sends no thinking field.
