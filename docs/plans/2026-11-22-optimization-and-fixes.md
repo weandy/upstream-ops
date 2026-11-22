@@ -37,31 +37,31 @@
 
 ### 板块 1（P0）：并发、正确性与边界缺陷修复
 
-- [ ] **P0-1：修复 `computeSharedCacheKey` 自定义请求头大小写查找错位**
+- [x] **P0-1：修复 `computeSharedCacheKey` 自定义请求头大小写查找错位**
   - **位置**：`backend/intelligence/runner.go`（`computeSharedCacheKey`）
-  - **问题**：排序后的 `headerKeys` 为小写，但拼接时读取 `ep.ExtraHeaders[k]`，导致含大写字母的自定义 Header 值恒为空，跨目标错误复用缓存。
+  - **问题**：排序后的 `headerKeys` 为小写，但拼接时却用 `ep.ExtraHeaders[k]` 取值，导致含大写字母的自定义 Header 值恒为空，跨目标错误复用缓存。
   - **方案**：先构造 `lowerKey -> trimmedValue` 规范化映射，再排序拼接。
   - **验证**：`backend/intelligence/runner_test.go` 新增大小写 Header 区分与规范化单测。
 
-- [ ] **P0-2：修复两处自研 `singleflight` 缺少 `defer` 防 panic 死锁，并隔离手动与定时 `ctx` 取消**
+- [x] **P0-2：修复两处自研 `singleflight` 缺少 `defer` 防 panic 死锁，并隔离手动与定时 `ctx` 取消**
   - **位置**：`backend/intelligence/runner.go`（`inflightGroup.Do`、`ExecuteDetector`）、`backend/embed/cache.go`（`singleflightGroup.Do`）
   - **问题**：`fn()` 若 panic 会跳过 `wg.Done()` 与 `delete(g.m, key)`，引发同 key 永久死锁；手动探测若与定时任务合流，一方取消 `ctx` 会误伤另一方。
   - **方案**：为 `inflightGroup.Do` 与 `singleflightGroup.Do` 增加 `defer` 保证异常必释放锁与 map 条目；`ExecuteDetector` 手动探测跳过 `inflight` 合并（遵循「手动运行独立发请求」语义），或定时合流时与调用方解耦超时。
   - **验证**：新增 panic 恢复防死锁单测与手动/定时隔离单测，通过 `go test -race`。
 
-- [ ] **P0-3：修复 `dispatchDueJobs` 先推进 `next_run_at` 再抢并发槽导致的漏轮问题**
+- [x] **P0-3：修复 `dispatchDueJobs` 先推进 `next_run_at` 再抢并发槽导致的漏轮问题**
   - **位置**：`backend/intelligence/runner.go`（`dispatchDueJobs`）
   - **问题**：先写库推进 `next_run_at` 再等待 `sem`，若并发满载期间触发 `Reconfigure` 取消 `tickCtx`，该任务已改写下次执行时间却未实际运行，白白跳过一整轮。
   - **方案**：先 `select` 拿到 `sem`（或响应 `tickCtx.Done()` 返回），拿到槽位后再调用 `UpdateSchedule` 推进 `next_run_at`；若 `UpdateSchedule` 失败则释放 `sem`。
   - **验证**：新增 `Reconfigure`/取消时未拿到槽位的任务保留原 `next_run_at` 的单测。
 
-- [ ] **P0-4：修复 `SaveTargetDetectors` 缩短检测间隔后未收敛 `next_run_at`**
+- [x] **P0-4：修复 `SaveTargetDetectors` 缩短检测间隔后未收敛 `next_run_at`**
   - **位置**：`backend/intelligence/runner.go`（`SaveTargetDetectors`）
   - **问题**：注释说明「从禁用切换为启用、或缩短间隔时，立即安排下一轮执行」，但实现漏掉了缩短间隔分支。
   - **方案**：当已启用插件将 `interval` 调小且原 `next_run_at` 晚于 `now + newInterval` 时，收敛 `next_run_at`（如 `last_run_at + newInterval`，若已过期则设为 `now`）。
   - **验证**：新增缩短间隔自动收敛 `next_run_at` 且不破坏原锚点语义的单测。
 
-- [ ] **P0-5：修复 `runtimeconfig.Manager` 并发热重载竞态与停机遗漏最新 `scheduler`**
+- [x] **P0-5：修复 `runtimeconfig.Manager` 并发热重载竞态与停机遗漏最新 `scheduler`**
   - **位置**：`backend/runtimeconfig/runtime.go`、`cmd/server/main.go`
   - **问题**：`ApplyFromFile()` 无串行互斥、在 `newScheduler.Start()` 失败前提前修改各服务导致半应用；`main.go` 停机 `defer sch.Stop()` 只停初始实例而非热重载后的最新实例。
   - **方案**：增加 `applyMu` 串行化 `ApplyFromFile()`；将校验与 `newScheduler.Start()` 前置，全部成功后再切换各服务配置与替换 `m.scheduler`；暴露 `runtimeMgr.Stop()` 在 `main.go` 中优雅停止最新调度器。

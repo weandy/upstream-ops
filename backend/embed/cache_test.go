@@ -224,6 +224,40 @@ func TestBoundedCacheEvictsWhenFull(t *testing.T) {
 	}
 }
 
+func TestSingleflightGroupRecoversFromPanicWithoutDeadlock(t *testing.T) {
+	var sf singleflightGroup[string]
+	panicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		_, _, _ = sf.Do("k", func() (string, error) {
+			panic("embed boom")
+		})
+	}()
+	if !panicked {
+		t.Fatal("expected panic to propagate")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		v, shared, err := sf.Do("k", func() (string, error) {
+			return "recovered", nil
+		})
+		if err != nil || shared || v != "recovered" {
+			t.Errorf("unexpected follow-up result: v=%q shared=%v err=%v", v, shared, err)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("deadlock detected after panic in singleflightGroup.Do")
+	}
+}
+
 func BenchmarkEmbedOverviewCache(b *testing.B) {
 	svc, router, _ := setupEmbedBenchmarkFixture(b)
 	off := false

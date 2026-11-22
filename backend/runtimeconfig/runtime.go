@@ -22,6 +22,7 @@ type SchedulerFactory func(config.SchedulerConfig, config.ProxyConfig) *schedule
 
 type Manager struct {
 	mu               sync.RWMutex
+	applyMu          sync.Mutex
 	configPath       string
 	securitySecret   string
 	log              *slog.Logger
@@ -142,6 +143,9 @@ func (m *Manager) AuthMiddleware() gin.HandlerFunc {
 }
 
 func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+
 	m.mu.RLock()
 	path := m.configPath
 	secret := m.securitySecret
@@ -161,6 +165,12 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 
 	authSvc, err := buildAuth(cfg.Auth, secret)
 	if err != nil {
+		return nil, err
+	}
+
+	// 先构建并启动新 scheduler，确保所有可能失败的步骤完成后再统一切换各子服务配置，避免半应用状态。
+	newScheduler := factory(cfg.Scheduler, cfg.Proxy)
+	if err := newScheduler.Start(); err != nil {
 		return nil, err
 	}
 
@@ -210,11 +220,6 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 		embedSvc.UpdateRuntimeConfig(cfg.Embed.WithDefaults())
 	}
 
-	newScheduler := factory(cfg.Scheduler, cfg.Proxy)
-	if err := newScheduler.Start(); err != nil {
-		return nil, err
-	}
-
 	m.mu.Lock()
 	m.auth = authSvc
 	m.scheduler = newScheduler
@@ -239,6 +244,21 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 		AppliedSections: sections,
 		Message:         "app、auth、scheduler、notifications、retention、proxy、upstream、gateway、intelligence、embed 已立即生效",
 	}, nil
+}
+
+// Stop 优雅停止当前生效的最新 scheduler（包含热重载替换后的实例），支持幂等调用。
+func (m *Manager) Stop() {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+
+	m.mu.Lock()
+	sch := m.scheduler
+	m.scheduler = nil
+	m.mu.Unlock()
+
+	if sch != nil {
+		sch.Stop()
+	}
 }
 
 func buildAuth(cfg config.AuthConfig, securitySecret string) (*auth.Service, error) {

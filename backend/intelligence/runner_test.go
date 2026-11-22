@@ -473,3 +473,150 @@ func TestScheduledBackoffAndResetOnTargetUpdate(t *testing.T) {
 		t.Fatalf("expected backoff state reset after UpdateTarget, got %+v", afterReset)
 	}
 }
+
+func TestComputeSharedCacheKeyHandlesMixedCaseHeaders(t *testing.T) {
+	base := resolvedEndpoint{
+		BaseURL:   "https://api.example.com",
+		APIKey:    "sk-test-key",
+		Protocol:  storage.ProbeProtocolOpenAIChat,
+		AuthStyle: storage.GatewayProviderAuthBearer,
+	}
+	epA := base
+	epA.ExtraHeaders = map[string]string{"X-Tenant-ID": "alpha"}
+	epB := base
+	epB.ExtraHeaders = map[string]string{"X-Tenant-ID": "beta"}
+	epALower := base
+	epALower.ExtraHeaders = map[string]string{"x-tenant-id": "alpha"}
+
+	kA := computeSharedCacheKey(&epA, DetectorKeyCandy, "gpt-6.2-sol", "omit", "")
+	kB := computeSharedCacheKey(&epB, DetectorKeyCandy, "gpt-6.2-sol", "omit", "")
+	kALower := computeSharedCacheKey(&epALower, DetectorKeyCandy, "gpt-6.2-sol", "omit", "")
+
+	if kA == kB {
+		t.Fatalf("expected distinct cache keys for different mixed-case header values, both got %s", kA)
+	}
+	if kA != kALower {
+		t.Fatalf("expected case-insensitive header name normalization to match, got %s vs %s", kA, kALower)
+	}
+}
+
+func TestInflightGroupRecoversFromPanicWithoutDeadlock(t *testing.T) {
+	var g inflightGroup
+	panicked := false
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+			}
+		}()
+		_, _, _ = g.Do("boom", func() (*DetectorRunResult, error) {
+			panic("unexpected boom")
+		})
+	}()
+	if !panicked {
+		t.Fatal("expected panic to propagate to caller")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		res, shared, err := g.Do("boom", func() (*DetectorRunResult, error) {
+			return &DetectorRunResult{Status: storage.IntelligenceStatusNormal}, nil
+		})
+		if err != nil || shared || res == nil || res.Status != storage.IntelligenceStatusNormal {
+			t.Errorf("unexpected follow-up Do result: res=%+v shared=%v err=%v", res, shared, err)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("deadlock detected after panic in inflightGroup.Do")
+	}
+}
+
+func TestDispatchDueJobsDoesNotAdvanceScheduleBeforeAcquiringSlot(t *testing.T) {
+	db := openIntelTestDB(t)
+	cipher, _ := crypto.NewCipher("slot-order-secret-32-bytes!!!!!!!")
+	stub := &countingStubLLM{
+		resp: &llmclient.Response{
+			Content:    "ok",
+			Complete:   true,
+			HTTPStatus: 200,
+			ErrorClass: llmclient.ErrorClassOK,
+		},
+	}
+	svc := NewService(db, cipher, nil, stub, nil)
+	target, err := svc.CreateTarget(TargetInput{
+		Name: "slot-target", SourceKind: storage.ProbeSourceDirect,
+		BaseURL: "https://slot.example.com", APIKey: "sk-slot-1", Protocol: storage.ProbeProtocolOpenAIChat, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if _, err := svc.SaveTargetDetectors(target.ID, []DetectorConfigInput{
+		{DetectorKey: DetectorKeyCandy, Enabled: true, ModelName: "gpt-6.2-sol", IntervalSeconds: 3600},
+	}); err != nil {
+		t.Fatalf("save detector: %v", err)
+	}
+	dueAt := time.Now().UTC().Add(-time.Minute)
+	cfgBefore, _ := svc.Configs.Find(target.ID, DetectorKeyCandy)
+	if err := svc.Configs.UpdateSchedule(cfgBefore.ID, dueAt.Add(-time.Hour), dueAt); err != nil {
+		t.Fatalf("seed due schedule: %v", err)
+	}
+
+	// 占满信号量并在短时间后取消 tickCtx，模拟并发满载时触发 Reconfigure。
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	tickCtx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+
+	svc.dispatchDueJobs(tickCtx, context.Background(), sem)
+
+	cfgAfter, err := svc.Configs.Find(target.ID, DetectorKeyCandy)
+	if err != nil {
+		t.Fatalf("find config after dispatch: %v", err)
+	}
+	if cfgAfter.NextRunAt == nil || cfgAfter.NextRunAt.After(time.Now().UTC()) {
+		t.Fatalf("expected NextRunAt to remain due when slot was not acquired, got %v", cfgAfter.NextRunAt)
+	}
+	if stub.calls.Load() != 0 {
+		t.Fatalf("expected 0 executions when slot full, got %d", stub.calls.Load())
+	}
+}
+
+func TestSaveTargetDetectorsShorteningIntervalPullsNextRunForward(t *testing.T) {
+	db := openIntelTestDB(t)
+	cipher, _ := crypto.NewCipher("shorten-interval-secret-32-bytes!")
+	svc := NewService(db, cipher, nil, nil, nil)
+	target, err := svc.CreateTarget(TargetInput{
+		Name: "shorten-target", SourceKind: storage.ProbeSourceDirect,
+		BaseURL: "https://shorten.example.com", APIKey: "sk-short-1", Protocol: storage.ProbeProtocolOpenAIChat, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if _, err := svc.SaveTargetDetectors(target.ID, []DetectorConfigInput{
+		{DetectorKey: DetectorKeyLiveness, Enabled: true, ModelName: "gpt-6.2-sol", IntervalSeconds: 3600},
+	}); err != nil {
+		t.Fatalf("save initial detector: %v", err)
+	}
+	cfg, _ := svc.Configs.Find(target.ID, DetectorKeyLiveness)
+	now := time.Now().UTC()
+	if err := svc.Configs.UpdateSchedule(cfg.ID, now.Add(-10*time.Minute), now.Add(50*time.Minute)); err != nil {
+		t.Fatalf("set future schedule: %v", err)
+	}
+
+	// 将间隔从 3600s 缩短为 60s，NextRunAt 必须收敛，不再滞留 50 分钟后。
+	if _, err := svc.SaveTargetDetectors(target.ID, []DetectorConfigInput{
+		{DetectorKey: DetectorKeyLiveness, Enabled: true, ModelName: "gpt-6.2-sol", IntervalSeconds: 60},
+	}); err != nil {
+		t.Fatalf("save shortened detector: %v", err)
+	}
+	updated, err := svc.Configs.Find(target.ID, DetectorKeyLiveness)
+	if err != nil {
+		t.Fatalf("find updated config: %v", err)
+	}
+	if updated.NextRunAt == nil || updated.NextRunAt.After(time.Now().UTC().Add(70*time.Second)) {
+		t.Fatalf("expected NextRunAt pulled forward after shortening interval to 60s, got %v", updated.NextRunAt)
+	}
+}

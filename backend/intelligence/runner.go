@@ -133,10 +133,27 @@ func (s *Service) SaveTargetDetectors(targetID uint, items []DetectorConfigInput
 		var nextRunAt *time.Time
 		if prev, hasPrev := existingMap[key]; hasPrev {
 			nextRunAt = prev.NextRunAt
-			// 从禁用切换为启用、或缩短间隔时，立即安排下一轮执行。
+			// 从禁用切换为启用、或缺少计划时间时，立即安排下一轮执行。
 			if in.Enabled && (!prev.Enabled || nextRunAt == nil) {
 				t := now
 				nextRunAt = &t
+			} else if in.Enabled && interval < prev.IntervalSeconds && nextRunAt != nil {
+				// 缩短间隔时收敛下一次执行时间：优先基于原 last_run_at 锚点重算，已到期则立即执行。
+				newDur := time.Duration(interval) * time.Second
+				capNext := now.Add(newDur)
+				if nextRunAt.After(capNext) {
+					candidate := now
+					if prev.LastRunAt != nil {
+						anchored := prev.LastRunAt.UTC().Add(newDur)
+						if anchored.After(now) {
+							candidate = anchored
+						}
+					}
+					if candidate.After(capNext) {
+						candidate = capNext
+					}
+					nextRunAt = &candidate
+				}
 			}
 		} else if in.Enabled {
 			t := now
@@ -553,18 +570,20 @@ func (s *Service) dispatchDueJobs(tickCtx, jobCtx context.Context, sem chan stru
 		if interval < MinDetectorIntervalSec*time.Second {
 			interval = MinDetectorIntervalSec * time.Second
 		}
-		// 抢先推进 next_run_at，避免下个 Tick 重复拾取仍在执行中的慢任务。
-		if err := s.Configs.UpdateSchedule(cfg.ID, now, now.Add(interval)); err != nil {
-			if s.Log != nil {
-				s.Log.Warn("advance probe schedule failed", "config_id", cfg.ID, "err", err)
-			}
-			continue
-		}
-
+		// 先获取并发槽，避免并发满载且 tickCtx 被取消时提前推进 next_run_at 导致漏跑一整轮。
 		select {
 		case sem <- struct{}{}:
 		case <-tickCtx.Done():
 			return
+		}
+
+		// 拿到槽位后再抢先推进 next_run_at，避免下个 Tick 重复拾取仍在执行中的慢任务。
+		if err := s.Configs.UpdateSchedule(cfg.ID, now, now.Add(interval)); err != nil {
+			<-sem
+			if s.Log != nil {
+				s.Log.Warn("advance probe schedule failed", "config_id", cfg.ID, "err", err)
+			}
+			continue
 		}
 
 		s.jobWG.Add(1)
@@ -610,16 +629,24 @@ func (s *Service) lockTargetDetector(targetID uint, key string) func() {
 func computeSharedCacheKey(ep *resolvedEndpoint, detectorKey, model, effort, params string) string {
 	keyHash := sha256.Sum256([]byte(ep.APIKey))
 	canonicalParams := canonicalizeJSON(params)
+	normalizedHeaders := make(map[string]string, len(ep.ExtraHeaders))
 	headerKeys := make([]string, 0, len(ep.ExtraHeaders))
-	for k := range ep.ExtraHeaders {
-		headerKeys = append(headerKeys, strings.ToLower(strings.TrimSpace(k)))
+	for k, v := range ep.ExtraHeaders {
+		nk := strings.ToLower(strings.TrimSpace(k))
+		if nk == "" {
+			continue
+		}
+		if _, exists := normalizedHeaders[nk]; !exists {
+			headerKeys = append(headerKeys, nk)
+		}
+		normalizedHeaders[nk] = strings.TrimSpace(v)
 	}
 	sort.Strings(headerKeys)
 	var headerPart strings.Builder
 	for _, k := range headerKeys {
 		headerPart.WriteString(k)
 		headerPart.WriteByte('=')
-		headerPart.WriteString(ep.ExtraHeaders[k])
+		headerPart.WriteString(normalizedHeaders[k])
 		headerPart.WriteByte(';')
 	}
 	raw := strings.Join([]string{
@@ -701,12 +728,19 @@ func (g *inflightGroup) Do(key string, fn func() (*DetectorRunResult, error)) (*
 	g.m[key] = c
 	g.mu.Unlock()
 
-	c.val, c.err = fn()
-	c.wg.Done()
+	normalReturn := false
+	defer func() {
+		if !normalReturn {
+			c.err = errors.New("inflight detector execution panicked")
+		}
+		g.mu.Lock()
+		delete(g.m, key)
+		g.mu.Unlock()
+		c.wg.Done()
+	}()
 
-	g.mu.Lock()
-	delete(g.m, key)
-	g.mu.Unlock()
+	c.val, c.err = fn()
+	normalReturn = true
 
 	if c.val == nil {
 		return nil, false, c.err

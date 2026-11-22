@@ -127,12 +127,19 @@ func (g *singleflightGroup[V]) Do(key string, fn func() (V, error)) (V, bool, er
 	g.m[key] = c
 	g.mu.Unlock()
 
-	c.val, c.err = fn()
-	c.wg.Done()
+	normalReturn := false
+	defer func() {
+		if !normalReturn {
+			c.err = errors.New("singleflight loader panicked")
+		}
+		g.mu.Lock()
+		delete(g.m, key)
+		g.mu.Unlock()
+		c.wg.Done()
+	}()
 
-	g.mu.Lock()
-	delete(g.m, key)
-	g.mu.Unlock()
+	c.val, c.err = fn()
+	normalReturn = true
 
 	return c.val, false, c.err
 }

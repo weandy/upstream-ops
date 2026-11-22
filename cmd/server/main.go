@@ -158,7 +158,6 @@ func main() {
 		log.Error("start scheduler failed", "err", err)
 		os.Exit(1)
 	}
-	defer sch.Stop()
 
 	runtimeMgr := runtimeconfig.New(
 		resolvedConfigPath,
@@ -174,6 +173,7 @@ func main() {
 		cfg.Gateway,
 		schedulerFactory,
 	)
+	defer runtimeMgr.Stop()
 	runtimeMgr.SetIntelligenceService(intelligenceSvc)
 	runtimeMgr.SetEmbedService(embedSvc)
 

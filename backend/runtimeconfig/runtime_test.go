@@ -237,3 +237,62 @@ func TestApplyFromFileReconfiguresIntelligenceRunnerAndEmbedConfig(t *testing.T)
 		t.Fatalf("expected SnapshotBuildCount=2 after hot-disabling cache (TTL=0), got %d", got)
 	}
 }
+
+func TestApplyFromFileFailureDoesNotMutateLiveConfigAndStopStopsLatestScheduler(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	// 写入非法 cron，使 newScheduler.Start() 失败，验证之前生效的 upstream/dispatcher 配置不被半应用污染。
+	badCfg := &config.Config{
+		Scheduler: config.SchedulerConfig{
+			BalanceCron: "not-a-valid-cron",
+		},
+		Upstream: config.UpstreamConfig{
+			TimeoutSeconds: 99,
+			UserAgent:      "poisoned-agent",
+		},
+	}
+	if err := config.Save(path, badCfg); err != nil {
+		t.Fatalf("save bad config: %v", err)
+	}
+
+	channelSvc := channel.NewService(nil, nil, nil, nil, nil, nil)
+	initUpstream := config.UpstreamConfig{TimeoutSeconds: 30, UserAgent: "clean-agent"}
+	channelSvc.UpdateUpstreamConfig(initUpstream)
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := New(
+		path, "", log, nil, channelSvc, nil, nil, nil,
+		config.ProxyConfig{}, initUpstream, config.GatewayConfig{},
+		func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
+			return scheduler.New(scfg, nil, nil, nil, nil, nil, nil, nil, nil, pcfg, log)
+		},
+	)
+
+	if _, err := mgr.ApplyFromFile(); err == nil {
+		t.Fatal("expected ApplyFromFile to fail on invalid cron")
+	}
+	conn := &fakeHTTPConfigConnector{}
+	channelSvc.ApplyHTTPConfig(conn)
+	if conn.cfg.UserAgent != "clean-agent" || conn.cfg.Timeout != 30*time.Second {
+		t.Fatalf("failed ApplyFromFile mutated channelSvc live config: %+v", conn.cfg)
+	}
+
+	// 再写入有效配置并热更新，随后调用 mgr.Stop() 应安全清空并停止最新 scheduler。
+	goodCfg := &config.Config{
+		Scheduler: config.SchedulerConfig{},
+		Upstream: config.UpstreamConfig{
+			TimeoutSeconds: 40,
+			UserAgent:      "updated-agent",
+		},
+	}
+	if err := config.Save(path, goodCfg); err != nil {
+		t.Fatalf("save good config: %v", err)
+	}
+	if _, err := mgr.ApplyFromFile(); err != nil {
+		t.Fatalf("ApplyFromFile good config: %v", err)
+	}
+	mgr.Stop()
+	// 再次 Stop 必须幂等不 panic。
+	mgr.Stop()
+}
