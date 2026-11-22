@@ -19,9 +19,7 @@ RUN corepack enable && corepack prepare pnpm@10.4.0 --activate
 
 # 先拷依赖清单走缓存层
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
-# 不用 --frozen-lockfile：lockfile 不严格匹配时只警告不报错；
-# 在 CI 里如果发现 lockfile 已经稳定可信，可以改回 --frozen-lockfile 锁定可复现性。
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 # 再拷源码，build 产物在 /web/dist
 COPY frontend/ ./
@@ -50,9 +48,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # ---------- Stage 3: 运行时 ----------
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata wget && \
-    mkdir -p /app/data
+RUN apk add --no-cache ca-certificates tzdata wget su-exec && \
+    addgroup -S -g 1000 upstreamops && \
+    adduser -S -u 1000 -G upstreamops upstreamops && \
+    mkdir -p /app/data && \
+    chown -R upstreamops:upstreamops /app
 WORKDIR /app
 COPY --from=go-builder /out/upstream-ops /usr/local/bin/upstream-ops
+RUN printf '#!/bin/sh\nset -e\nif [ "$(id -u)" = "0" ]; then\n  chown -R upstreamops:upstreamops /app/data 2>/dev/null || true\n  exec su-exec upstreamops /usr/local/bin/upstream-ops "$@"\nfi\nexec /usr/local/bin/upstream-ops "$@"\n' > /usr/local/bin/docker-entrypoint.sh && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh
 EXPOSE 8418
-ENTRYPOINT ["upstream-ops"]
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
+    CMD wget -q -O- http://127.0.0.1:8418/healthz >/dev/null || exit 1
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

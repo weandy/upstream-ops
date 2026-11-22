@@ -16,9 +16,9 @@ The scheduler scans due jobs every 5 seconds by default (`intelligence.tickInter
 
 Intelligence probes for the same upstream, key, model, and parameters may reuse another target's fresh original result within one interval. A target never reuses its own previous run, and a copied row cannot become a cache source.
 
-### Liveness and the 60-minute strip
+### Liveness and the availability strip
 
-The `liveness` plugin sends a short sentence every 60 seconds by default, with a 30-second timeout, and records success, time to first token, and TPS. The availability strip is 60 one-minute cells. A cell is colored only when it has a sample. If the current minute has no sample yet, the right edge aligns to the previous minute instead of showing a fake gray cell. Both the admin page and the public page use equal-height capsules.
+The `liveness` plugin sends a short sentence every 60 seconds by default, with a 30-second timeout, and records success, time to first token, and TPS. The availability strip always has 60 cells, and each cell spans one configured liveness interval (e.g. 60 minutes at a 1-minute interval, or 300 minutes at a 5-minute interval). A cell is colored only when it has a sample. If the current cell has no sample yet, the right edge aligns to the previous cell instead of showing a fake gray cell. Both the admin page and the public page use equal-height capsules.
 
 ### Intelligence plugins
 
@@ -436,7 +436,7 @@ pnpm dev
 Default frontend development URL:
 
 ```text
-http://127.0.0.1:3010
+http://localhost:3010/
 ```
 
 Checks:
@@ -1130,7 +1130,7 @@ Check whether the backend service is running and whether reverse proxy routes `/
 Frontend development URL:
 
 ```text
-http://127.0.0.1:3010
+http://localhost:3010/
 ```
 
 Backend URL:

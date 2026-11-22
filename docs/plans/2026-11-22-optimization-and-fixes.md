@@ -125,15 +125,15 @@
 
 ### 板块 4（P3）：工程化、CI 质量门禁、Dockerfile 与文档同步
 
-- [ ] **P3-1：补齐 GitHub Actions CI 质量门禁**
+- [x] **P3-1：补齐 GitHub Actions CI 质量门禁**
   - **位置**：`.github/workflows/ci.yml`、`.github/workflows/publish.yml`
   - **方案**：新增 `ci.yml` 在 push / PR 时执行 Go 全量测试（`go test ./...`）与前端类型检查、ESLint、构建；同时在 `publish.yml` 的 `build-and-push` 前增加 `verify` 前置校验 job，未通过不发镜像。
 
-- [ ] **P3-2：加固 `Dockerfile` 并清理重复锁文件**
+- [x] **P3-2：加固 `Dockerfile` 并清理重复锁文件**
   - **位置**：`Dockerfile`、删除多余的 `frontend/package-lock.json`
-  - **方案**：前端阶段改用 `pnpm install --frozen-lockfile`；运行阶段新增非 root 用户 `upstreamops`（确保 `/app/data` 权限）与基于 `http://127.0.0.1:8418/healthz` 的 `HEALTHCHECK`；清理未使用的 `frontend/package-lock.json`（保留 `pnpm-lock.yaml`）。
+  - **方案**：前端阶段改用 `pnpm install --frozen-lockfile`；运行阶段新增非 root 用户 `upstreamops`（配合 `su-exec` 兼容存量宿主机 `/app/data` 卷权限平滑升级）与基于 `http://127.0.0.1:8418/healthz` 的 `HEALTHCHECK`；清理未使用的 `frontend/package-lock.json`（保留 `pnpm-lock.yaml`）。
 
-- [ ] **P3-3：同步文档漂移**
+- [x] **P3-3：同步文档漂移**
   - **位置**：`README.zh.md`、`README.md`
   - **方案**：更新可用率条说明为「60 格 × 测活间隔（近 N 分钟）」，修正前端本地开发访问地址为 `http://localhost:3010/`（说明 Vite 仅绑 localhost）。
 
@@ -141,7 +141,7 @@
 
 ## 最终验收清单
 
-- [ ] `GOTOOLCHAIN=go1.23.0 CGO_ENABLED=0 go test ./...` 全部通过
-- [ ] `cd frontend && pnpm exec tsc --noEmit --incremental false && pnpm lint && pnpm build` 全部通过
-- [ ] 使用 `scripts/dev-debug.ps1 -Action restart` 重编并重启本地 8418 后端，`diag` 探活全通过
-- [ ] `git status` 干净，所有提交按板块清晰拆分且未执行 `push`
+- [x] `GOTOOLCHAIN=go1.23.0 CGO_ENABLED=0 go test ./...` 全部通过
+- [x] `cd frontend && pnpm exec tsc --noEmit --incremental false && pnpm lint && pnpm build` 全部通过
+- [x] 使用 `scripts/dev-debug.ps1 -Action restart` 重编并重启本地 8418 后端，`diag` 探活全通过
+- [x] `git status` 干净，所有提交按板块清晰拆分且未执行 `push`
