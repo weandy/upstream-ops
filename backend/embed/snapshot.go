@@ -127,6 +127,7 @@ type FingerprintRunItem struct {
 	Status           string
 	Summary          string
 	LatencyMS        int64
+	OutputTokens     int
 	ErrorMessage     string
 	TopCandidates    []FingerprintCandidate
 	ObservedAt       time.Time
@@ -316,6 +317,7 @@ func (s *Service) BuildFingerprintHistory(site *SiteDTO, targetSlug string, limi
 			Status:           r.Status,
 			Summary:          r.Summary,
 			LatencyMS:        r.LatencyMS,
+			OutputTokens:     r.OutputTokens,
 			ErrorMessage:     r.ErrorMessage,
 			TopCandidates:    detail.TopCandidates,
 			ObservedAt:       r.ObservedAt.UTC(),

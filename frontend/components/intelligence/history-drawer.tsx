@@ -460,6 +460,9 @@ export function HistoryDrawer({
                             {fullDateTime(r.observed_at)}
                           </span>
                         </div>
+                        <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                          模型：{r.model_name} · 输出：{r.output_tokens} tokens
+                        </p>
                         {r.error_message ? (
                           <p className="mt-2 text-rose-600 dark:text-rose-400">
                             {r.error_message}

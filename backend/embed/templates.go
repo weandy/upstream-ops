@@ -1225,6 +1225,7 @@ const tplFingerprint = `<!doctype html>
         <div class="run-body">
           <div class="meta-bar num">
             <span>测试模型：{{ .ModelName }}</span>
+            <span>输出 Tokens：{{ .OutputTokens }}</span>
             <span>对照模型：{{ .ClaimedModel }}</span>
             {{- if .FamilyPrediction }}<span>预测家族：{{ .FamilyPrediction }}</span>{{- end }}
             <span>时间：{{ fmtTimeFull .ObservedAt }}</span>

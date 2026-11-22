@@ -88,6 +88,9 @@ func TestLMFPDDetectorRunWithConformanceSample(t *testing.T) {
 	if resOK.Status != storage.IntelligenceStatusNormal || resOK.ClaimedRank != 1 || resOK.TopCandidate == "" {
 		t.Fatalf("expected normal rank=1 for claimed=%s, got %+v", expectedModel, resOK)
 	}
+	if resOK.OutputTokens != 320*lmfpd.ChallengeCount {
+		t.Fatalf("expected summed output tokens %d, got %d", 320*lmfpd.ChallengeCount, resOK.OutputTokens)
+	}
 
 	// 2. 声称模型与预测第一不一致（另一家族模型） -> suspected
 	wrongClaim := "gpt-4o"
