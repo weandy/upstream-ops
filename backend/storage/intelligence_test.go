@@ -138,6 +138,72 @@ func TestIntelligenceAutoMigrateAndTargetCRUD(t *testing.T) {
 	}
 }
 
+func TestIntelligenceBatchQueriesEquivalentToSingleQueries(t *testing.T) {
+	db := openTestDB(t)
+	targets := NewProbeTargets(db)
+	detectors := NewProbeDetectorConfigs(db)
+	liveness := NewProbeLivenessSamples(db)
+	runs := NewProbeIntelligenceRuns(db)
+
+	t1 := &ProbeTarget{Name: "batch-1", Slug: "batch-1", SourceKind: ProbeSourceDirect, BaseURL: "https://b1.test", Protocol: ProbeProtocolOpenAIChat, Enabled: true, EmbedVisible: true}
+	t2 := &ProbeTarget{Name: "batch-2", Slug: "batch-2", SourceKind: ProbeSourceDirect, BaseURL: "https://b2.test", Protocol: ProbeProtocolOpenAIChat, Enabled: true, EmbedVisible: true}
+	if err := targets.Create(t1); err != nil {
+		t.Fatalf("create t1: %v", err)
+	}
+	if err := targets.Create(t2); err != nil {
+		t.Fatalf("create t2: %v", err)
+	}
+	_ = detectors.Upsert(&ProbeDetectorConfig{TargetID: t1.ID, DetectorKey: "liveness", Enabled: true, ModelName: "m1", IntervalSeconds: 60})
+	_ = detectors.Upsert(&ProbeDetectorConfig{TargetID: t1.ID, DetectorKey: "candy", Enabled: true, ModelName: "m1", IntervalSeconds: 3600})
+	_ = detectors.Upsert(&ProbeDetectorConfig{TargetID: t2.ID, DetectorKey: "pelican", Enabled: true, ModelName: "m2", IntervalSeconds: 3600})
+
+	now := time.Now().UTC()
+	_ = liveness.Append(&ProbeLivenessSample{TargetID: t1.ID, ModelName: "m1", Success: true, ObservedAt: now.Add(-2 * time.Minute)})
+	_ = liveness.Append(&ProbeLivenessSample{TargetID: t1.ID, ModelName: "m1", Success: false, ObservedAt: now.Add(-1 * time.Minute)})
+	_ = liveness.Append(&ProbeLivenessSample{TargetID: t2.ID, ModelName: "m2", Success: true, ObservedAt: now.Add(-3 * time.Minute)})
+
+	_ = runs.Append(&ProbeIntelligenceRun{TargetID: t1.ID, DetectorKey: "candy", ModelName: "m1", Status: IntelligenceStatusSuspected, Summary: "old", ObservedAt: now.Add(-2 * time.Hour)})
+	_ = runs.Append(&ProbeIntelligenceRun{TargetID: t1.ID, DetectorKey: "candy", ModelName: "m1", Status: IntelligenceStatusNormal, Summary: "latest-candy", ObservedAt: now.Add(-10 * time.Minute)})
+	_ = runs.Append(&ProbeIntelligenceRun{TargetID: t2.ID, DetectorKey: "pelican", ModelName: "m2", Status: IntelligenceStatusNormal, Summary: "art-1", ArtifactSVG: "<svg>huge</svg>", ObservedAt: now.Add(-20 * time.Minute)})
+	_ = runs.Append(&ProbeIntelligenceRun{TargetID: t2.ID, DetectorKey: "pelican", ModelName: "m2", Status: IntelligenceStatusError, Summary: "art-err", ObservedAt: now.Add(-5 * time.Minute)})
+
+	ids := []uint{t1.ID, t2.ID}
+	cfgMap, err := detectors.ListByTargets(ids)
+	if err != nil {
+		t.Fatalf("ListByTargets configs: %v", err)
+	}
+	if len(cfgMap[t1.ID]) != 2 || len(cfgMap[t2.ID]) != 1 {
+		t.Fatalf("unexpected batch configs: %+v", cfgMap)
+	}
+
+	sampleMap, err := liveness.ListByTargetsSince(ids, now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ListByTargetsSince liveness: %v", err)
+	}
+	if len(sampleMap[t1.ID]) != 2 || len(sampleMap[t2.ID]) != 1 {
+		t.Fatalf("unexpected batch liveness samples: t1=%d t2=%d", len(sampleMap[t1.ID]), len(sampleMap[t2.ID]))
+	}
+
+	candy24h, err := runs.ListByTargetsSince(ids, "candy", now.Add(-24*time.Hour))
+	if err != nil {
+		t.Fatalf("ListByTargetsSince candy: %v", err)
+	}
+	if len(candy24h[t1.ID]) != 2 || len(candy24h[t2.ID]) != 0 {
+		t.Fatalf("unexpected batch candy runs: t1=%d t2=%d", len(candy24h[t1.ID]), len(candy24h[t2.ID]))
+	}
+
+	latestMap, err := runs.ListLatestByTargets(ids, []string{"candy", "pelican"}, 2)
+	if err != nil {
+		t.Fatalf("ListLatestByTargets: %v", err)
+	}
+	if got := latestMap[t1.ID]["candy"]; len(got) != 2 || got[0].Summary != "latest-candy" {
+		t.Fatalf("unexpected latest candy runs: %+v", got)
+	}
+	if got := latestMap[t2.ID]["pelican"]; len(got) != 2 || got[0].Status != IntelligenceStatusError || got[1].ArtifactSVG != "" {
+		t.Fatalf("expected pelican runs ordered DESC and ArtifactSVG omitted, got %+v", got)
+	}
+}
+
 func TestProbeDetectorConfigUpsertAndDueQuery(t *testing.T) {
 	db := openTestDB(t)
 	targets := NewProbeTargets(db)

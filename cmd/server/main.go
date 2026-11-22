@@ -141,6 +141,7 @@ func main() {
 	intelligenceSvc.SetLMFPDDataDir(intelCfg.LMFPDDataDir)
 	intelligenceSvc.UpdateBackoffConfig(intelCfg)
 	intelAlerter := intelligence.NewAlerter(intelligenceSvc.Liveness, intelligenceSvc.Runs, dispatcher, log)
+	intelAlerter.SetCooldownStore(notifies)
 	intelligenceSvc.SetResultHook(intelAlerter.HandleResult)
 	intelligenceSvc.Start(time.Duration(intelCfg.TickIntervalSeconds)*time.Second, intelCfg.Concurrency)
 	defer intelligenceSvc.Stop()

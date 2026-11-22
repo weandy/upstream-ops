@@ -559,16 +559,68 @@ func (s *Service) RunLivenessNow(ctx context.Context, targetID uint, modelOverri
 	return sample, nil
 }
 
-// ListTargetOverviews 批量汇总所有监测目标的 24h 性能、60 分钟趋势与最新检测状态（消除前端 N+1 请求）。
+// ListTargetOverviews 批量汇总所有监测目标的 24h 性能、趋势与最新检测状态（常量次 SQL，消除前后端 N+1）。
 func (s *Service) ListTargetOverviews() ([]TargetOverview, error) {
 	targets, err := s.Targets.List()
 	if err != nil {
 		return nil, err
 	}
+	if len(targets) == 0 {
+		return []TargetOverview{}, nil
+	}
 	now := time.Now().UTC()
+	targetIDs := make([]uint, len(targets))
+	for i := range targets {
+		targetIDs[i] = targets[i].ID
+	}
+
+	cfgsByTarget, err := s.Configs.ListByTargets(targetIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	maxLookback := 24 * time.Hour
+	intervalByTarget := make(map[uint]int, len(targets))
+	for _, tid := range targetIDs {
+		for _, cfg := range cfgsByTarget[tid] {
+			if cfg.DetectorKey == DetectorKeyLiveness && cfg.IntervalSeconds > 0 {
+				intervalByTarget[tid] = cfg.IntervalSeconds
+				if lb := TrendLookback(cfg.IntervalSeconds); lb > maxLookback {
+					maxLookback = lb
+				}
+				break
+			}
+		}
+	}
+
+	samplesByTarget, err := s.Liveness.ListByTargetsSince(targetIDs, now.Add(-maxLookback))
+	if err != nil {
+		return nil, err
+	}
+
+	intelKeys := s.nonLivenessDetectorKeys()
+	latestByTarget, err := s.Runs.ListLatestByTargets(targetIDs, intelKeys, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	candy24hByTarget, err := s.Runs.ListByTargetsSince(targetIDs, DetectorKeyCandy, now.Add(-24*time.Hour))
+	if err != nil {
+		return nil, err
+	}
+
 	out := make([]TargetOverview, 0, len(targets))
 	for i := range targets {
-		ov, err := s.buildTargetOverview(&targets[i], now)
+		t := targets[i]
+		ov, err := s.assembleTargetOverview(
+			&t,
+			now,
+			cfgsByTarget[t.ID],
+			intervalByTarget[t.ID],
+			samplesByTarget[t.ID],
+			latestByTarget[t.ID],
+			candy24hByTarget[t.ID],
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -741,6 +793,18 @@ func (s *Service) GetTargetOverview(targetID uint) (*TargetOverview, error) {
 	return s.buildTargetOverview(target, time.Now().UTC())
 }
 
+func (s *Service) nonLivenessDetectorKeys() []string {
+	metas := s.Registry.ListMeta()
+	keys := make([]string, 0, len(metas))
+	for _, meta := range metas {
+		if meta.Category == DetectorCategoryLiveness {
+			continue
+		}
+		keys = append(keys, meta.Key)
+	}
+	return keys
+}
+
 func (s *Service) buildTargetOverview(target *storage.ProbeTarget, now time.Time) (*TargetOverview, error) {
 	cfgs, err := s.Configs.ListByTarget(target.ID)
 	if err != nil {
@@ -761,33 +825,63 @@ func (s *Service) buildTargetOverview(target *storage.ProbeTarget, now time.Time
 	if err != nil {
 		return nil, err
 	}
-	perf, trend := AggregateLiveness(samples, now, LivenessBucketDuration(intervalSec))
-	recent, err := s.Liveness.ListRecentByTarget(target.ID, 20)
+	latestByTarget, err := s.Runs.ListLatestByTargets([]uint{target.ID}, s.nonLivenessDetectorKeys(), 1)
 	if err != nil {
 		return nil, err
 	}
-	latestRuns := make(map[string]storage.ProbeIntelligenceRun)
-	for _, meta := range s.Registry.ListMeta() {
-		if meta.Category == DetectorCategoryLiveness {
-			continue
+	candy24h, err := s.Runs.ListByTargetAndDetectorSince(target.ID, DetectorKeyCandy, now.Add(-24*time.Hour))
+	if err != nil {
+		return nil, err
+	}
+	return s.assembleTargetOverview(target, now, cfgs, intervalSec, samples, latestByTarget[target.ID], candy24h)
+}
+
+func (s *Service) assembleTargetOverview(
+	target *storage.ProbeTarget,
+	now time.Time,
+	cfgs []storage.ProbeDetectorConfig,
+	intervalSec int,
+	samples []storage.ProbeLivenessSample,
+	latestByDet map[string][]storage.ProbeIntelligenceRun,
+	candy24h []storage.ProbeIntelligenceRun,
+) (*TargetOverview, error) {
+	perf, trend := AggregateLiveness(samples, now, LivenessBucketDuration(intervalSec))
+
+	// 优先直接从已拉取的 samples 切片尾部倒序取最近 20 条，避免重复查库；不足 20 条时再按需回退查历史。
+	var recent []storage.ProbeLivenessSample
+	if len(samples) >= 20 {
+		recent = make([]storage.ProbeLivenessSample, 0, 20)
+		for i := len(samples) - 1; i >= len(samples)-20; i-- {
+			recent = append(recent, samples[i])
 		}
-		runs, err := s.Runs.ListByTargetAndDetector(target.ID, meta.Key, 1)
-		if err == nil && len(runs) > 0 {
-			latestRuns[meta.Key] = runs[0]
+	} else {
+		var err error
+		recent, err = s.Liveness.ListRecentByTarget(target.ID, 20)
+		if err != nil {
+			return nil, err
 		}
 	}
-	candy24h, err := s.Runs.ListByTargetAndDetectorSince(target.ID, DetectorKeyCandy, now.Add(-24*time.Hour))
-	var candyPassed, candyChecked int
-	if err == nil {
-		for _, r := range candy24h {
-			if r.Status == storage.IntelligenceStatusError {
-				continue
-			}
-			candyChecked++
-			if r.Status == storage.IntelligenceStatusNormal {
-				candyPassed++
-			}
+
+	latestRuns := make(map[string]storage.ProbeIntelligenceRun, len(latestByDet))
+	for detKey, runs := range latestByDet {
+		if len(runs) > 0 {
+			latestRuns[detKey] = runs[0]
 		}
+	}
+
+	var candyPassed, candyChecked int
+	for _, r := range candy24h {
+		if r.Status == storage.IntelligenceStatusError {
+			continue
+		}
+		candyChecked++
+		if r.Status == storage.IntelligenceStatusNormal {
+			candyPassed++
+		}
+	}
+
+	if cfgs == nil {
+		cfgs = []storage.ProbeDetectorConfig{}
 	}
 	return &TargetOverview{
 		Target:             target,

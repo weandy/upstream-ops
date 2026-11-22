@@ -52,22 +52,43 @@ const inflight = new Map<string, Promise<unknown>>()
 
 /** Cache 已完成的响应一小段时间，便于同一帧内挂载的多个组件共享结果（即使第一次的 Promise 已经 resolve）。 */
 interface CacheEntry {
+  key: string
   data: unknown
   expiresAt: number
 }
+// 按 path 覆盖存储，避免 refreshTick/bump 递增导致 Map 无限累积造成长挂页面内存泄漏。
 const cache = new Map<string, CacheEntry>()
 const CACHE_TTL_MS = 800
+const MAX_CACHE_ENTRIES = 128
 
 function cacheKey(path: string, tick: number, bump: number) {
   return `${path}#${tick}#${bump}`
 }
 
+function pruneExpiredCache(now: number) {
+  for (const [k, entry] of cache) {
+    if (entry.expiresAt <= now) {
+      cache.delete(k)
+    }
+  }
+  while (cache.size > MAX_CACHE_ENTRIES) {
+    const oldestKey = cache.keys().next().value
+    if (oldestKey === undefined) break
+    cache.delete(oldestKey)
+  }
+}
+
 function fetchShared<T>(path: string, key: string): Promise<T> {
   const now = Date.now()
 
-  const cached = cache.get(key)
-  if (cached && cached.expiresAt > now) {
-    return Promise.resolve(cached.data as T)
+  const cached = cache.get(path)
+  if (cached) {
+    if (cached.key === key && cached.expiresAt > now) {
+      return Promise.resolve(cached.data as T)
+    }
+    if (cached.expiresAt <= now) {
+      cache.delete(path)
+    }
   }
 
   const existing = inflight.get(key) as Promise<T> | undefined
@@ -75,7 +96,11 @@ function fetchShared<T>(path: string, key: string): Promise<T> {
 
   const p = apiFetch<T>(path)
     .then((d) => {
-      cache.set(key, { data: d, expiresAt: Date.now() + CACHE_TTL_MS })
+      const ts = Date.now()
+      cache.set(path, { key, data: d, expiresAt: ts + CACHE_TTL_MS })
+      if (cache.size > MAX_CACHE_ENTRIES) {
+        pruneExpiredCache(ts)
+      }
       return d
     })
     .finally(() => {

@@ -71,19 +71,19 @@
 
 ### 板块 2（P1）：性能、存储查询与告警持久化优化
 
-- [ ] **P1-1：消除概览与公开快照的 N+1 SQL 查询放大**
+- [x] **P1-1：消除概览与公开快照的 N+1 SQL 查询放大**
   - **位置**：`backend/storage/intelligence.go`、`backend/intelligence/service.go`、`backend/embed/snapshot.go`
   - **问题**：`ListTargetOverviews` 每目标约 8 次 SQL（含拉 24h 样本后又重复查最近 20 条）；`BuildSiteSnapshot` 同样逐目标循环查库，SQLite 单连接下读放大严重。
   - **方案**：在仓储层新增批量查询接口（按 `target_id IN (...)` 查 `ProbeDetectorConfig`、`ProbeLivenessSample`、各插件最新 `ProbeIntelligenceRun` 及 24h Candy 记录），在内存中按 `target_id` 分组聚合；`RecentSamples` 直接从已查的 `samples` 切片尾部倒序取最近 20 条（不足时再回退查库）。
   - **验证**：新增批量查询与行为等价单测，确保管理台与公开页数据结构完全一致。
 
-- [ ] **P1-2：修复前端 `useApi` 缓存 `Map` 只增不删的内存泄漏**
+- [x] **P1-2：修复前端 `useApi` 缓存 `Map` 只增不删的内存泄漏**
   - **位置**：`frontend/lib/queries.ts`
   - **问题**：`cacheKey(path, tick, bump)` 随每次 30s 轮询递增生成新 key，历史条目永不清理，长挂监控页会持续累积内存。
   - **方案**：写入/读取时清理过期条目，且缓存按 `path` 存储（附带 `tick`/`bump`/`expiresAt`），同一 `path` 覆盖旧值，杜绝无限增长。
   - **验证**：通过 `pnpm exec tsc --noEmit --incremental false` 与 `pnpm lint`。
 
-- [ ] **P1-3：告警冷却持久化 + 重启掉线恢复感知 + 通知时间统一 UTC+8**
+- [x] **P1-3：告警冷却持久化 + 重启掉线恢复感知 + 通知时间统一 UTC+8**
   - **位置**：`backend/intelligence/alerter.go`、`cmd/server/main.go`
   - **问题**：`Alerter` 的 `cooldown` 和 `downSet` 仅存内存，重启会丢冷却或漏恢复通知；正文时间直接用服务器本地时区。
   - **方案**：支持注入持久化冷却仓储（复用 `notification_cooldowns` 表，使用 `intel:<event>:<detector>` 独立事件命名空间，保留内存兜底便于轻量单测）；测活恢复时除内存 `downSet` 外，若曾记录过持续冷却/连续失败也可正确发恢复并清冷却；通知正文时间统一按 `Asia/Shanghai`（UTC+8）格式化。

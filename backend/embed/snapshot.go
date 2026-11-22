@@ -167,12 +167,76 @@ type PelicanGalleryView struct {
 	Items       []PelicanGalleryItem
 }
 
-// BuildSiteSnapshot 为指定嵌入站点聚合只读公开快照。
+// BuildSiteSnapshot 为指定嵌入站点聚合只读公开快照（使用批量查询消除 N+1 读放大）。
 func (s *Service) BuildSiteSnapshot(site *SiteDTO) (*SiteSnapshot, error) {
 	now := s.nowUTC()
 	targets, err := s.resolveSiteTargets(site)
 	if err != nil {
 		return nil, err
+	}
+	if len(targets) == 0 {
+		return &SiteSnapshot{
+			Site:        sitePublicMeta(site),
+			GeneratedAt: now,
+			Targets:     []PublicTargetStatus{},
+		}, nil
+	}
+
+	targetIDs := make([]uint, len(targets))
+	for i := range targets {
+		targetIDs[i] = targets[i].ID
+	}
+
+	cfgsByTarget, err := s.Configs.ListByTargets(targetIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	maxLookback := 24 * time.Hour
+	intervalByTarget := make(map[uint]int, len(targets))
+	for _, tid := range targetIDs {
+		for _, cfg := range cfgsByTarget[tid] {
+			if cfg.DetectorKey == intelligence.DetectorKeyLiveness && cfg.IntervalSeconds > 0 {
+				intervalByTarget[tid] = cfg.IntervalSeconds
+				if lb := intelligence.TrendLookback(cfg.IntervalSeconds); lb > maxLookback {
+					maxLookback = lb
+				}
+				break
+			}
+		}
+	}
+
+	samplesByTarget, err := s.Liveness.ListByTargetsSince(targetIDs, now.Add(-maxLookback))
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		candy24hByTarget map[uint][]storage.ProbeIntelligenceRun
+		latestCFByTarget map[uint]map[string][]storage.ProbeIntelligenceRun
+		pelicansByTarget map[uint]map[string][]storage.ProbeIntelligenceRun
+	)
+	if site.ShowIdentityColumn {
+		candy24hByTarget, err = s.Runs.ListByTargetsSince(targetIDs, intelligence.DetectorKeyCandy, now.Add(-24*time.Hour))
+		if err != nil {
+			return nil, err
+		}
+		latestCFByTarget, err = s.Runs.ListLatestByTargets(
+			targetIDs,
+			[]string{intelligence.DetectorKeyCandy, intelligence.DetectorKeyLMFPD},
+			1,
+		)
+		if err != nil {
+			return nil, err
+		}
+		pelicansByTarget, err = s.Runs.ListLatestByTargets(
+			targetIDs,
+			[]string{intelligence.DetectorKeyPelican},
+			10,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	rows := make([]PublicTargetStatus, 0, len(targets))
@@ -180,10 +244,17 @@ func (s *Service) BuildSiteSnapshot(site *SiteDTO) (*SiteSnapshot, error) {
 
 	for i := range targets {
 		t := &targets[i]
-		row, err := s.buildTargetRow(t, site.ShowIdentityColumn, now)
-		if err != nil {
-			return nil, err
-		}
+		row := buildTargetRowFromBatch(
+			t,
+			site.ShowIdentityColumn,
+			now,
+			intervalByTarget[t.ID],
+			cfgsByTarget[t.ID],
+			samplesByTarget[t.ID],
+			candy24hByTarget[t.ID],
+			latestCFByTarget[t.ID],
+			pelicansByTarget[t.ID][intelligence.DetectorKeyPelican],
+		)
 		if row.LastUpdatedAt != nil && (latestData == nil || row.LastUpdatedAt.After(*latestData)) {
 			ts := *row.LastUpdatedAt
 			latestData = &ts
@@ -507,21 +578,17 @@ func (s *Service) resolveVisibleTargetDetector(site *SiteDTO, targetSlug, detect
 	return target, cfg, nil
 }
 
-func (s *Service) buildTargetRow(target *storage.ProbeTarget, includeIdentity bool, now time.Time) (PublicTargetStatus, error) {
-	intervalSec := 0
-	if cfg, err := s.Configs.Find(target.ID, intelligence.DetectorKeyLiveness); err == nil && cfg.IntervalSeconds > 0 {
-		intervalSec = cfg.IntervalSeconds
-	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return PublicTargetStatus{}, err
-	}
-	since := now.Add(-24 * time.Hour)
-	if lookback := intelligence.TrendLookback(intervalSec); lookback > 24*time.Hour {
-		since = now.Add(-lookback)
-	}
-	samples, err := s.Liveness.ListByTargetSince(target.ID, since)
-	if err != nil {
-		return PublicTargetStatus{}, err
-	}
+func buildTargetRowFromBatch(
+	target *storage.ProbeTarget,
+	includeIdentity bool,
+	now time.Time,
+	intervalSec int,
+	cfgs []storage.ProbeDetectorConfig,
+	samples []storage.ProbeLivenessSample,
+	candy24h []storage.ProbeIntelligenceRun,
+	latestCF map[string][]storage.ProbeIntelligenceRun,
+	recentPelicans []storage.ProbeIntelligenceRun,
+) PublicTargetStatus {
 	perf, trend := intelligence.AggregateLiveness(samples, now, intelligence.LivenessBucketDuration(intervalSec))
 
 	var lastUpdated *time.Time
@@ -544,27 +611,16 @@ func (s *Service) buildTargetRow(target *storage.ProbeTarget, includeIdentity bo
 
 	if !includeIdentity {
 		row.LastUpdatedAt = lastUpdated
-		return row, nil
+		return row
 	}
 
-	cfgs, err := s.Configs.ListByTarget(target.ID)
-	if err != nil {
-		return PublicTargetStatus{}, err
-	}
 	cfgMap := make(map[string]storage.ProbeDetectorConfig, len(cfgs))
 	for _, c := range cfgs {
 		cfgMap[c.DetectorKey] = c
 	}
 
 	if cfg, ok := cfgMap[intelligence.DetectorKeyCandy]; ok && cfg.EmbedVisible {
-		candy24h, err := s.Runs.ListByTargetAndDetectorSince(target.ID, intelligence.DetectorKeyCandy, now.Add(-24*time.Hour))
-		if err != nil {
-			return PublicTargetStatus{}, err
-		}
-		latestRuns, err := s.Runs.ListByTargetAndDetector(target.ID, intelligence.DetectorKeyCandy, 1)
-		if err != nil {
-			return PublicTargetStatus{}, err
-		}
+		latestRuns := latestCF[intelligence.DetectorKeyCandy]
 		if cfg.Enabled || len(latestRuns) > 0 {
 			passed, checked := 0, 0
 			for _, r := range candy24h {
@@ -598,10 +654,7 @@ func (s *Service) buildTargetRow(target *storage.ProbeTarget, includeIdentity bo
 	}
 
 	if cfg, ok := cfgMap[intelligence.DetectorKeyLMFPD]; ok && cfg.EmbedVisible {
-		latestRuns, err := s.Runs.ListByTargetAndDetector(target.ID, intelligence.DetectorKeyLMFPD, 1)
-		if err != nil {
-			return PublicTargetStatus{}, err
-		}
+		latestRuns := latestCF[intelligence.DetectorKeyLMFPD]
 		if cfg.Enabled || len(latestRuns) > 0 {
 			sum := &PublicFingerprintSummary{
 				Enabled:   cfg.Enabled,
@@ -625,10 +678,6 @@ func (s *Service) buildTargetRow(target *storage.ProbeTarget, includeIdentity bo
 	}
 
 	if cfg, ok := cfgMap[intelligence.DetectorKeyPelican]; ok && cfg.EmbedVisible {
-		recentPelicans, err := s.Runs.ListByTargetAndDetector(target.ID, intelligence.DetectorKeyPelican, 10)
-		if err != nil {
-			return PublicTargetStatus{}, err
-		}
 		if cfg.Enabled || len(recentPelicans) > 0 {
 			sum := &PublicPelicanSummary{
 				Enabled:   cfg.Enabled,
@@ -657,7 +706,7 @@ func (s *Service) buildTargetRow(target *storage.ProbeTarget, includeIdentity bo
 	}
 
 	row.LastUpdatedAt = lastUpdated
-	return row, nil
+	return row
 }
 
 func sitePublicMeta(site *SiteDTO) SitePublicMeta {

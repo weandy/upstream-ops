@@ -164,3 +164,64 @@ func TestAlerterIntelligenceSuspectedAndErrorThresholds(t *testing.T) {
 		t.Fatalf("expected no alert when alert_enabled=false, got %d", len(disp.list()))
 	}
 }
+
+func TestAlerterPersistentCooldownRecoveryAfterRestartAndUTC8Time(t *testing.T) {
+	db := openIntelTestDB(t)
+	cipher, _ := crypto.NewCipher("alert-persist-secret-32-bytes!!!!")
+	stub := &stubLLMClient{}
+	svc := NewService(db, cipher, nil, stub, nil)
+	notifies := storage.NewNotifications(db)
+
+	disp := &captureAlertDispatcher{
+		policy: notify.Policy{IntelligenceAlertCooldown: time.Hour},
+	}
+	alerter1 := NewAlerter(svc.Liveness, svc.Runs, disp, nil)
+	alerter1.SetCooldownStore(notifies)
+	svc.SetResultHook(alerter1.HandleResult)
+
+	target, _ := svc.CreateTarget(TargetInput{
+		Name: "persist-target", SourceKind: storage.ProbeSourceDirect,
+		BaseURL: "https://p.test", APIKey: "sk-1234", Protocol: storage.ProbeProtocolOpenAIChat, Enabled: true,
+	})
+	_, _ = svc.SaveTargetDetectors(target.ID, []DetectorConfigInput{
+		{
+			DetectorKey:     DetectorKeyLiveness,
+			Enabled:         true,
+			ModelName:       "gpt-6.2-sol",
+			IntervalSeconds: 60,
+			AlertEnabled:    true,
+			AlertThreshold:  2,
+		},
+	})
+
+	// 连续 2 次失败：触发 probe_down 并写入持久化冷却与 UTC+8 时间格式。
+	stub.resp = &llmclient.Response{Complete: false, HTTPStatus: 502, ErrorClass: llmclient.ErrorClassUpstream, ErrorMessage: "bad gateway"}
+	_, _ = svc.ExecuteDetector(context.Background(), target.ID, DetectorKeyLiveness, RunOptions{Manual: true})
+	_, _ = svc.ExecuteDetector(context.Background(), target.ID, DetectorKeyLiveness, RunOptions{Manual: true})
+	msgs := disp.list()
+	if len(msgs) != 1 || msgs[0].Event != storage.EventProbeDown {
+		t.Fatalf("expected 1 probe_down alert, got %+v", msgs)
+	}
+	if !strings.Contains(msgs[0].Body, "UTC+8") {
+		t.Fatalf("expected UTC+8 timezone label in alert body, got:\n%s", msgs[0].Body)
+	}
+
+	// 模拟进程重启：新建全新的 Alerter 实例（内存 downSet 和 cooldown 均为空），共享同一数据库。
+	alerter2 := NewAlerter(svc.Liveness, svc.Runs, disp, nil)
+	alerter2.SetCooldownStore(notifies)
+	svc.SetResultHook(alerter2.HandleResult)
+
+	// 重启后再次失败：仍在持久化冷却窗口内，绝不应重复推送 probe_down。
+	_, _ = svc.ExecuteDetector(context.Background(), target.ID, DetectorKeyLiveness, RunOptions{Manual: true})
+	if len(disp.list()) != 1 {
+		t.Fatalf("expected persistent cooldown to suppress duplicate probe_down after restart, got %d alerts", len(disp.list()))
+	}
+
+	// 重启后测活恢复成功：应能从历史连续失败记录识别出掉线恢复，推送 probe_recovered。
+	stub.resp = &llmclient.Response{Content: "A calm sunrise glows.", Complete: true, HTTPStatus: 200, FirstTokenMS: 120, LatencyMS: 300, OutputTokens: 10, TPS: 50, ErrorClass: llmclient.ErrorClassOK}
+	_, _ = svc.ExecuteDetector(context.Background(), target.ID, DetectorKeyLiveness, RunOptions{Manual: true})
+	msgs = disp.list()
+	if len(msgs) != 2 || msgs[1].Event != storage.EventProbeRecovered {
+		t.Fatalf("expected probe_recovered after restart recovery, got %+v", msgs)
+	}
+}

@@ -92,6 +92,22 @@ func (r *ProbeDetectorConfigs) ListByTarget(targetID uint) ([]ProbeDetectorConfi
 	return list, nil
 }
 
+// ListByTargets 批量查询多个目标的全部检测插件配置（按 target_id 分组）。
+func (r *ProbeDetectorConfigs) ListByTargets(targetIDs []uint) (map[uint][]ProbeDetectorConfig, error) {
+	out := make(map[uint][]ProbeDetectorConfig, len(targetIDs))
+	if len(targetIDs) == 0 {
+		return out, nil
+	}
+	var list []ProbeDetectorConfig
+	if err := r.db.Where("target_id IN ?", targetIDs).Order("target_id ASC").Order("id ASC").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	for _, cfg := range list {
+		out[cfg.TargetID] = append(out[cfg.TargetID], cfg)
+	}
+	return out, nil
+}
+
 func (r *ProbeDetectorConfigs) Find(targetID uint, detectorKey string) (*ProbeDetectorConfig, error) {
 	var c ProbeDetectorConfig
 	if err := r.db.Where("target_id = ? AND detector_key = ?", targetID, detectorKey).First(&c).Error; err != nil {
@@ -219,6 +235,23 @@ func (r *ProbeLivenessSamples) ListByTargetSince(targetID uint, since time.Time)
 	return list, nil
 }
 
+// ListByTargetsSince 批量查询多个目标在指定时间之后的测活样本（按 target_id 分组、observed_at 升序）。
+func (r *ProbeLivenessSamples) ListByTargetsSince(targetIDs []uint, since time.Time) (map[uint][]ProbeLivenessSample, error) {
+	out := make(map[uint][]ProbeLivenessSample, len(targetIDs))
+	if len(targetIDs) == 0 {
+		return out, nil
+	}
+	var list []ProbeLivenessSample
+	if err := r.db.Where("target_id IN ? AND observed_at >= ?", targetIDs, since).
+		Order("target_id ASC").Order("observed_at ASC").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	for _, sample := range list {
+		out[sample.TargetID] = append(out[sample.TargetID], sample)
+	}
+	return out, nil
+}
+
 func (r *ProbeLivenessSamples) ListRecentByTarget(targetID uint, limit int) ([]ProbeLivenessSample, error) {
 	if limit <= 0 {
 		limit = 20
@@ -278,6 +311,56 @@ func (r *ProbeIntelligenceRuns) ListByTargetAndDetectorSince(targetID uint, dete
 		return nil, err
 	}
 	return list, nil
+}
+
+// ListByTargetsSince 批量按时间窗口查询多个目标指定插件的历史记录（跳过 artifact_svg，按 target_id 分组）。
+func (r *ProbeIntelligenceRuns) ListByTargetsSince(targetIDs []uint, detectorKey string, since time.Time) (map[uint][]ProbeIntelligenceRun, error) {
+	out := make(map[uint][]ProbeIntelligenceRun, len(targetIDs))
+	if len(targetIDs) == 0 {
+		return out, nil
+	}
+	var list []ProbeIntelligenceRun
+	q := r.db.Omit("artifact_svg").Where("target_id IN ? AND observed_at >= ?", targetIDs, since)
+	if strings.TrimSpace(detectorKey) != "" {
+		q = q.Where("detector_key = ?", detectorKey)
+	}
+	if err := q.Order("target_id ASC").Order("observed_at DESC").Order("id DESC").Find(&list).Error; err != nil {
+		return nil, err
+	}
+	for _, run := range list {
+		out[run.TargetID] = append(out[run.TargetID], run)
+	}
+	return out, nil
+}
+
+// ListLatestByTargets 使用标准窗口函数一次性批量查询多个目标 × 多个插件的最近 N 条记录（跳过 artifact_svg）。
+func (r *ProbeIntelligenceRuns) ListLatestByTargets(targetIDs []uint, detectorKeys []string, perGroupLimit int) (map[uint]map[string][]ProbeIntelligenceRun, error) {
+	out := make(map[uint]map[string][]ProbeIntelligenceRun, len(targetIDs))
+	if len(targetIDs) == 0 || len(detectorKeys) == 0 {
+		return out, nil
+	}
+	if perGroupLimit <= 0 {
+		perGroupLimit = 1
+	}
+	const cols = "id, run_uuid, target_id, detector_key, model_name, reasoning_effort, status, summary, claimed_rank, top_candidate, latency_ms, first_token_ms, output_tokens, detail_json, error_message, shared_cache_key, reused_from_run_id, observed_at"
+	query := "SELECT " + cols + " FROM (" +
+		"SELECT " + cols + ", ROW_NUMBER() OVER (PARTITION BY target_id, detector_key ORDER BY observed_at DESC, id DESC) AS rn " +
+		"FROM probe_intelligence_runs WHERE target_id IN ? AND detector_key IN ?" +
+		") ranked WHERE rn <= ? ORDER BY target_id ASC, detector_key ASC, rn ASC"
+
+	var rows []ProbeIntelligenceRun
+	if err := r.db.Raw(query, targetIDs, detectorKeys, perGroupLimit).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, run := range rows {
+		byDet, ok := out[run.TargetID]
+		if !ok {
+			byDet = make(map[string][]ProbeIntelligenceRun)
+			out[run.TargetID] = byDet
+		}
+		byDet[run.DetectorKey] = append(byDet[run.DetectorKey], run)
+	}
+	return out, nil
 }
 
 // FindByUUID 按对外 UUID 查完整记录（含 artifact_svg）。
