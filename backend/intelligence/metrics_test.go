@@ -47,11 +47,11 @@ func TestAggregateLivenessMetricsAnd60MinBuckets(t *testing.T) {
 			ObservedAt:   now.Add(-10 * time.Second),
 		},
 		{
-			Success:      false,
-			HTTPStatus:   502,
-			ErrorClass:   llmclient.ErrorClassUpstream,
-			LatencyMS:    500,
-			ObservedAt:   now.Add(-5 * time.Second),
+			Success:    false,
+			HTTPStatus: 502,
+			ErrorClass: llmclient.ErrorClassUpstream,
+			LatencyMS:  500,
+			ObservedAt: now.Add(-5 * time.Second),
 		},
 		// 10 分钟前 1 次全成功 -> ok
 		{
@@ -71,7 +71,7 @@ func TestAggregateLivenessMetricsAnd60MinBuckets(t *testing.T) {
 		},
 	}
 
-	perf, buckets := AggregateLiveness(samples, now)
+	perf, buckets := AggregateLiveness(samples, now, time.Minute)
 	if perf.SampleCount != 5 || perf.SuccessCount != 3 {
 		t.Fatalf("expected 5 samples / 3 success, got %+v", perf)
 	}
@@ -109,6 +109,36 @@ func TestAggregateLivenessMetricsAnd60MinBuckets(t *testing.T) {
 	// 其余无样本桶 -> none
 	if buckets[0].Tone != "none" || buckets[0].SampleCount != 0 {
 		t.Fatalf("unexpected bucket[0]: %+v", buckets[0])
+	}
+}
+
+func TestAggregateLivenessUsesConfiguredInterval(t *testing.T) {
+	now := time.Date(2026, 11, 21, 10, 0, 30, 0, time.UTC)
+	samples := []storage.ProbeLivenessSample{
+		{Success: true, ObservedAt: now.Add(-10 * time.Second)},
+		{Success: false, ObservedAt: now.Add(-10 * time.Minute)},
+		{Success: true, ObservedAt: now.Add(-20 * time.Minute)},
+		{Success: true, ObservedAt: now.Add(-20 * time.Hour)},
+	}
+
+	if got := TrendWindowMinutes(300); got != 300 {
+		t.Fatalf("expected 300 minute window, got %d", got)
+	}
+	_, buckets := AggregateLiveness(samples, now, 5*time.Minute)
+	if len(buckets) != 60 {
+		t.Fatalf("expected 60 buckets, got %d", len(buckets))
+	}
+	if buckets[59].Tone != "ok" || buckets[59].SampleCount != 1 {
+		t.Fatalf("current 5m bucket: %+v", buckets[59])
+	}
+	if buckets[57].Tone != "down" || buckets[57].SampleCount != 1 {
+		t.Fatalf("10m-ago 5m bucket: %+v", buckets[57])
+	}
+	if buckets[55].Tone != "ok" || buckets[55].SampleCount != 1 {
+		t.Fatalf("20m-ago 5m bucket: %+v", buckets[55])
+	}
+	if buckets[59].Timestamp.Sub(buckets[57].Timestamp) != 10*time.Minute {
+		t.Fatalf("expected 10 minute gap between 5 minute buckets, got %s", buckets[59].Timestamp.Sub(buckets[57].Timestamp))
 	}
 }
 

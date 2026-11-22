@@ -45,15 +45,16 @@ type PublicPelicanSummary struct {
 
 // PublicTargetStatus 对外公开的单行渠道性能与智力检测视图（绝对不含密钥、BaseURL、内部笔记）。
 type PublicTargetStatus struct {
-	Slug          string                         `json:"slug"`
-	Name          string                         `json:"name"`
-	Family        string                         `json:"family"`
-	Performance   intelligence.PerformanceSummary `json:"performance"`
-	Trend         []intelligence.AvailabilityBucket `json:"trend"`
-	Candy         *PublicCandySummary            `json:"candy,omitempty"`
-	Fingerprint   *PublicFingerprintSummary      `json:"fingerprint,omitempty"`
-	Pelican       *PublicPelicanSummary          `json:"pelican,omitempty"`
-	LastUpdatedAt *time.Time                     `json:"last_updated_at,omitempty"`
+	Slug               string                            `json:"slug"`
+	Name               string                            `json:"name"`
+	Family             string                            `json:"family"`
+	Performance        intelligence.PerformanceSummary   `json:"performance"`
+	Trend              []intelligence.AvailabilityBucket `json:"trend"`
+	TrendWindowMinutes int                               `json:"trend_window_minutes"`
+	Candy              *PublicCandySummary               `json:"candy,omitempty"`
+	Fingerprint        *PublicFingerprintSummary         `json:"fingerprint,omitempty"`
+	Pelican            *PublicPelicanSummary             `json:"pelican,omitempty"`
+	LastUpdatedAt      *time.Time                        `json:"last_updated_at,omitempty"`
 }
 
 // SiteSnapshot 站点完整对外快照（供 /embed SSR 与 /api/public/status JSON 共用）。
@@ -505,14 +506,24 @@ func (s *Service) resolveVisibleTargetDetector(site *SiteDTO, targetSlug, detect
 }
 
 func (s *Service) buildTargetRow(target *storage.ProbeTarget, includeIdentity bool, now time.Time) (PublicTargetStatus, error) {
-	samples24h, err := s.Liveness.ListByTargetSince(target.ID, now.Add(-24*time.Hour))
+	intervalSec := 0
+	if cfg, err := s.Configs.Find(target.ID, intelligence.DetectorKeyLiveness); err == nil && cfg.IntervalSeconds > 0 {
+		intervalSec = cfg.IntervalSeconds
+	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return PublicTargetStatus{}, err
+	}
+	since := now.Add(-24 * time.Hour)
+	if lookback := intelligence.TrendLookback(intervalSec); lookback > 24*time.Hour {
+		since = now.Add(-lookback)
+	}
+	samples, err := s.Liveness.ListByTargetSince(target.ID, since)
 	if err != nil {
 		return PublicTargetStatus{}, err
 	}
-	perf, trend := intelligence.AggregateLiveness(samples24h, now)
+	perf, trend := intelligence.AggregateLiveness(samples, now, intelligence.LivenessBucketDuration(intervalSec))
 
 	var lastUpdated *time.Time
-	for _, sample := range samples24h {
+	for _, sample := range samples {
 		ts := sample.ObservedAt.UTC()
 		if lastUpdated == nil || ts.After(*lastUpdated) {
 			v := ts
@@ -521,11 +532,12 @@ func (s *Service) buildTargetRow(target *storage.ProbeTarget, includeIdentity bo
 	}
 
 	row := PublicTargetStatus{
-		Slug:        target.Slug,
-		Name:        target.Name,
-		Family:      target.Family,
-		Performance: perf,
-		Trend:       trend,
+		Slug:               target.Slug,
+		Name:               target.Name,
+		Family:             target.Family,
+		Performance:        perf,
+		Trend:              trend,
+		TrendWindowMinutes: intelligence.TrendWindowMinutes(intervalSec),
 	}
 
 	if !includeIdentity {

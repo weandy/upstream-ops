@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react"
+import { createPortal } from "react-dom"
 import { getToken } from "@/lib/api"
 import type {
   AvailabilityBucket,
@@ -108,7 +109,7 @@ export function formatSuccessRateClass(rate: number, samples: number): string {
 }
 
 function bucketBarClass(tone: AvailabilityBucket["tone"], compact: boolean): string {
-  const sizeClass = compact ? "h-4 rounded-[1.5px]" : "h-6 rounded-[2px]"
+  const sizeClass = compact ? "h-[18px] rounded-[1.5px]" : "h-6 rounded-[2px]"
   switch (tone) {
     case "ok":
       return cn(sizeClass, "bg-emerald-600/90 dark:bg-emerald-400/90")
@@ -121,67 +122,175 @@ function bucketBarClass(tone: AvailabilityBucket["tone"], compact: boolean): str
   }
 }
 
-function formatBucketTooltip(b: AvailabilityBucket): string {
+function bucketTip(b: AvailabilityBucket, windowMinutes: number): { time: string; detail: string } {
   const d = new Date(b.timestamp)
-  const hhmm = Number.isNaN(d.getTime())
-    ? ""
-    : d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
-  if (b.sample_count <= 0) {
-    return `${hhmm} 无采样`
+  const hhmm = (value: Date) =>
+    Number.isNaN(value.getTime())
+      ? "--:--"
+      : value.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
+  const minutes = windowMinutes > 0 ? windowMinutes : 60
+  const bucketMs = (minutes * 60_000) / 60
+  const time =
+    Number.isNaN(d.getTime())
+      ? "--:--"
+      : bucketMs <= 60_000
+        ? hhmm(d)
+        : `${hhmm(d)}–${hhmm(new Date(d.getTime() + bucketMs))}`
+  if (b.sample_count <= 0) return { time, detail: "无采样" }
+  return {
+    time,
+    detail: `可用率 ${b.success_rate.toFixed(0)}% · ${b.success_count}/${b.sample_count}`,
   }
-  return `${hhmm} 可用率 ${b.success_rate.toFixed(0)}% (${b.success_count}/${b.sample_count})`
+}
+
+type TrendTip = {
+  time: string
+  detail: string
+  rect: { left: number; top: number; width: number; height: number; bottom: number }
+}
+
+function TrendHoverCard({ tip }: { tip: TrendTip }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState({ w: 112, h: 44 })
+  useLayoutEffect(() => {
+    const node = ref.current
+    if (!node) return
+    const w = node.offsetWidth
+    const h = node.offsetHeight
+    if (w !== size.w || h !== size.h) setSize({ w, h })
+  }, [tip, size.w, size.h])
+
+  const center = tip.rect.left + tip.rect.width / 2
+  const pad = 8
+  let left = center - size.w / 2
+  if (left < pad) left = pad
+  if (left + size.w > window.innerWidth - pad) {
+    left = Math.max(pad, window.innerWidth - pad - size.w)
+  }
+  let top = tip.rect.top - size.h - 8
+  let below = false
+  if (top < pad) {
+    top = tip.rect.bottom + 8
+    below = true
+  }
+  let arrow = center - left
+  if (arrow < 12) arrow = 12
+  if (arrow > size.w - 12) arrow = size.w - 12
+
+  return createPortal(
+    <div
+      ref={ref}
+      className="pointer-events-none fixed z-[80]"
+      style={{ left, top }}
+    >
+      <div className="min-w-[96px] rounded-lg border border-border bg-popover px-2.5 py-1.5 text-popover-foreground shadow-lg">
+        <div className="font-mono text-[13px] font-semibold leading-tight tabular-nums">
+          {tip.time}
+        </div>
+        <div className="mt-0.5 whitespace-nowrap text-[11px] leading-tight text-muted-foreground">
+          {tip.detail}
+        </div>
+      </div>
+      <span
+        className={cn(
+          "absolute h-2 w-2 border-border bg-popover",
+          below
+            ? "top-0 -translate-y-1 rotate-45 border-l border-t"
+            : "top-full -translate-y-1 rotate-45 border-b border-r",
+        )}
+        style={{ left: arrow, marginLeft: -4 }}
+      />
+    </div>,
+    document.body,
+  )
+}
+
+export function trendWindowLabel(windowMinutes?: number): string {
+  const minutes = windowMinutes && windowMinutes > 0 ? windowMinutes : 60
+  const cadence =
+    minutes % 60 === 0 ? `每 ${minutes / 60} 分钟` : `每 ${minutes} 秒`
+  return `近 ${minutes} 分钟可用率 · ${cadence}测试一次`
 }
 
 export function TrendStrip({
   buckets,
   compact = false,
   showAxis = false,
+  windowMinutes = 60,
   className,
 }: {
   buckets: AvailabilityBucket[]
   compact?: boolean
   showAxis?: boolean
+  windowMinutes?: number
   className?: string
 }) {
   const list = buckets.length > 0 ? buckets : []
   const count = Math.max(list.length, 60)
+  const cells = list.length === 0 ? Array.from({ length: count }) : list
+  const [tip, setTip] = useState<TrendTip | null>(null)
+  const showTip = (
+    event: MouseEvent<HTMLElement>,
+    next: { time: string; detail: string },
+  ) => {
+    const rect = event.currentTarget.getBoundingClientRect()
+    setTip({
+      ...next,
+      rect: {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+        bottom: rect.bottom,
+      },
+    })
+  }
+  // 详情里空间足够，固定用最宽一档；列表里按容器宽度分档，避免 1fr 把余数像素摊成粗细不齐。
+  const barWidth = showAxis
+    ? "w-[5px] flex-[0_0_5px]"
+    : "w-[3px] flex-[0_0_3px] @min-[320px]:w-[4px] @min-[320px]:flex-[0_0_4px] @min-[420px]:w-[5px] @min-[420px]:flex-[0_0_5px]"
+  const barHeight = compact && !showAxis ? "h-[18px]" : "h-6"
   return (
-    <div className={cn("w-full space-y-1", className)}>
+    <div className={cn("@container w-full min-w-0 py-1.5", className)}>
       <div
         className={cn(
-          "grid w-full items-center gap-[1.5px] sm:gap-[2px]",
-          compact ? "h-4" : "h-6",
+          "flex w-max max-w-full items-center",
+          showAxis ? "gap-[2px]" : "gap-px @min-[420px]:gap-[2px]",
+          compact && !showAxis ? "h-[22px]" : "h-8",
         )}
-        style={{
-          gridTemplateColumns: `repeat(${count}, minmax(1px, 1fr))`,
-        }}
-        aria-label="近 60 分钟逐分钟可用率"
+        aria-label={trendWindowLabel(windowMinutes)}
       >
         {list.length === 0
-          ? Array.from({ length: 60 }).map((_, idx) => (
+          ? cells.map((_, idx) => (
               <span
                 key={idx}
                 className={cn(
-                  "block bg-muted-foreground/20",
-                  compact ? "h-4 rounded-[1.5px]" : "h-6 rounded-[2px]",
+                  "relative block origin-center rounded-[1.5px] bg-muted-foreground/20 transition-transform duration-150 hover:z-20 hover:scale-x-[2.4] hover:scale-y-150",
+                  barWidth,
+                  barHeight,
                 )}
+                onMouseEnter={(event) => showTip(event, { time: "--:--", detail: "无采样" })}
+                onMouseLeave={() => setTip(null)}
               />
             ))
           : list.map((b, idx) => (
               <span
                 key={`${b.timestamp}-${idx}`}
-                title={formatBucketTooltip(b)}
                 className={cn(
-                  "block transition-transform duration-150 hover:scale-y-115",
-                  bucketBarClass(b.tone, compact),
+                  "relative block origin-center rounded-[1.5px] transition-transform duration-150 hover:z-20 hover:scale-x-[2.4] hover:scale-y-150",
+                  barWidth,
+                  bucketBarClass(b.tone, compact && !showAxis),
                 )}
+                onMouseEnter={(event) => showTip(event, bucketTip(b, windowMinutes))}
+                onMouseLeave={() => setTip(null)}
               />
             ))}
       </div>
+      {tip ? <TrendHoverCard tip={tip} /> : null}
       {showAxis ? (
-        <div className="flex items-center justify-between font-mono text-[10px] leading-none text-muted-foreground/80">
-          <span>60 分钟前</span>
-          <span>30 分钟前</span>
+        <div className="mt-1 flex w-full max-w-[418px] items-center justify-between font-mono text-[10px] leading-none text-muted-foreground/80">
+          <span>{windowMinutes} 分钟前</span>
+          <span>{Math.round(windowMinutes / 2)} 分钟前</span>
           <span>现在</span>
         </div>
       ) : null}

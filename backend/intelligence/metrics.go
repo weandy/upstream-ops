@@ -10,9 +10,45 @@ import (
 )
 
 const (
-	// TrendBucketCount 趋势条时间桶个数（近 60 分钟，每分钟 1 桶）。
+	// TrendBucketCount 可用率条的格子数。每一格的时长等于该目标的测活间隔，
+	// 因此 1 分钟一测时整条约 60 分钟，5 分钟一测时整条约 300 分钟。
 	TrendBucketCount = 60
 )
+
+// LivenessBucketDuration 把测活间隔收成趋势条的单格时长。未配置或短于最小间隔时用默认 60 秒。
+func LivenessBucketDuration(intervalSeconds int) time.Duration {
+	if intervalSeconds < MinDetectorIntervalSec {
+		intervalSeconds = DefaultLivenessIntervalSec
+	}
+	if intervalSeconds < MinDetectorIntervalSec {
+		intervalSeconds = MinDetectorIntervalSec
+	}
+	return time.Duration(intervalSeconds) * time.Second
+}
+
+// TrendWindowMinutes 返回 60 格合计覆盖的分钟数，供「近 N 分钟可用率」文案使用。
+func TrendWindowMinutes(intervalSeconds int) int {
+	bucket := LivenessBucketDuration(intervalSeconds)
+	minutes := int(time.Duration(TrendBucketCount) * bucket / time.Minute)
+	if minutes <= 0 {
+		return TrendBucketCount
+	}
+	return minutes
+}
+
+// TrendLookback 趋势条需要回看的时长。多取一格，便于当前这一格还没采样时把窗口对齐到上一格。
+func TrendLookback(intervalSeconds int) time.Duration {
+	return time.Duration(TrendBucketCount+1) * LivenessBucketDuration(intervalSeconds)
+}
+
+func alignBucket(ts time.Time, bucket time.Duration) time.Time {
+	sec := ts.UTC().Unix()
+	size := int64(bucket / time.Second)
+	if size <= 0 {
+		size = int64(DefaultLivenessIntervalSec)
+	}
+	return time.Unix(sec-(sec%size), 0).UTC()
+}
 
 // PerformanceSummary 24 小时主动测活性能汇总。
 type PerformanceSummary struct {
@@ -34,37 +70,40 @@ type AvailabilityBucket struct {
 	Tone         string    `json:"tone"` // ok | warn | down | none
 }
 
-// AggregateLiveness 根据给定时间窗口内的主动测活样本计算 24h 性能汇总与近 60 分钟趋势条。
-// 纯内存计算，跨 SQLite / MySQL / PostgreSQL 零方言差异。
-func AggregateLiveness(samples []storage.ProbeLivenessSample, now time.Time) (PerformanceSummary, []AvailabilityBucket) {
+// AggregateLiveness 根据样本计算 24h 性能汇总，并按测活间隔把最近 60 格铺成可用率条。
+// 24h 汇总只统计真实采样；空格子表示这一格时间窗里没有采样。纯内存计算，不依赖数据库方言。
+func AggregateLiveness(samples []storage.ProbeLivenessSample, now time.Time, interval time.Duration) (PerformanceSummary, []AvailabilityBucket) {
 	nowUTC := now.UTC()
 	cutoff24h := nowUTC.Add(-24 * time.Hour)
-	currentMinute := nowUTC.Truncate(time.Minute)
-	// 若当前这一分钟刚开始、尚未到达本分钟的采样时刻，且过去 60 分钟内已有历史采样，
-	// 则将趋势条右端对齐到上一已完成分钟，避免每分钟前几十秒最右侧固定露出一格灰色“无采样”。
-	hasCurrentMinuteSample := false
-	hasRecentWindowSample := false
-	recentCutoff := currentMinute.Add(-time.Duration(TrendBucketCount) * time.Minute)
+	bucket := interval
+	if bucket < time.Duration(MinDetectorIntervalSec)*time.Second {
+		bucket = LivenessBucketDuration(int(interval / time.Second))
+	}
+	currentStart := alignBucket(nowUTC, bucket)
+	// 当前这一格刚开始、采样还没落到这一格时，右端对齐到上一格，避免最右侧固定空一格。
+	hasCurrentSample := false
+	hasRecentSample := false
+	recentCutoff := currentStart.Add(-time.Duration(TrendBucketCount) * bucket)
 	for _, s := range samples {
 		ts := s.ObservedAt.UTC()
-		if !ts.Before(currentMinute) && ts.Before(currentMinute.Add(time.Minute)) {
-			hasCurrentMinuteSample = true
+		if !ts.Before(currentStart) && ts.Before(currentStart.Add(bucket)) {
+			hasCurrentSample = true
 			break
 		}
-		if !ts.Before(recentCutoff) && ts.Before(currentMinute) {
-			hasRecentWindowSample = true
+		if !ts.Before(recentCutoff) && ts.Before(currentStart) {
+			hasRecentSample = true
 		}
 	}
-	endMinute := currentMinute
-	if !hasCurrentMinuteSample && hasRecentWindowSample {
-		endMinute = currentMinute.Add(-time.Minute)
+	end := currentStart
+	if !hasCurrentSample && hasRecentSample {
+		end = currentStart.Add(-bucket)
 	}
-	startMinute := endMinute.Add(-time.Duration(TrendBucketCount-1) * time.Minute)
+	start := end.Add(-time.Duration(TrendBucketCount-1) * bucket)
 
 	buckets := make([]AvailabilityBucket, TrendBucketCount)
 	for i := 0; i < TrendBucketCount; i++ {
 		buckets[i] = AvailabilityBucket{
-			Timestamp: startMinute.Add(time.Duration(i) * time.Minute),
+			Timestamp: start.Add(time.Duration(i) * bucket),
 			Tone:      "none",
 		}
 	}
@@ -82,7 +121,7 @@ func AggregateLiveness(samples []storage.ProbeLivenessSample, now time.Time) (Pe
 
 	for _, s := range samples {
 		ts := s.ObservedAt.UTC()
-		if !ts.Before(cutoff24h) && !ts.After(nowUTC.Add(time.Minute)) {
+		if !ts.Before(cutoff24h) && !ts.After(nowUTC.Add(bucket)) {
 			total24h++
 			if s.Success {
 				success24h++
@@ -105,8 +144,7 @@ func AggregateLiveness(samples []storage.ProbeLivenessSample, now time.Time) (Pe
 			}
 		}
 
-		minute := ts.Truncate(time.Minute)
-		idx := int(minute.Sub(startMinute) / time.Minute)
+		idx := int(ts.Sub(start) / bucket)
 		if idx >= 0 && idx < TrendBucketCount {
 			buckets[idx].SampleCount++
 			if s.Success {

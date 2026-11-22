@@ -44,6 +44,7 @@ import {
   PROTOCOL_LABELS,
   statusBadgeProps,
   TrendStrip,
+  trendWindowLabel,
 } from "@/components/intelligence/shared"
 import { TargetFormDialog } from "@/components/intelligence/target-form-dialog"
 import { DetectorsDrawer } from "@/components/intelligence/detectors-drawer"
@@ -519,16 +520,20 @@ export default function IntelligencePage() {
                         </div>
                       </div>
 
-                      <div className="w-full min-w-0 sm:max-w-[340px] xl:min-w-[300px] xl:max-w-[380px] xl:flex-1">
+                      <div className="min-w-0 flex-1">
                         <div className="mb-1 flex items-center justify-between text-[10px] text-muted-foreground">
-                          <span>近 60 分钟可用率</span>
+                          <span>{trendWindowLabel(ov?.trend_window_minutes)}</span>
                           <span>
                             {ov?.recent_samples?.[0]
                               ? relativeTime(ov.recent_samples[0].observed_at)
                               : "待采样"}
                           </span>
                         </div>
-                        <TrendStrip buckets={ov?.trend ?? []} compact />
+                        <TrendStrip
+                          buckets={ov?.trend ?? []}
+                          compact
+                          windowMinutes={ov?.trend_window_minutes || 60}
+                        />
                       </div>
                     </div>
 

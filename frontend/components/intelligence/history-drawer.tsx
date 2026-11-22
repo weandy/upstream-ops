@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
   Activity,
@@ -33,6 +33,7 @@ import {
   PelicanSandboxFrame,
   statusBadgeProps,
   TrendStrip,
+  trendWindowLabel,
 } from "@/components/intelligence/shared"
 import { PerformanceTrendChart } from "@/components/intelligence/performance-trend-chart"
 import { cn } from "@/lib/utils"
@@ -90,39 +91,56 @@ export function HistoryDrawer({
   const [tab, setTab] = useState(initialTab)
   const [overview, setOverview] = useState<TargetOverview | null>(null)
   const [runs, setRuns] = useState<ProbeIntelligenceRun[]>([])
-  const [loading, setLoading] = useState(false)
+  const [runsFor, setRunsFor] = useState("")
   const [runningKey, setRunningKey] = useState<string | null>(null)
   const [trendRefreshKey, setTrendRefreshKey] = useState(0)
+  const requestSeq = useRef(0)
 
   useEffect(() => {
-    if (open) {
-      setTab(initialTab || "liveness")
-    }
+    if (open) setTab(initialTab || "liveness")
   }, [open, initialTab])
 
   const loadData = useCallback(async () => {
     if (!target) return
-    setLoading(true)
+    const seq = ++requestSeq.current
+    const targetId = target.id
+    const detector = tab
     try {
       const ov = await apiFetch<TargetOverview>(
-        `/intelligence/targets/${target.id}/overview`,
+        `/intelligence/targets/${targetId}/overview`,
       )
+      if (seq !== requestSeq.current) return
       setOverview(ov)
-      if (tab !== "liveness") {
-        const list = await apiFetch<ProbeIntelligenceRun[]>(
-          `/intelligence/targets/${target.id}/runs?detector=${encodeURIComponent(tab)}&limit=48`,
-        )
-        setRuns(Array.isArray(list) ? list : [])
+      if (detector === "liveness") {
+        setRuns([])
+        setRunsFor("")
+        return
       }
+      const list = await apiFetch<ProbeIntelligenceRun[]>(
+        `/intelligence/targets/${targetId}/runs?detector=${encodeURIComponent(detector)}&limit=48`,
+      )
+      if (seq !== requestSeq.current) return
+      setRuns(Array.isArray(list) ? list : [])
+      setRunsFor(`${targetId}:${detector}`)
     } catch (err) {
+      if (seq !== requestSeq.current) return
       toast.error(err instanceof Error ? err.message : "加载历史失败")
-    } finally {
-      setLoading(false)
     }
   }, [target, tab])
 
   useEffect(() => {
-    if (!open || !target) return
+    if (!open || !target) {
+      requestSeq.current += 1
+      setOverview(null)
+      setRuns([])
+      setRunsFor("")
+      return
+    }
+    setRuns([])
+    setRunsFor("")
+    setOverview((current) =>
+      current?.target.id === target.id ? current : null,
+    )
     void loadData()
   }, [open, target, tab, loadData])
 
@@ -155,7 +173,12 @@ export function HistoryDrawer({
   }
 
   const family = target ? FAMILY_META[target.family] ?? FAMILY_META.other : FAMILY_META.other
-  const perf = overview?.performance
+  const overviewReady = Boolean(target && overview?.target.id === target.id)
+  const perf = overviewReady ? overview?.performance : undefined
+  const recentSamples = overviewReady ? (overview?.recent_samples ?? []) : []
+  const runsKey = target ? `${target.id}:${tab}` : ""
+  const runsReady = runsFor === runsKey
+  const visibleRuns = runsReady ? runs : []
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -216,7 +239,14 @@ export function HistoryDrawer({
                 />
               </div>
               <div className="rounded-lg border border-border/70 bg-muted/15 px-3 py-2">
-                <TrendStrip buckets={overview?.trend ?? []} showAxis />
+                <p className="mb-1 text-[10px] text-muted-foreground">
+                  {trendWindowLabel(overview?.trend_window_minutes)}
+                </p>
+                <TrendStrip
+                  buckets={overview?.trend ?? []}
+                  showAxis
+                  windowMinutes={overview?.trend_window_minutes || 60}
+                />
               </div>
             </div>
           ) : null}
@@ -270,13 +300,6 @@ export function HistoryDrawer({
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-              {loading && !overview ? (
-                <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-                  <Loader2 className="mr-2 size-4 animate-spin" />
-                  加载记录中...
-                </div>
-              ) : null}
-
               <TabsContent value="liveness" className="mt-0 space-y-3">
                 {target ? (
                   <PerformanceTrendChart
@@ -284,7 +307,9 @@ export function HistoryDrawer({
                     refreshKey={trendRefreshKey}
                   />
                 ) : null}
-                {(overview?.recent_samples ?? []).length === 0 ? (
+                {!overviewReady ? (
+                  <PendingHint />
+                ) : recentSamples.length === 0 ? (
                   <EmptyHint text="暂无主动测活记录。请先在插件配置中为 liveness 设置模型并开启，或点右上角立即测本项。" />
                 ) : (
                   <div className="overflow-x-auto rounded-lg border border-border">
@@ -300,7 +325,7 @@ export function HistoryDrawer({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
-                        {(overview?.recent_samples ?? []).map((s) => (
+                        {recentSamples.map((s) => (
                           <tr key={s.id} className="hover:bg-muted/20">
                             <td className="px-3 py-2">
                               <Badge
@@ -346,11 +371,13 @@ export function HistoryDrawer({
               </TabsContent>
 
               <TabsContent value="candy" className="mt-0 space-y-2.5">
-                <RunStatusStrip runs={runs} />
-                {runs.length === 0 ? (
+                <RunStatusStrip runs={visibleRuns} />
+                {!runsReady ? (
+                  <PendingHint />
+                ) : visibleRuns.length === 0 ? (
                   <EmptyHint text="暂无 Candy 智力题检测记录。" />
                 ) : (
-                  runs.map((r) => {
+                  visibleRuns.map((r) => {
                     const st = statusBadgeProps(r.status)
                     const detail = safeJSON<ParsedCandyDetail>(r.detail_json)
                     return (
@@ -401,11 +428,13 @@ export function HistoryDrawer({
                 <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                   数字指纹基于 3 轮 1-355 随机整数分布统计特征与参考库比对，排名与概率仅供参考，不作为绝对身份证明。
                 </div>
-                <RunStatusStrip runs={runs} />
-                {runs.length === 0 ? (
+                <RunStatusStrip runs={visibleRuns} />
+                {!runsReady ? (
+                  <PendingHint />
+                ) : visibleRuns.length === 0 ? (
                   <EmptyHint text="暂无 lmfpd 数字指纹检测记录。" />
                 ) : (
-                  runs.map((r) => {
+                  visibleRuns.map((r) => {
                     const st = statusBadgeProps(r.status)
                     const detail = safeJSON<ParsedFingerprintDetail>(r.detail_json)
                     const topK = (detail?.top_candidates ?? []).slice(0, 6)
@@ -483,11 +512,13 @@ export function HistoryDrawer({
                 <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                   所有 AI 生成的画鹈鹕 SVG 均在空 sandbox iframe 中隔离渲染，彻底阻断脚本与外链请求。
                 </div>
-                {runs.length === 0 ? (
+                {!runsReady ? (
+                  <PendingHint />
+                ) : visibleRuns.length === 0 ? (
                   <EmptyHint text="暂无画鹈鹕 SVG 记录。" />
                 ) : (
                   <div className="grid gap-3 sm:grid-cols-2">
-                    {runs.slice(0, 12).map((r) => {
+                    {visibleRuns.slice(0, 12).map((r) => {
                       const st = statusBadgeProps(r.status)
                       return (
                         <div
@@ -526,11 +557,13 @@ export function HistoryDrawer({
               </TabsContent>
 
               <TabsContent value="custom_prompt" className="mt-0 space-y-2.5">
-                <RunStatusStrip runs={runs} />
-                {runs.length === 0 ? (
+                <RunStatusStrip runs={visibleRuns} />
+                {!runsReady ? (
+                  <PendingHint />
+                ) : visibleRuns.length === 0 ? (
                   <EmptyHint text="暂无自定义智力题记录。请在插件配置中编写题目与校验规则后开启。" />
                 ) : (
-                  runs.map((r) => {
+                  visibleRuns.map((r) => {
                     const st = statusBadgeProps(r.status)
                     const detail = safeJSON<ParsedCustomDetail>(r.detail_json)
                     return (
@@ -614,6 +647,15 @@ function RunStatusStrip({ runs }: { runs: ProbeIntelligenceRun[] }) {
           )}
         />
       ))}
+    </div>
+  )
+}
+
+function PendingHint() {
+  return (
+    <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+      <Loader2 className="mr-2 size-4 animate-spin" />
+      加载记录中...
     </div>
   )
 }

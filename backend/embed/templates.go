@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/bejix/upstream-ops/backend/intelligence"
 )
 
 var embedFuncMap = template.FuncMap{
@@ -158,12 +160,35 @@ var embedFuncMap = template.FuncMap{
 			return "st-down"
 		}
 	},
-	"bucketTitle": func(ts time.Time, samples, okCount int, rate float64) string {
-		label := ts.Local().Format("15:04")
-		if samples <= 0 {
-			return fmt.Sprintf("%s 无采样", label)
+	"trendLabel": func(minutes int) string {
+		if minutes <= 0 {
+			minutes = intelligence.TrendBucketCount
 		}
-		return fmt.Sprintf("%s 可用率 %.0f%% (%d/%d)", label, rate, okCount, samples)
+		cadence := fmt.Sprintf("每 %d 秒", minutes)
+		if minutes%60 == 0 {
+			cadence = fmt.Sprintf("每 %d 分钟", minutes/60)
+		}
+		return fmt.Sprintf("近 %d 分钟可用率 · %s测试一次", minutes, cadence)
+	},
+	"bucketClock": func(ts time.Time, windowMinutes int) string {
+		if ts.IsZero() {
+			return "--:--"
+		}
+		if windowMinutes <= 0 {
+			windowMinutes = intelligence.TrendBucketCount
+		}
+		start := ts.Local()
+		bucket := time.Duration(windowMinutes) * time.Minute / time.Duration(intelligence.TrendBucketCount)
+		if bucket <= time.Minute {
+			return start.Format("15:04")
+		}
+		return start.Format("15:04") + "–" + start.Add(bucket).Format("15:04")
+	},
+	"bucketDetail": func(samples, okCount int, rate float64) string {
+		if samples <= 0 {
+			return "无采样"
+		}
+		return fmt.Sprintf("可用率 %.0f%% · %d/%d", rate, okCount, samples)
 	},
 	"themeClass": func(theme string) string {
 		return "theme-" + normalizeTheme(theme)
@@ -319,7 +344,7 @@ body.theme-dark .title {
 
 .table-wrap {
   width: 100%;
-  overflow-x: auto;
+  overflow: visible;
 }
 table.perf-table {
   width: 100%;
@@ -522,30 +547,117 @@ a.check:hover .check-text {
   pointer-events: none;
 }
 
-/* 近 60 分钟可用率：等高齐整胶囊条，告别高低锯齿 */
+/* 近 60 分钟可用率：格子用整数像素，不把余数摊进某一格。
+   宽度按外层容器分档；悬停时当前这一分钟放大，方便对上时间。 */
+.trend-slot {
+  container-type: inline-size;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 0;
+}
+.trend-caption {
+  width: max-content;
+  max-width: 100%;
+  margin: 0 0 2px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink-muted);
+  white-space: normal;
+}
 .trend-grid {
-  display: grid;
+  display: flex;
+  width: max-content;
+  max-width: 100%;
   height: 22px;
-  grid-template-columns: repeat(60, minmax(1px, 1fr));
   align-items: center;
-  gap: 2px;
+  gap: 1px;
+  overflow: visible;
+}
+.tcell {
+  position: relative;
+  z-index: 0;
+  flex: 0 0 3px;
+  width: 3px;
+  height: 18px;
 }
 .tbar {
   display: block;
-  height: 18px;
-  border-radius: 2px;
-  opacity: 0.85;
+  width: 100%;
+  height: 100%;
+  border-radius: 1.5px;
+  opacity: 0.9;
   background: var(--none);
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transform-origin: center center;
+  transition: transform 0.12s ease, opacity 0.12s ease;
 }
-.tbar:hover {
+@container (min-width: 320px) {
+  .tcell { flex-basis: 4px; width: 4px; }
+}
+@container (min-width: 420px) {
+  .trend-grid { gap: 2px; }
+  .tcell { flex-basis: 5px; width: 5px; }
+}
+.tcell:hover { z-index: 5; }
+.tcell:hover .tbar {
   opacity: 1;
-  transform: scaleY(1.16);
+  transform: scaleX(2.4) scaleY(1.5);
+}
+.tip {
+  position: absolute;
+  z-index: 8;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  display: none;
+  min-width: 96px;
+  padding: 6px 9px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 8px 18px rgba(37, 35, 31, 0.16);
+  transform: translateX(-50%);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.tip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  background: var(--surface);
+  border-right: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+  transform: translateY(-5px) rotate(45deg);
+}
+.tcell:hover .tip { display: block; }
+.tcell:nth-child(-n+7) .tip { left: 0; transform: none; }
+.tcell:nth-child(-n+7) .tip::after { left: 8px; margin-left: 0; }
+.tcell:nth-last-child(-n+7) .tip { left: auto; right: 0; transform: none; }
+.tcell:nth-last-child(-n+7) .tip::after { left: auto; right: 4px; margin-left: 0; }
+.tip-time {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.tip-detail {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--ink-muted);
 }
 .tbar.ok   { background: #17803d; }
 .tbar.warn { background: #b4690e; }
 .tbar.down { background: #d93036; }
 .tbar.none { background: var(--none); opacity: 0.55; }
+.tcell:hover .tbar.none { opacity: 0.9; }
 body.theme-dark .tbar.ok   { background: #22c55e; }
 body.theme-dark .tbar.warn { background: #eab308; }
 body.theme-dark .tbar.down { background: #f43f5e; }
@@ -755,7 +867,6 @@ pre.answer-box {
   table.perf-table th:last-child,
   table.perf-table td:last-child { padding-right: 14px; }
   .unit { display: none; }
-  .trend-grid { gap: 1.5px; }
 }
 
 /* 手机端 / 窄侧边栏 iframe：零横向滚动，自动切换为紧凑双列/三列卡片 */
@@ -838,11 +949,7 @@ pre.answer-box {
     color: var(--ink-muted);
     margin-bottom: 4px;
   }
-  .trend-grid {
-    gap: 2px;
-    height: 20px;
-  }
-  .tbar { height: 16px; }
+  .trend-caption { display: none; }
   .cand-row {
     grid-template-columns: 28px minmax(110px, 1fr) 76px 48px;
     gap: 6px;
@@ -903,7 +1010,7 @@ const tplOverview = `<!doctype html>
               {{- if .Site.ShowIdentityColumn }}
               <th>模型检测</th>
               {{- end }}
-              <th>近 60 分钟可用率</th>
+              <th>测活可用率</th>
             </tr>
           </thead>
           <tbody>
@@ -960,11 +1067,15 @@ const tplOverview = `<!doctype html>
                 </div>
               </td>
               {{- end }}
-              <td class="cell-trend" data-label="近 60 分钟可用率">
-                <div class="trend-grid" role="img" aria-label="{{ .Name }} 近 60 分钟逐分钟可用率">
+              <td class="cell-trend" data-label="{{ trendLabel .TrendWindowMinutes }}">
+                <div class="trend-caption">{{ trendLabel .TrendWindowMinutes }}</div>
+                <div class="trend-slot">
+                <div class="trend-grid" role="img" aria-label="{{ .Name }} {{ trendLabel .TrendWindowMinutes }}">
+                  {{- $window := .TrendWindowMinutes }}
                   {{- range .Trend }}
-                  <span class="tbar {{ .Tone }}" title="{{ bucketTitle .Timestamp .SampleCount .SuccessCount .SuccessRate }}"></span>
+                  <span class="tcell"><span class="tbar {{ .Tone }}"></span><span class="tip"><span class="tip-time">{{ bucketClock .Timestamp $window }}</span><span class="tip-detail">{{ bucketDetail .SampleCount .SuccessCount .SuccessRate }}</span></span></span>
                   {{- end }}
+                </div>
                 </div>
               </td>
             </tr>
@@ -981,7 +1092,7 @@ const tplOverview = `<!doctype html>
         <span class="legend-item"><span class="legend-swatch" style="background:#b4690e"></span>波动</span>
         <span class="legend-item"><span class="legend-swatch" style="background:#d93036"></span>异常</span>
         <span class="legend-item"><span class="legend-swatch" style="background:var(--none)"></span>无采样</span>
-        <span>· 左→右：60 分钟前至现在</span>
+        <span>· 左→右：窗口起点至现在</span>
         {{- if gt .Site.RefreshSeconds 0 }}<span>· 每 {{ .Site.RefreshSeconds }}s 刷新</span>{{- end }}
       </div>
       <div>最后数据时间：{{ fmtTimePtr .LatestData }}{{- if .Site.ShowIdentityColumn }} · 指纹排名仅供参考{{- end }}</div>

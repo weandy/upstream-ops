@@ -1119,6 +1119,7 @@ export interface TargetOverview {
   target: ProbeTarget
   performance: ProbePerformanceSummary
   trend: AvailabilityBucket[]
+  trend_window_minutes: number
   recent_samples: ProbeLivenessSample[]
   detector_configs: ProbeDetectorConfig[]
   latest_runs: Record<string, ProbeIntelligenceRun>
