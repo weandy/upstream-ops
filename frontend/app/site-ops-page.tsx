@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AccountEfficiencyPanel } from "@/components/site-ops/account-efficiency-panel"
 import { AccountsStatusPanel } from "@/components/site-ops/accounts-status-panel"
 import { CapabilityDrawer } from "@/components/site-ops/capability-drawer"
 import { EventsTimelinePanel } from "@/components/site-ops/events-timeline-panel"
@@ -12,15 +13,18 @@ import { GroupsMatrixPanel } from "@/components/site-ops/groups-matrix-panel"
 import { InstanceFormDialog } from "@/components/site-ops/instance-form-dialog"
 import { InstanceSwitcher } from "@/components/site-ops/instance-switcher"
 import { OverviewPanel } from "@/components/site-ops/overview-panel"
+import { PoolForecastPanel } from "@/components/site-ops/pool-forecast-panel"
 import { TrendsPanel } from "@/components/site-ops/trends-panel"
 import { useRefreshTick } from "@/lib/refresh-context"
 import {
   deleteSiteOpsInstance,
+  fetchSiteOpsAccountsEfficiency,
   fetchSiteOpsAccountsStatus,
   fetchSiteOpsEvents,
   fetchSiteOpsGroups,
   fetchSiteOpsInstances,
   fetchSiteOpsOverview,
+  fetchSiteOpsPoolForecast,
   fetchSiteOpsSummary,
   fetchSiteOpsTrends,
   isSiteOpsAuthRequiredError,
@@ -28,17 +32,21 @@ import {
   probeSiteOpsInstance,
   refreshSiteOpsInstance,
   sendSiteOpsDailyReport,
+  updateSiteOpsAccountCost,
 } from "@/lib/site-ops-api"
 import type {
+  SiteOpsAccountsEfficiencyResponse,
   SiteOpsAccountsStatusResponse,
   SiteOpsEventsResponse,
   SiteOpsGroupsResponse,
   SiteOpsInstanceView,
   SiteOpsOverviewResponse,
+  SiteOpsPoolForecastResponse,
   SiteOpsProbeReport,
   SiteOpsSummaryResponse,
   SiteOpsTrendRange,
   SiteOpsTrendsResponse,
+  SiteOpsUpdateAccountCostInput,
 } from "@/lib/site-ops-types"
 
 interface InstanceDetails {
@@ -50,6 +58,18 @@ interface InstanceDetails {
   trendsError?: string
   groups?: SiteOpsGroupsResponse
   groupsError?: string
+}
+
+interface ForecastSectionState {
+  id: number
+  data?: SiteOpsPoolForecastResponse
+  error?: string
+}
+
+interface EfficiencySectionState {
+  id: number
+  data?: SiteOpsAccountsEfficiencyResponse
+  error?: string
 }
 
 interface AccountsSectionState {
@@ -65,7 +85,7 @@ interface EventsSectionState {
 }
 
 type Action = "refresh" | "probe"
-type DetailSection = "overview" | "accounts" | "events"
+type DetailSection = "overview" | "forecast" | "accounts" | "events"
 
 function ReadState({ error, loading, empty }: { error?: string; loading: boolean; empty: string }) {
   return (
@@ -87,6 +107,12 @@ export default function SiteOpsPage() {
   const [range, setRange] = useState<SiteOpsTrendRange>("6h")
   const [details, setDetails] = useState<InstanceDetails | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
+  const [forecastState, setForecastState] = useState<ForecastSectionState | null>(null)
+  const [loadingForecast, setLoadingForecast] = useState(false)
+  const [forecastReload, setForecastReload] = useState(0)
+  const [efficiencyState, setEfficiencyState] = useState<EfficiencySectionState | null>(null)
+  const [loadingEfficiency, setLoadingEfficiency] = useState(false)
+  const [efficiencyReload, setEfficiencyReload] = useState(0)
   const [accountsState, setAccountsState] = useState<AccountsSectionState | null>(null)
   const [loadingAccounts, setLoadingAccounts] = useState(false)
   const [accountsReload, setAccountsReload] = useState(0)
@@ -100,6 +126,8 @@ export default function SiteOpsPage() {
   const [notice, setNotice] = useState<{ id: number; action: Action | "delete"; message: string; error: boolean } | null>(null)
   const catalogRequest = useRef(0)
   const detailRequest = useRef(0)
+  const forecastRequest = useRef(0)
+  const efficiencyRequest = useRef(0)
   const accountsRequest = useRef(0)
   const eventsRequest = useRef(0)
 
@@ -108,9 +136,15 @@ export default function SiteOpsPage() {
   const readOnly = false
   const currentDetails = details?.id === id ? details : null
   const currentTrends = currentDetails?.range === range ? currentDetails : null
+  const currentForecast = forecastState?.id === id ? forecastState : null
+  const currentEfficiency = efficiencyState?.id === id ? efficiencyState : null
   const currentAccounts = accountsState?.id === id ? accountsState : null
   const currentEvents = eventsState?.id === id ? eventsState : null
   const currentNotice = notice?.id === id ? notice : null
+
+  const forecastRiskCount =
+    (currentForecast?.data?.will_exhaust_high_count ?? 0) +
+    (currentForecast?.data?.exhausted_count ?? 0)
 
   const abnormalAccountsCount = (() => {
     if (currentAccounts?.data) {
@@ -133,11 +167,15 @@ export default function SiteOpsPage() {
   const requireAuth = useCallback(() => {
     catalogRequest.current += 1
     detailRequest.current += 1
+    forecastRequest.current += 1
+    efficiencyRequest.current += 1
     accountsRequest.current += 1
     eventsRequest.current += 1
     setBlocked(true)
     setCatalog(null)
     setDetails(null)
+    setForecastState(null)
+    setEfficiencyState(null)
     setAccountsState(null)
     setEventsState(null)
     setReport(undefined)
@@ -206,6 +244,60 @@ export default function SiteOpsPage() {
   }, [id, range, tick, reload, blocked, requireAuth])
 
   useEffect(() => {
+    if (id === undefined || blocked || activeSection !== "forecast") return
+    const sequence = ++forecastRequest.current
+    setLoadingForecast(true)
+    fetchSiteOpsPoolForecast(id)
+      .then((data) => {
+        if (sequence !== forecastRequest.current) return
+        setForecastState({ id, data })
+      })
+      .catch((err: unknown) => {
+        if (sequence !== forecastRequest.current) return
+        if (isSiteOpsAuthRequiredError(err)) {
+          requireAuth()
+        } else {
+          setForecastState((current) => ({
+            id,
+            data: current?.id === id ? current.data : undefined,
+            error: "无法加载号池周期预测，请重试。",
+          }))
+        }
+      })
+      .finally(() => {
+        if (sequence === forecastRequest.current) setLoadingForecast(false)
+      })
+    return () => { forecastRequest.current += 1 }
+  }, [id, activeSection, tick, reload, forecastReload, blocked, requireAuth])
+
+  useEffect(() => {
+    if (id === undefined || blocked || activeSection !== "forecast") return
+    const sequence = ++efficiencyRequest.current
+    setLoadingEfficiency(true)
+    fetchSiteOpsAccountsEfficiency(id)
+      .then((data) => {
+        if (sequence !== efficiencyRequest.current) return
+        setEfficiencyState({ id, data })
+      })
+      .catch((err: unknown) => {
+        if (sequence !== efficiencyRequest.current) return
+        if (isSiteOpsAuthRequiredError(err)) {
+          requireAuth()
+        } else {
+          setEfficiencyState((current) => ({
+            id,
+            data: current?.id === id ? current.data : undefined,
+            error: "无法加载单号成本效率，请重试。",
+          }))
+        }
+      })
+      .finally(() => {
+        if (sequence === efficiencyRequest.current) setLoadingEfficiency(false)
+      })
+    return () => { efficiencyRequest.current += 1 }
+  }, [id, activeSection, tick, reload, efficiencyReload, blocked, requireAuth])
+
+  useEffect(() => {
     if (id === undefined || blocked || activeSection !== "accounts") return
     const sequence = ++accountsRequest.current
     setLoadingAccounts(true)
@@ -262,10 +354,14 @@ export default function SiteOpsPage() {
   function selectInstance(nextId: number) {
     if (nextId === id) return
     detailRequest.current += 1
+    forecastRequest.current += 1
+    efficiencyRequest.current += 1
     accountsRequest.current += 1
     eventsRequest.current += 1
     setSelectedId(nextId)
     setDetails(null)
+    setForecastState(null)
+    setEfficiencyState(null)
     setAccountsState(null)
     setEventsState(null)
     setDrawerId(null)
@@ -342,6 +438,8 @@ export default function SiteOpsPage() {
       }
       catalogRequest.current += 1
       detailRequest.current += 1
+      forecastRequest.current += 1
+      efficiencyRequest.current += 1
       accountsRequest.current += 1
       eventsRequest.current += 1
       setCatalog((current) => current && {
@@ -350,6 +448,8 @@ export default function SiteOpsPage() {
       })
       setSelectedId((current) => current === deletedId ? null : current)
       setDetails((current) => current?.id === deletedId ? null : current)
+      setForecastState((current) => current?.id === deletedId ? null : current)
+      setEfficiencyState((current) => current?.id === deletedId ? null : current)
       setAccountsState((current) => current?.id === deletedId ? null : current)
       setEventsState((current) => current?.id === deletedId ? null : current)
       setDrawerId((current) => current === deletedId ? null : current)
@@ -434,6 +534,17 @@ export default function SiteOpsPage() {
                 >
                   <TabsList>
                     <TabsTrigger value="overview">总览与容量</TabsTrigger>
+                    <TabsTrigger value="forecast">
+                      号池预测与效率
+                      {forecastRiskCount > 0 ? (
+                        <Badge
+                          variant="destructive"
+                          className="ml-1 h-4.5 px-1.5 text-[11px] tabular-nums"
+                        >
+                          {forecastRiskCount}
+                        </Badge>
+                      ) : null}
+                    </TabsTrigger>
                     <TabsTrigger value="accounts">
                       账号状态
                       {abnormalAccountsCount > 0 ? (
@@ -472,6 +583,30 @@ export default function SiteOpsPage() {
                     {currentDetails?.groups
                       ? <GroupsMatrixPanel data={currentDetails.groups} />
                       : <ReadState error={currentDetails?.groupsError} loading={!currentDetails} empty="暂无分组容量。" />}
+                  </TabsContent>
+
+                  <TabsContent value="forecast" className="space-y-5">
+                    <PoolForecastPanel
+                      data={currentForecast?.data}
+                      loading={loadingForecast}
+                      error={currentForecast?.error}
+                      onReload={() => setForecastReload((current) => current + 1)}
+                    />
+                    <AccountEfficiencyPanel
+                      data={currentEfficiency?.data}
+                      loading={loadingEfficiency}
+                      error={currentEfficiency?.error}
+                      onReload={() => setEfficiencyReload((current) => current + 1)}
+                      onSaveCost={async (accountId: number, input: SiteOpsUpdateAccountCostInput) => {
+                        try {
+                          await updateSiteOpsAccountCost(selected.id, accountId, input)
+                          setEfficiencyReload((current) => current + 1)
+                        } catch (err) {
+                          if (isSiteOpsAuthRequiredError(err)) requireAuth()
+                          throw err
+                        }
+                      }}
+                    />
                   </TabsContent>
 
                   <TabsContent value="accounts">
