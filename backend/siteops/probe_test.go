@@ -49,6 +49,14 @@ func TestProbeFallbackForbiddenAndRecovery(t *testing.T) {
 			io.WriteString(w, `[]`)
 		case versionPath:
 			io.WriteString(w, `{"version":"v0.2.24"}`)
+		case "/api/v1/admin/ops/alert-events":
+			io.WriteString(w, `{"code":0,"data":[]}`)
+		case "/api/v1/admin/ops/ingress-rejections/health":
+			io.WriteString(w, `{"code":0,"data":{"accepting":true}}`)
+		case "/api/v1/admin/ops/auth-cache-invalidation/health":
+			io.WriteString(w, `{"code":0,"data":{"outbox":{"running":true}}}`)
+		case "/api/v1/admin/accounts":
+			io.WriteString(w, `{"code":0,"data":{"items":[],"total":0,"page":1,"page_size":100}}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -79,7 +87,12 @@ func TestProbeFallbackForbiddenAndRecovery(t *testing.T) {
 	requests = nil
 	recovered = true
 	mu.Unlock()
-	if !slices.Equal(firstRequests, []string{healthPath, snapshotPath, overviewPath, concurrencyPath, availabilityPath, groupsPath, versionPath}) {
+	wantInitial := []string{
+		healthPath, snapshotPath, overviewPath, concurrencyPath, availabilityPath, groupsPath, versionPath,
+		"/api/v1/admin/ops/alert-events", "/api/v1/admin/ops/ingress-rejections/health",
+		"/api/v1/admin/ops/auth-cache-invalidation/health", "/api/v1/admin/accounts",
+	}
+	if !slices.Equal(firstRequests, wantInitial) {
 		t.Fatalf("initial probe order = %v", firstRequests)
 	}
 	// Polling can use the known fallback, while a reprobe always rechecks the preferred route.
@@ -101,7 +114,12 @@ func TestProbeFallbackForbiddenAndRecovery(t *testing.T) {
 	mu.Lock()
 	secondRequests := slices.Clone(requests)
 	mu.Unlock()
-	if !slices.Equal(secondRequests, []string{overviewPath, healthPath, snapshotPath, concurrencyPath, availabilityPath, groupsPath, versionPath}) {
+	wantSecond := []string{
+		overviewPath, healthPath, snapshotPath, concurrencyPath, availabilityPath, groupsPath, versionPath,
+		"/api/v1/admin/ops/alert-events", "/api/v1/admin/ops/ingress-rejections/health",
+		"/api/v1/admin/ops/auth-cache-invalidation/health", "/api/v1/admin/accounts",
+	}
+	if !slices.Equal(secondRequests, wantSecond) {
 		t.Fatalf("poll and reprobe order = %v", secondRequests)
 	}
 }

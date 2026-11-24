@@ -3,7 +3,11 @@
  */
 import { apiFetch, type ApiError } from "@/lib/api"
 import type {
+  SiteOpsAccountsStatusResponse,
   SiteOpsCreateInstanceInput,
+  SiteOpsDailyReportPreview,
+  SiteOpsDailyReportSendResult,
+  SiteOpsEventsResponse,
   SiteOpsGroupsResponse,
   SiteOpsInstanceView,
   SiteOpsOverviewResponse,
@@ -86,4 +90,40 @@ export function fetchSiteOpsTrends(
 
 export function fetchSiteOpsGroups(id: number): Promise<SiteOpsGroupsResponse> {
   return apiFetch<SiteOpsGroupsResponse>(`/site-ops/instances/${id}/groups`)
+}
+
+export function fetchSiteOpsEvents(
+  id: number,
+  params?: { state?: string; severity?: string; limit?: number },
+): Promise<SiteOpsEventsResponse> {
+  const q = new URLSearchParams()
+  if (params?.state) q.set("state", params.state)
+  if (params?.severity) q.set("severity", params.severity)
+  if (params?.limit && params.limit > 0) q.set("limit", String(params.limit))
+  const suffix = q.toString() ? `?${q.toString()}` : ""
+  return apiFetch<SiteOpsEventsResponse>(`/site-ops/instances/${id}/events${suffix}`)
+}
+
+export function fetchSiteOpsAccountsStatus(
+  id: number,
+  params?: { status?: string; platform?: string },
+): Promise<SiteOpsAccountsStatusResponse> {
+  const q = new URLSearchParams({ view: "status" })
+  if (params?.status) q.set("status", params.status)
+  if (params?.platform) q.set("platform", params.platform)
+  return apiFetch<SiteOpsAccountsStatusResponse>(
+    `/site-ops/instances/${id}/accounts?${q.toString()}`,
+  )
+}
+
+export function previewSiteOpsDailyReport(id: number): Promise<SiteOpsDailyReportPreview> {
+  return apiFetch<SiteOpsDailyReportPreview>(`/site-ops/instances/${id}/report/preview`, {
+    method: "POST",
+  })
+}
+
+export function sendSiteOpsDailyReport(id: number): Promise<SiteOpsDailyReportSendResult> {
+  return apiFetch<SiteOpsDailyReportSendResult>(`/site-ops/instances/${id}/report/send`, {
+    method: "POST",
+  })
 }

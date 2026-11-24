@@ -20,6 +20,8 @@ import (
 
 type ServiceDeps struct {
 	Store          Store
+	EventStore     EventStore
+	Notifier       DirectNotifier
 	Cipher         *crypto.Cipher
 	Validator      OutboundValidator
 	Client         UpstreamClient
@@ -43,9 +45,14 @@ type Service struct {
 }
 
 func NewService(deps ServiceDeps) *Service {
+	if deps.EventStore == nil && deps.Store != nil {
+		if es, ok := deps.Store.(EventStore); ok {
+			deps.EventStore = es
+		}
+	}
 	cfg := copySiteOpsConfig(deps.InitialConfig)
 	poller := NewPoller(PollerDeps{
-		Store: deps.Store, Cipher: deps.Cipher, Validator: deps.Validator, Client: deps.Client, Prober: deps.Prober,
+		Store: deps.Store, EventStore: deps.EventStore, Notifier: deps.Notifier, Cipher: deps.Cipher, Validator: deps.Validator, Client: deps.Client, Prober: deps.Prober,
 		Log: deps.Log, InitialConfig: cfg, Now: deps.Now, Jitter: deps.Jitter, SanitizeError: deps.SanitizeError,
 	})
 	if deps.Validator != nil {
@@ -53,6 +60,14 @@ func NewService(deps ServiceDeps) *Service {
 	}
 	poller.SetPollingAllowed(IsPollingAllowed(deps.AuthActive, cfg))
 	return &Service{deps: deps, poller: poller, cfg: cfg, auth: deps.AuthActive}
+}
+
+// SetNotifier 注入专用直投通知器（零广播、不碰旧 fanout 与 notification_cooldowns）。
+func (s *Service) SetNotifier(notifier DirectNotifier) {
+	s.mu.Lock()
+	s.deps.Notifier = notifier
+	s.mu.Unlock()
+	s.poller.SetNotifier(notifier)
 }
 
 func copySiteOpsConfig(cfg config.SiteOpsConfig) config.SiteOpsConfig {

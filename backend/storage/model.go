@@ -242,8 +242,9 @@ type NotificationChannel struct {
 	Name          string                  `gorm:"size:128;not null;uniqueIndex" json:"name"`
 	Type          NotificationChannelType `gorm:"size:32;not null;index" json:"type"`
 	ConfigCipher  string                  `gorm:"type:text;not null" json:"-"`
-	Subscriptions string                  `gorm:"size:4096;not null;default:'[]'" json:"subscriptions"`
-	Enabled       bool                    `gorm:"default:true" json:"enabled"`
+	Subscriptions        string                  `gorm:"size:4096;not null;default:'[]'" json:"subscriptions"`
+	SiteOpsSubscriptions string                  `gorm:"type:text;not null;default:''" json:"site_ops_subscriptions"`
+	Enabled              bool                    `gorm:"default:true" json:"enabled"`
 	ProxyEnabled  bool                    `gorm:"default:false" json:"proxy_enabled"`
 	CreatedAt     time.Time               `json:"created_at"`
 	UpdatedAt     time.Time               `json:"updated_at"`

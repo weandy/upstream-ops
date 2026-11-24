@@ -1,0 +1,21 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "outbox": {
+      "running": true,
+      "pending": 4,
+      "failures": 0,
+      "oldest_lag": "250ms",
+      "healthy_sla": "5s",
+      "last_error": "",
+      "stats_error": ""
+    },
+    "subscriber": {
+      "healthy": true,
+      "running": true,
+      "connected": true,
+      "last_error": ""
+    }
+  }
+}

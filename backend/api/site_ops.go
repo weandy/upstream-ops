@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/bejix/upstream-ops/backend/siteops"
@@ -137,6 +138,83 @@ func registerSiteOps(g *gin.RouterGroup, d *Deps) {
 			return
 		}
 		res, err := d.SiteOps.GetGroups(c.Request.Context(), id)
+		if err != nil {
+			failSiteOps(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": res})
+	})
+
+	sg.GET("/instances/:id/events", func(c *gin.Context) {
+		id, ok := parseRequiredUintParam(c, "id")
+		if !ok {
+			return
+		}
+		limit := 100
+		if rawLimit := strings.TrimSpace(c.Query("limit")); rawLimit != "" {
+			parsed, err := strconv.Atoi(rawLimit)
+			if err != nil || parsed <= 0 {
+				fail(c, http.StatusBadRequest, errors.New("invalid limit"))
+				return
+			}
+			limit = parsed
+		}
+		res, err := d.SiteOps.ListEvents(
+			c.Request.Context(),
+			id,
+			strings.TrimSpace(c.Query("state")),
+			strings.TrimSpace(c.Query("severity")),
+			limit,
+		)
+		if err != nil {
+			failSiteOps(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": res})
+	})
+
+	sg.GET("/instances/:id/accounts", func(c *gin.Context) {
+		id, ok := parseRequiredUintParam(c, "id")
+		if !ok {
+			return
+		}
+		view := strings.TrimSpace(c.Query("view"))
+		if view == "" || view == "status" {
+			res, err := d.SiteOps.GetAccountsStatus(
+				c.Request.Context(),
+				id,
+				strings.TrimSpace(c.Query("status")),
+				strings.TrimSpace(c.Query("platform")),
+			)
+			if err != nil {
+				failSiteOps(c, err)
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"data": res})
+			return
+		}
+		fail(c, http.StatusBadRequest, errors.New("unsupported accounts view"))
+	})
+
+	sg.POST("/instances/:id/report/preview", func(c *gin.Context) {
+		id, ok := parseRequiredUintParam(c, "id")
+		if !ok {
+			return
+		}
+		res, err := d.SiteOps.PreviewDailyReport(c.Request.Context(), id)
+		if err != nil {
+			failSiteOps(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": res})
+	})
+
+	sg.POST("/instances/:id/report/send", func(c *gin.Context) {
+		id, ok := parseRequiredUintParam(c, "id")
+		if !ok {
+			return
+		}
+		res, err := d.SiteOps.SendDailyReport(c.Request.Context(), id)
 		if err != nil {
 			failSiteOps(c, err)
 			return

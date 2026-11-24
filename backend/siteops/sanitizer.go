@@ -7,6 +7,8 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -410,4 +412,314 @@ func ParseSystemVersion(body []byte) (*SanitizedVersionInfo, error) {
 		return nil, errInvalidPayload
 	}
 	return &out, nil
+}
+
+func decodeEnvelopeData(body []byte) ([]byte, error) {
+	body = bytes.TrimSpace(body)
+	if len(body) > 0 && body[0] == '{' {
+		var envelope upstreamEnvelope
+		if json.Unmarshal(body, &envelope) != nil || (envelope.Code != nil && *envelope.Code != 0) {
+			return nil, errInvalidPayload
+		}
+		if len(envelope.Data) > 0 {
+			body = bytes.TrimSpace(envelope.Data)
+		}
+	}
+	if len(body) == 0 || bytes.Equal(body, []byte("null")) {
+		return nil, errInvalidPayload
+	}
+	return body, nil
+}
+
+func parseDurationMS(raw json.RawMessage) (int64, bool) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return 0, false
+	}
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		str = strings.TrimSpace(str)
+		if str == "" {
+			return 0, false
+		}
+		if d, err := time.ParseDuration(str); err == nil {
+			return d.Milliseconds(), true
+		}
+		if n, err := strconv.ParseInt(str, 10, 64); err == nil {
+			return n, true
+		}
+		return 0, false
+	}
+	var num float64
+	if json.Unmarshal(raw, &num) == nil && !math.IsNaN(num) && !math.IsInf(num, 0) {
+		return int64(math.Round(num)), true
+	}
+	return 0, false
+}
+
+type opsAlertEventWire struct {
+	ID             int64      `json:"id"`
+	RuleID         int64      `json:"rule_id"`
+	Severity       string     `json:"severity"`
+	Status         string     `json:"status"`
+	Title          string     `json:"title"`
+	Description    string     `json:"description"`
+	Message        string     `json:"message"`
+	MetricValue    *float64   `json:"metric_value"`
+	ThresholdValue *float64   `json:"threshold_value"`
+	FiredAt        time.Time  `json:"fired_at"`
+	CreatedAt      *time.Time `json:"created_at"`
+	ResolvedAt     *time.Time `json:"resolved_at"`
+}
+
+func ParseOpsAlertEvents(raw []byte) ([]SanitizedOpsAlertEvent, error) {
+	payload, err := decodeEnvelopeData(raw)
+	if err != nil {
+		return nil, err
+	}
+	var wireItems []opsAlertEventWire
+	switch payload[0] {
+	case '[':
+		if err := json.Unmarshal(payload, &wireItems); err != nil {
+			return nil, errInvalidPayload
+		}
+	case '{':
+		var wrapped struct {
+			Items  []opsAlertEventWire `json:"items"`
+			Events []opsAlertEventWire `json:"events"`
+		}
+		if err := json.Unmarshal(payload, &wrapped); err != nil {
+			return nil, errInvalidPayload
+		}
+		if wrapped.Items != nil {
+			wireItems = wrapped.Items
+		} else {
+			wireItems = wrapped.Events
+		}
+	default:
+		return nil, errInvalidPayload
+	}
+	out := make([]SanitizedOpsAlertEvent, 0, len(wireItems))
+	for _, item := range wireItems {
+		desc := item.Description
+		if strings.TrimSpace(desc) == "" {
+			desc = item.Message
+		}
+		firedAt := item.FiredAt
+		if firedAt.IsZero() && item.CreatedAt != nil {
+			firedAt = *item.CreatedAt
+		}
+		out = append(out, SanitizedOpsAlertEvent{
+			ID:             item.ID,
+			RuleID:         item.RuleID,
+			Severity:       strings.ToLower(SanitizeErrorText(item.Severity, 32)),
+			Status:         strings.ToLower(SanitizeErrorText(item.Status, 32)),
+			Title:          SanitizeErrorText(item.Title, 200),
+			Description:    SanitizeErrorText(desc, 200),
+			MetricValue:    item.MetricValue,
+			ThresholdValue: item.ThresholdValue,
+			FiredAt:        firedAt,
+			ResolvedAt:     item.ResolvedAt,
+		})
+	}
+	return out, nil
+}
+
+func ParseIngressRejectHealth(raw []byte) (*SanitizedIngressRejectHealth, error) {
+	payload, err := decodeEnvelopeData(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload[0] != '{' {
+		return nil, errInvalidPayload
+	}
+	var out SanitizedIngressRejectHealth
+	if err := json.Unmarshal(payload, &out); err != nil {
+		return nil, errInvalidPayload
+	}
+	out.LastError = SanitizeErrorText(out.LastError, 200)
+	return &out, nil
+}
+
+type authCacheOutboxWire struct {
+	Running      bool            `json:"running"`
+	Pending      int64           `json:"pending"`
+	Failures     uint64          `json:"failures"`
+	OldestLag    json.RawMessage `json:"oldest_lag"`
+	OldestLagMS  *int64          `json:"oldest_lag_ms"`
+	HealthySLA   json.RawMessage `json:"healthy_sla"`
+	HealthySLAMS *int64          `json:"healthy_sla_ms"`
+	LastError    string          `json:"last_error"`
+	StatsError   string          `json:"stats_error"`
+}
+
+type authCacheSubscriberWire struct {
+	Healthy   *bool  `json:"healthy"`
+	Running   *bool  `json:"running"`
+	Connected *bool  `json:"connected"`
+	LastError string `json:"last_error"`
+	Error     string `json:"error"`
+}
+
+func ParseAuthCacheHealth(raw []byte) (*SanitizedAuthCacheHealth, error) {
+	payload, err := decodeEnvelopeData(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload[0] != '{' {
+		return nil, errInvalidPayload
+	}
+	var wire struct {
+		Outbox     *authCacheOutboxWire     `json:"outbox"`
+		Subscriber *authCacheSubscriberWire `json:"subscriber"`
+		Healthy    *bool                    `json:"healthy"`
+	}
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		return nil, errInvalidPayload
+	}
+	if wire.Outbox == nil && wire.Subscriber == nil && wire.Healthy == nil {
+		return nil, errInvalidPayload
+	}
+	var out SanitizedAuthCacheHealth
+	if wire.Outbox != nil {
+		out.OutboxRunning = wire.Outbox.Running
+		out.OutboxPending = wire.Outbox.Pending
+		out.OutboxFailures = wire.Outbox.Failures
+		if wire.Outbox.OldestLagMS != nil {
+			out.OutboxOldestMS = *wire.Outbox.OldestLagMS
+		} else if ms, ok := parseDurationMS(wire.Outbox.OldestLag); ok {
+			out.OutboxOldestMS = ms
+		}
+		if wire.Outbox.HealthySLAMS != nil {
+			out.OutboxHealthySLA = *wire.Outbox.HealthySLAMS
+		} else if ms, ok := parseDurationMS(wire.Outbox.HealthySLA); ok {
+			out.OutboxHealthySLA = ms
+		}
+		errParts := make([]string, 0, 2)
+		if s := strings.TrimSpace(wire.Outbox.LastError); s != "" {
+			errParts = append(errParts, s)
+		}
+		if s := strings.TrimSpace(wire.Outbox.StatsError); s != "" {
+			errParts = append(errParts, s)
+		}
+		if len(errParts) > 0 {
+			out.OutboxLastError = SanitizeErrorText(strings.Join(errParts, "; "), 200)
+		}
+	}
+	if wire.Subscriber != nil {
+		rawSubErr := strings.TrimSpace(wire.Subscriber.LastError)
+		if rawSubErr == "" {
+			rawSubErr = strings.TrimSpace(wire.Subscriber.Error)
+		}
+		if rawSubErr != "" {
+			out.SubscriberError = SanitizeErrorText(rawSubErr, 200)
+		}
+		switch {
+		case wire.Subscriber.Healthy != nil:
+			out.SubscriberOK = *wire.Subscriber.Healthy
+		case wire.Subscriber.Running != nil && wire.Subscriber.Connected != nil:
+			out.SubscriberOK = *wire.Subscriber.Running && *wire.Subscriber.Connected
+		case wire.Subscriber.Connected != nil:
+			out.SubscriberOK = *wire.Subscriber.Connected
+		case wire.Subscriber.Running != nil:
+			out.SubscriberOK = *wire.Subscriber.Running
+		}
+		if wire.Subscriber.Healthy == nil && out.SubscriberError != "" {
+			out.SubscriberOK = false
+		}
+	}
+	outboxHealthy := out.OutboxRunning && out.OutboxLastError == "" &&
+		(out.OutboxHealthySLA <= 0 || out.OutboxOldestMS <= out.OutboxHealthySLA)
+	out.Healthy = outboxHealthy && out.SubscriberOK
+	if wire.Healthy != nil && !*wire.Healthy {
+		out.Healthy = false
+	}
+	return &out, nil
+}
+
+type accountSummaryWire struct {
+	ID                     int64      `json:"id"`
+	AccountID              int64      `json:"account_id"`
+	Name                   string     `json:"name"`
+	Platform               string     `json:"platform"`
+	Type                   string     `json:"type"`
+	Status                 string     `json:"status"`
+	Schedulable            bool       `json:"schedulable"`
+	Concurrency            int        `json:"concurrency"`
+	Priority               int        `json:"priority"`
+	GroupIDs               []int64    `json:"group_ids"`
+	ExpiresAt              *time.Time `json:"expires_at"`
+	RateLimitResetAt       *time.Time `json:"rate_limit_reset_at"`
+	OverloadUntil          *time.Time `json:"overload_until"`
+	TempUnschedulableUntil *time.Time `json:"temp_unschedulable_until"`
+	ErrorMessage           string     `json:"error_message"`
+}
+
+func ParseAccountsPage(raw []byte) (*AccountsPagePayload, error) {
+	payload, err := decodeEnvelopeData(raw)
+	if err != nil {
+		return nil, err
+	}
+	var wireItems []accountSummaryWire
+	var total int64
+	var page, pageSize int
+	switch payload[0] {
+	case '[':
+		if err := json.Unmarshal(payload, &wireItems); err != nil {
+			return nil, errInvalidPayload
+		}
+		total = int64(len(wireItems))
+		page = 1
+		pageSize = len(wireItems)
+	case '{':
+		var wrapped struct {
+			Items    []accountSummaryWire `json:"items"`
+			Accounts []accountSummaryWire `json:"accounts"`
+			Total    int64                `json:"total"`
+			Page     int                  `json:"page"`
+			PageSize int                  `json:"page_size"`
+		}
+		if err := json.Unmarshal(payload, &wrapped); err != nil {
+			return nil, errInvalidPayload
+		}
+		if wrapped.Items != nil {
+			wireItems = wrapped.Items
+		} else {
+			wireItems = wrapped.Accounts
+		}
+		total = wrapped.Total
+		page = wrapped.Page
+		pageSize = wrapped.PageSize
+	default:
+		return nil, errInvalidPayload
+	}
+	items := make([]SanitizedAccountSummary, 0, len(wireItems))
+	for _, item := range wireItems {
+		accountID := item.ID
+		if accountID == 0 {
+			accountID = item.AccountID
+		}
+		items = append(items, SanitizedAccountSummary{
+			AccountID:              accountID,
+			Name:                   SanitizeErrorText(item.Name, 200),
+			Platform:               SanitizeErrorText(item.Platform, 64),
+			Type:                   SanitizeErrorText(item.Type, 64),
+			Status:                 strings.ToLower(SanitizeErrorText(item.Status, 64)),
+			Schedulable:            item.Schedulable,
+			Concurrency:            item.Concurrency,
+			Priority:               item.Priority,
+			GroupIDs:               slices.Clone(item.GroupIDs),
+			ExpiresAt:              item.ExpiresAt,
+			RateLimitResetAt:       item.RateLimitResetAt,
+			OverloadUntil:          item.OverloadUntil,
+			TempUnschedulableUntil: item.TempUnschedulableUntil,
+			ErrorSummary:           SanitizeErrorText(item.ErrorMessage, 200),
+		})
+	}
+	return &AccountsPagePayload{
+		Items:    items,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
 }

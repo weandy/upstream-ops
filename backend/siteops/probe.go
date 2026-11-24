@@ -78,7 +78,7 @@ func (p *DefaultProber) ProbeInstance(ctx context.Context, inst TargetEndpoint, 
 	if errors.Is(err, ErrUnauthorized) {
 		return report, ErrUnauthorized
 	}
-	for _, step := range []struct {
+	steps := []struct {
 		endpoint string
 		fetch    func() (UpstreamFetchMeta, error)
 	}{
@@ -101,7 +101,40 @@ func (p *DefaultProber) ProbeInstance(ctx context.Context, inst TargetEndpoint, 
 			}
 			return meta, err
 		}},
-	} {
+	}
+	if p1a, ok := p.client.(P1AClient); ok {
+		steps = append(steps,
+			struct {
+				endpoint string
+				fetch    func() (UpstreamFetchMeta, error)
+			}{EndpointOpsAlertEvents, func() (UpstreamFetchMeta, error) {
+				_, meta, err := p1a.FetchOpsAlertEvents(ctx, inst)
+				return meta, err
+			}},
+			struct {
+				endpoint string
+				fetch    func() (UpstreamFetchMeta, error)
+			}{EndpointOpsIngressHealth, func() (UpstreamFetchMeta, error) {
+				_, meta, err := p1a.FetchIngressRejectHealth(ctx, inst)
+				return meta, err
+			}},
+			struct {
+				endpoint string
+				fetch    func() (UpstreamFetchMeta, error)
+			}{EndpointOpsAuthCacheHealth, func() (UpstreamFetchMeta, error) {
+				_, meta, err := p1a.FetchAuthCacheHealth(ctx, inst)
+				return meta, err
+			}},
+			struct {
+				endpoint string
+				fetch    func() (UpstreamFetchMeta, error)
+			}{EndpointAccounts, func() (UpstreamFetchMeta, error) {
+				_, meta, err := p1a.FetchAccountsDirectory(ctx, inst)
+				return meta, err
+			}},
+		)
+	}
+	for _, step := range steps {
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}

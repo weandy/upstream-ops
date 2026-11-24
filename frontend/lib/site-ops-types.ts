@@ -310,3 +310,126 @@ export interface SiteOpsRefreshResult {
   status: SiteOpsInstanceStatus
   message?: string
 }
+
+// ---------- Wave 2 (P1-A: M6 零广播告警 + 运维日报 + 异常号面板) ----------
+
+export type SiteOpsEventSeverity = "critical" | "warning" | "info" | string
+export type SiteOpsEventState = "firing" | "resolved" | string
+export type SiteOpsDeliveryStatus = "pending" | "sent" | "failed" | "skipped_cooldown" | string
+
+export interface SiteOpsSubscriptionConfig {
+  enabled: boolean
+  instance_ids: string[]
+  events: string[]
+}
+
+export interface SiteOpsEventDelivery {
+  id: number
+  event_id: number
+  notify_channel_id: number
+  channel_name?: string
+  channel_type?: string
+  delivery_kind: "alert" | "recovery" | "daily_report" | string
+  status: SiteOpsDeliveryStatus
+  attempts: number
+  next_retry_at?: string | null
+  last_error?: string
+  sent_at?: string | null
+  created_at: string
+}
+
+export interface SiteOpsEventItem {
+  id: number
+  instance_id: number
+  severity: SiteOpsEventSeverity
+  rule_key: string
+  resource_key: string
+  required_domains: string[]
+  state: SiteOpsEventState
+  consecutive_hits: number
+  title: string
+  summary: string
+  detail?: Record<string, unknown>
+  fired_at: string
+  resolved_at?: string | null
+  deliveries: SiteOpsEventDelivery[]
+  created_at: string
+  updated_at: string
+}
+
+export interface SiteOpsEventsResponse {
+  instance_id: number
+  firing_count: number
+  items: SiteOpsEventItem[]
+}
+
+export interface SiteOpsAccountStatusItem {
+  account_id: number
+  name: string
+  platform: string
+  type?: string
+  status?: string
+  schedulable?: boolean | null
+  ops_available: boolean
+  rate_limited: boolean
+  overloaded: boolean
+  has_error: boolean
+  error_summary?: string
+  conc_used?: number | null
+  conc_max?: number | null
+  conc_waiting?: number | null
+  group_ids?: number[]
+  expires_at?: string | null
+  rate_limit_reset_at?: string | null
+  overload_until?: string | null
+  temp_unschedulable_until?: string | null
+}
+
+export interface SiteOpsAccountsStatusResponse {
+  instance_id: number
+  observed_at?: string | null
+  trust_state: SiteOpsFieldQualityState
+  total_count: number
+  available_count: number
+  rate_limit_count: number
+  overload_count: number
+  error_count: number
+  items: SiteOpsAccountStatusItem[]
+}
+
+export interface SiteOpsDailyReportMetrics {
+  window_start_utc8: string
+  window_end_utc8: string
+  sample_count: number
+  reachable_sample_count: number
+  sla_percent_24h?: number | null
+  sla_note: string
+  req_total_24h?: number | null
+  err_total_24h?: number | null
+  ttft_p95_ms_24h?: number | null
+  duration_p95_ms_24h?: number | null
+  latency_24h_note: string
+  peak_conc_used?: number | null
+  peak_conc_max?: number | null
+  total_switches_1m: number
+  peak_switches_1m: number
+  current_accounts_total?: number | null
+  current_accounts_error?: number | null
+  active_firing_alerts: number
+}
+
+export interface SiteOpsDailyReportPreview {
+  instance_id: number
+  instance_name: string
+  date_utc8: string
+  generated_at: string
+  subject: string
+  body: string
+  metrics: SiteOpsDailyReportMetrics
+}
+
+export interface SiteOpsDailyReportSendResult {
+  preview: SiteOpsDailyReportPreview
+  matched_targets: number
+  deliveries: SiteOpsEventDelivery[]
+}

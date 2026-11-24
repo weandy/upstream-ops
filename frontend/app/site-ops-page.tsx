@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { Plus, RefreshCw, ShieldAlert } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { useConfirm } from "@/components/ui/confirm-dialog"
-import { Tabs, TabsContent } from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AccountsStatusPanel } from "@/components/site-ops/accounts-status-panel"
 import { CapabilityDrawer } from "@/components/site-ops/capability-drawer"
+import { EventsTimelinePanel } from "@/components/site-ops/events-timeline-panel"
 import { GroupsMatrixPanel } from "@/components/site-ops/groups-matrix-panel"
 import { InstanceFormDialog } from "@/components/site-ops/instance-form-dialog"
 import { InstanceSwitcher } from "@/components/site-ops/instance-switcher"
@@ -13,16 +16,22 @@ import { TrendsPanel } from "@/components/site-ops/trends-panel"
 import { useRefreshTick } from "@/lib/refresh-context"
 import {
   deleteSiteOpsInstance,
+  fetchSiteOpsAccountsStatus,
+  fetchSiteOpsEvents,
   fetchSiteOpsGroups,
   fetchSiteOpsInstances,
   fetchSiteOpsOverview,
   fetchSiteOpsSummary,
   fetchSiteOpsTrends,
   isSiteOpsAuthRequiredError,
+  previewSiteOpsDailyReport,
   probeSiteOpsInstance,
   refreshSiteOpsInstance,
+  sendSiteOpsDailyReport,
 } from "@/lib/site-ops-api"
 import type {
+  SiteOpsAccountsStatusResponse,
+  SiteOpsEventsResponse,
   SiteOpsGroupsResponse,
   SiteOpsInstanceView,
   SiteOpsOverviewResponse,
@@ -43,7 +52,20 @@ interface InstanceDetails {
   groupsError?: string
 }
 
+interface AccountsSectionState {
+  id: number
+  data?: SiteOpsAccountsStatusResponse
+  error?: string
+}
+
+interface EventsSectionState {
+  id: number
+  data?: SiteOpsEventsResponse
+  error?: string
+}
+
 type Action = "refresh" | "probe"
+type DetailSection = "overview" | "accounts" | "events"
 
 function ReadState({ error, loading, empty }: { error?: string; loading: boolean; empty: string }) {
   return (
@@ -61,9 +83,16 @@ export default function SiteOpsPage() {
   const [catalog, setCatalog] = useState<{ summary: SiteOpsSummaryResponse; instances: SiteOpsInstanceView[] } | null>(null)
   const [catalogError, setCatalogError] = useState("")
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [activeSection, setActiveSection] = useState<DetailSection>("overview")
   const [range, setRange] = useState<SiteOpsTrendRange>("6h")
   const [details, setDetails] = useState<InstanceDetails | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
+  const [accountsState, setAccountsState] = useState<AccountsSectionState | null>(null)
+  const [loadingAccounts, setLoadingAccounts] = useState(false)
+  const [accountsReload, setAccountsReload] = useState(0)
+  const [eventsState, setEventsState] = useState<EventsSectionState | null>(null)
+  const [loadingEvents, setLoadingEvents] = useState(false)
+  const [eventsReload, setEventsReload] = useState(0)
   const [form, setForm] = useState<{ instance: SiteOpsInstanceView | null } | null>(null)
   const [drawerId, setDrawerId] = useState<number | null>(null)
   const [report, setReport] = useState<SiteOpsProbeReport>()
@@ -71,20 +100,46 @@ export default function SiteOpsPage() {
   const [notice, setNotice] = useState<{ id: number; action: Action | "delete"; message: string; error: boolean } | null>(null)
   const catalogRequest = useRef(0)
   const detailRequest = useRef(0)
+  const accountsRequest = useRef(0)
+  const eventsRequest = useRef(0)
 
   const selected = catalog?.instances.find((instance) => instance.id === selectedId) ?? catalog?.instances[0]
   const id = selected?.id
   const readOnly = false
   const currentDetails = details?.id === id ? details : null
   const currentTrends = currentDetails?.range === range ? currentDetails : null
+  const currentAccounts = accountsState?.id === id ? accountsState : null
+  const currentEvents = eventsState?.id === id ? eventsState : null
   const currentNotice = notice?.id === id ? notice : null
+
+  const abnormalAccountsCount = (() => {
+    if (currentAccounts?.data) {
+      if (currentAccounts.data.trust_state !== "trusted") return 0
+      return (currentAccounts.data.items ?? []).filter(
+        (item) => item.has_error || item.rate_limited || item.overloaded || !item.ops_available,
+      ).length
+    }
+    const latest = currentDetails?.overview?.latest
+    if (!latest || latest.field_quality?.account_availability !== "trusted") return 0
+    return (
+      (latest.accounts_error ?? 0) +
+      (latest.accounts_rate_limited ?? 0) +
+      (latest.accounts_overloaded ?? 0)
+    )
+  })()
+
+  const firingEventsCount = currentEvents?.data?.firing_count ?? 0
 
   const requireAuth = useCallback(() => {
     catalogRequest.current += 1
     detailRequest.current += 1
+    accountsRequest.current += 1
+    eventsRequest.current += 1
     setBlocked(true)
     setCatalog(null)
     setDetails(null)
+    setAccountsState(null)
+    setEventsState(null)
     setReport(undefined)
     setNotice(null)
     setForm(null)
@@ -150,11 +205,69 @@ export default function SiteOpsPage() {
     return () => { detailRequest.current += 1 }
   }, [id, range, tick, reload, blocked, requireAuth])
 
+  useEffect(() => {
+    if (id === undefined || blocked || activeSection !== "accounts") return
+    const sequence = ++accountsRequest.current
+    setLoadingAccounts(true)
+    fetchSiteOpsAccountsStatus(id)
+      .then((data) => {
+        if (sequence !== accountsRequest.current) return
+        setAccountsState({ id, data })
+      })
+      .catch((err: unknown) => {
+        if (sequence !== accountsRequest.current) return
+        if (isSiteOpsAuthRequiredError(err)) {
+          requireAuth()
+        } else {
+          setAccountsState((current) => ({
+            id,
+            data: current?.id === id ? current.data : undefined,
+            error: "无法加载账号状态，请重试。",
+          }))
+        }
+      })
+      .finally(() => {
+        if (sequence === accountsRequest.current) setLoadingAccounts(false)
+      })
+    return () => { accountsRequest.current += 1 }
+  }, [id, activeSection, tick, reload, accountsReload, blocked, requireAuth])
+
+  useEffect(() => {
+    if (id === undefined || blocked) return
+    const sequence = ++eventsRequest.current
+    setLoadingEvents(true)
+    fetchSiteOpsEvents(id)
+      .then((data) => {
+        if (sequence !== eventsRequest.current) return
+        setEventsState({ id, data })
+      })
+      .catch((err: unknown) => {
+        if (sequence !== eventsRequest.current) return
+        if (isSiteOpsAuthRequiredError(err)) {
+          requireAuth()
+        } else {
+          setEventsState((current) => ({
+            id,
+            data: current?.id === id ? current.data : undefined,
+            error: "无法加载事件列表，请重试。",
+          }))
+        }
+      })
+      .finally(() => {
+        if (sequence === eventsRequest.current) setLoadingEvents(false)
+      })
+    return () => { eventsRequest.current += 1 }
+  }, [id, tick, reload, eventsReload, blocked, requireAuth])
+
   function selectInstance(nextId: number) {
     if (nextId === id) return
     detailRequest.current += 1
+    accountsRequest.current += 1
+    eventsRequest.current += 1
     setSelectedId(nextId)
     setDetails(null)
+    setAccountsState(null)
+    setEventsState(null)
     setDrawerId(null)
     setNotice(null)
   }
@@ -229,12 +342,16 @@ export default function SiteOpsPage() {
       }
       catalogRequest.current += 1
       detailRequest.current += 1
+      accountsRequest.current += 1
+      eventsRequest.current += 1
       setCatalog((current) => current && {
         ...current,
         instances: current.instances.filter((item) => item.id !== deletedId),
       })
       setSelectedId((current) => current === deletedId ? null : current)
       setDetails((current) => current?.id === deletedId ? null : current)
+      setAccountsState((current) => current?.id === deletedId ? null : current)
+      setEventsState((current) => current?.id === deletedId ? null : current)
       setDrawerId((current) => current === deletedId ? null : current)
       setReport((current) => current?.instance_id === deletedId ? undefined : current)
       setForm((current) => current?.instance?.id === deletedId ? null : current)
@@ -310,19 +427,89 @@ export default function SiteOpsPage() {
                 {activeAction?.id === selected.id && activeAction.action === "refresh" && <p role="status" className="text-sm text-muted-foreground">正在刷新站点数据…</p>}
                 {currentNotice?.action === "refresh" && <p role={currentNotice.error ? "alert" : "status"} className={currentNotice.error ? "text-sm text-destructive" : "text-sm text-muted-foreground"}>{currentNotice.message}</p>}
                 {currentNotice?.action === "delete" && <p role="alert" className="text-sm text-destructive">{currentNotice.message}</p>}
-                {currentDetails?.overview
-                  ? <OverviewPanel overview={currentDetails.overview} />
-                  : <ReadState error={currentDetails?.overviewError} loading={!currentDetails} empty="暂无实时总览。" />}
-                <TrendsPanel
-                  range={range}
-                  onRangeChange={changeRange}
-                  points={currentTrends?.trends?.points}
-                  error={currentTrends?.trendsError}
-                  loading={loadingDetails || !currentTrends}
-                />
-                {currentDetails?.groups
-                  ? <GroupsMatrixPanel data={currentDetails.groups} />
-                  : <ReadState error={currentDetails?.groupsError} loading={!currentDetails} empty="暂无分组容量。" />}
+                <Tabs
+                  value={activeSection}
+                  onValueChange={(value) => setActiveSection(value as DetailSection)}
+                  className="gap-4"
+                >
+                  <TabsList>
+                    <TabsTrigger value="overview">总览与容量</TabsTrigger>
+                    <TabsTrigger value="accounts">
+                      账号状态
+                      {abnormalAccountsCount > 0 ? (
+                        <Badge
+                          variant="outline"
+                          className="ml-1 h-4.5 border-amber-500/40 bg-amber-500/10 px-1.5 text-[11px] text-amber-700 tabular-nums dark:text-amber-300"
+                        >
+                          {abnormalAccountsCount}
+                        </Badge>
+                      ) : null}
+                    </TabsTrigger>
+                    <TabsTrigger value="events">
+                      事件与日报
+                      {firingEventsCount > 0 ? (
+                        <Badge
+                          variant="destructive"
+                          className="ml-1 h-4.5 px-1.5 text-[11px] tabular-nums"
+                        >
+                          {firingEventsCount}
+                        </Badge>
+                      ) : null}
+                    </TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="overview" className="space-y-5">
+                    {currentDetails?.overview
+                      ? <OverviewPanel overview={currentDetails.overview} />
+                      : <ReadState error={currentDetails?.overviewError} loading={!currentDetails} empty="暂无实时总览。" />}
+                    <TrendsPanel
+                      range={range}
+                      onRangeChange={changeRange}
+                      points={currentTrends?.trends?.points}
+                      error={currentTrends?.trendsError}
+                      loading={loadingDetails || !currentTrends}
+                    />
+                    {currentDetails?.groups
+                      ? <GroupsMatrixPanel data={currentDetails.groups} />
+                      : <ReadState error={currentDetails?.groupsError} loading={!currentDetails} empty="暂无分组容量。" />}
+                  </TabsContent>
+
+                  <TabsContent value="accounts">
+                    <AccountsStatusPanel
+                      data={currentAccounts?.data}
+                      loading={loadingAccounts}
+                      error={currentAccounts?.error}
+                      onRefresh={() => setAccountsReload((current) => current + 1)}
+                    />
+                  </TabsContent>
+
+                  <TabsContent value="events">
+                    <EventsTimelinePanel
+                      instanceId={selected.id}
+                      instanceName={selected.name}
+                      data={currentEvents?.data}
+                      loading={loadingEvents}
+                      error={currentEvents?.error}
+                      onReload={() => setEventsReload((current) => current + 1)}
+                      onPreviewReport={async () => {
+                        try {
+                          return await previewSiteOpsDailyReport(selected.id)
+                        } catch (err) {
+                          if (isSiteOpsAuthRequiredError(err)) requireAuth()
+                          throw err
+                        }
+                      }}
+                      onSendReport={async () => {
+                        try {
+                          return await sendSiteOpsDailyReport(selected.id)
+                        } catch (err) {
+                          if (isSiteOpsAuthRequiredError(err)) requireAuth()
+                          throw err
+                        }
+                      }}
+                    />
+                  </TabsContent>
+                </Tabs>
               </TabsContent>
               {drawerId === selected.id && (
                 <CapabilityDrawer

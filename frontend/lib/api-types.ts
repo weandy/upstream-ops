@@ -163,6 +163,7 @@ export interface NotificationChannel {
   enabled: boolean
   proxy_enabled: boolean
   subscriptions?: string
+  site_ops_subscriptions?: string
   created_at: string
   updated_at: string
 }

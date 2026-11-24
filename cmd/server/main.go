@@ -161,6 +161,7 @@ func main() {
 		authSvc != nil,
 		log,
 	)
+	siteOpsSvc.SetNotifier(dispatcher)
 	if err := siteOpsSvc.Start(); err != nil {
 		log.Error("start siteops service failed", "err", err)
 		os.Exit(1)

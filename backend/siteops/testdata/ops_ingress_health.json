@@ -1,0 +1,19 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "cardinality": 142,
+    "capacity": 4096,
+    "pending_batches": 2,
+    "pending_rows": 35,
+    "overflowed_count": 0,
+    "dropped_count": 1,
+    "flushed_request_count": 9821,
+    "flush_failure_count": 3,
+    "accepting": true,
+    "last_error": "flush timeout with Authorization: Bearer secret-ingress-token",
+    "internal_debug": {
+      "password": "should-not-appear"
+    }
+  }
+}
