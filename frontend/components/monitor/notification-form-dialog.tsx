@@ -33,6 +33,8 @@ import { ChevronsUpDown } from "lucide-react"
 import { apiFetch } from "@/lib/api"
 import { useTriggerRefresh } from "@/lib/refresh-context"
 import { useChannels, useMultiChannelRates } from "@/lib/queries"
+import { fetchSiteOpsInstances } from "@/lib/site-ops-api"
+import type { SiteOpsInstanceView, SiteOpsSubscriptionConfig } from "@/lib/site-ops-types"
 import type {
   NotificationChannel,
   NotificationChannelType,
@@ -84,6 +86,7 @@ interface FormState {
   proxy_enabled: boolean
   cfg: ConfigState
   subs: SubRow[]
+  siteOps: SiteOpsSubscriptionConfig
 }
 
 function emptyConfig(): ConfigState {
@@ -156,6 +159,96 @@ function hasRateEvents(row: SubRow) {
   return row.event_mode === "all" || row.events.some((event) => rateEventSet.has(event))
 }
 
+const siteOpsEventGroups: Array<{
+  group: string
+  items: Array<{ key: string; label: string }>
+}> = [
+  {
+    group: "站点与基础设施",
+    items: [
+      { key: "site_offline", label: "站点离线 (site_offline)" },
+      { key: "auth_invalid", label: "鉴权失效 (auth_invalid)" },
+      { key: "infra_down", label: "DB / Redis 故障 (infra_down)" },
+      { key: "resource_pressure", label: "主机资源压力 (resource_pressure)" },
+      { key: "job_or_cache_unhealthy", label: "后台任务 / 缓存异常 (job_or_cache_unhealthy)" },
+    ],
+  },
+  {
+    group: "服务质量与容量",
+    items: [
+      { key: "group_pool_exhausted", label: "分组号池耗尽 (group_pool_exhausted)" },
+      { key: "sla_degraded", label: "SLA 降级 (sla_degraded)" },
+      { key: "concurrency_saturated", label: "并发饱和 (concurrency_saturated)" },
+      { key: "high_switch_spike", label: "高频切号激增 (high_switch_spike)" },
+    ],
+  },
+  {
+    group: "账号池异常",
+    items: [
+      { key: "account_error_new", label: "新增报错账号 (account_error_new)" },
+      { key: "account_rate_limit_wave", label: "账号限流波动 (account_rate_limit_wave)" },
+    ],
+  },
+  {
+    group: "恢复与周期日报",
+    items: [
+      { key: "recovery", label: "恢复通知 (recovery)" },
+      { key: "daily_report", label: "每日运维简报 (daily_report)" },
+    ],
+  },
+]
+
+function emptySiteOpsSubscription(): SiteOpsSubscriptionConfig {
+  return {
+    enabled: false,
+    instance_ids: [],
+    events: [],
+  }
+}
+
+function parseSiteOpsSubscriptions(raw?: string): SiteOpsSubscriptionConfig {
+  if (!raw || !raw.trim()) return emptySiteOpsSubscription()
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return emptySiteOpsSubscription()
+    }
+    const obj = parsed as Record<string, unknown>
+    if (obj.enabled !== true) {
+      return emptySiteOpsSubscription()
+    }
+    const rawIds = Array.isArray(obj.instance_ids) ? obj.instance_ids : []
+    const instanceIds = Array.from(
+      new Set(
+        rawIds
+          .map((item) => {
+            if (typeof item === "string") return item.trim()
+            if (typeof item === "number" && Number.isInteger(item) && item > 0) {
+              return String(item)
+            }
+            return ""
+          })
+          .filter(Boolean),
+      ),
+    )
+    const rawEvents = Array.isArray(obj.events) ? obj.events : []
+    const events = Array.from(
+      new Set(
+        rawEvents
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter(Boolean),
+      ),
+    )
+    return {
+      enabled: true,
+      instance_ids: instanceIds,
+      events,
+    }
+  } catch {
+    return emptySiteOpsSubscription()
+  }
+}
+
 function initialState(c?: NotificationChannel | null): FormState {
   let subs: SubRow[] = []
   if (c?.subscriptions) {
@@ -187,6 +280,7 @@ function initialState(c?: NotificationChannel | null): FormState {
     proxy_enabled: c?.proxy_enabled ?? false,
     cfg: emptyConfig(),
     subs,
+    siteOps: parseSiteOpsSubscriptions(c?.site_ops_subscriptions),
   }
 }
 
@@ -252,6 +346,10 @@ export function NotificationFormDialog({
   const [form, setForm] = useState<FormState>(() => initialState(channel))
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [siteOpsInstances, setSiteOpsInstances] = useState<SiteOpsInstanceView[]>([])
+  const [siteOpsLoading, setSiteOpsLoading] = useState(false)
+  const [siteOpsLoadFailed, setSiteOpsLoadFailed] = useState(false)
+  const [siteOpsFetchedForOpen, setSiteOpsFetchedForOpen] = useState(false)
   const refresh = useTriggerRefresh()
   const channels = useChannels()
 
@@ -259,10 +357,41 @@ export function NotificationFormDialog({
     if (open) {
       setForm(initialState(channel))
       setError(null)
+      setSiteOpsLoadFailed(false)
+      setSiteOpsFetchedForOpen(false)
     }
   }, [open, channel])
 
+  useEffect(() => {
+    if (!open || !form.siteOps.enabled || siteOpsFetchedForOpen) return
+    let cancelled = false
+    setSiteOpsLoading(true)
+    setSiteOpsLoadFailed(false)
+    fetchSiteOpsInstances()
+      .then((list) => {
+        if (cancelled) return
+        setSiteOpsInstances(list ?? [])
+        setSiteOpsFetchedForOpen(true)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setSiteOpsInstances([])
+        setSiteOpsLoadFailed(true)
+        setSiteOpsFetchedForOpen(true)
+      })
+      .finally(() => {
+        if (!cancelled) setSiteOpsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, form.siteOps.enabled, siteOpsFetchedForOpen])
+
   const isEdit = !!channel
+
+  function updateSiteOps(patch: Partial<SiteOpsSubscriptionConfig>) {
+    setForm((f) => ({ ...f, siteOps: { ...f.siteOps, ...patch } }))
+  }
 
   function updateCfg(patch: Partial<ConfigState>) {
     setForm((f) => ({ ...f, cfg: { ...f.cfg, ...patch } }))
@@ -302,6 +431,15 @@ export function NotificationFormDialog({
         }
       }
 
+      if (form.siteOps.enabled) {
+        if (form.siteOps.instance_ids.length === 0) {
+          throw new Error("开启自有站点运维订阅后，请至少选择一个站点或勾选「全部自有站点 (*)」")
+        }
+        if (form.siteOps.events.length === 0) {
+          throw new Error("开启自有站点运维订阅后，请至少选择一个事件或勾选「全部事件 (*)」")
+        }
+      }
+
       let configJSON = ""
       const requireConfig = !isEdit
       // 判断 cfg 是否填了关键字段
@@ -337,12 +475,21 @@ export function NotificationFormDialog({
         }),
       )
 
+      const siteOpsSubscriptions = form.siteOps.enabled
+        ? JSON.stringify({
+            enabled: true,
+            instance_ids: form.siteOps.instance_ids,
+            events: form.siteOps.events,
+          })
+        : ""
+
       const body: Record<string, unknown> = {
         name: form.name,
         type: form.type,
         enabled: form.enabled,
         proxy_enabled: form.proxy_enabled,
         subscriptions,
+        site_ops_subscriptions: siteOpsSubscriptions,
       }
       if (configJSON) body.config = configJSON
 
@@ -490,6 +637,15 @@ export function NotificationFormDialog({
               </div>
             )}
           </div>
+
+          <SiteOpsSubscriptionSection
+            value={form.siteOps}
+            instances={siteOpsInstances}
+            loadingInstances={siteOpsLoading}
+            loadFailed={siteOpsLoadFailed}
+            disabled={submitting}
+            onChange={updateSiteOps}
+          />
 
           {error ? (
             <p className="text-sm text-destructive" role="alert">
@@ -1097,6 +1253,222 @@ function SubRowEditor({ rowIndex, row, channels, onChange, onRemove, disabled }:
           {row.mode === "groups" && row.groups.length === 0 && row.channel_ids.length > 0 ? (
             <p className="text-[11px] text-warning">未勾选任何分组，倍率类事件不会命中</p>
           ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+interface SiteOpsSubscriptionSectionProps {
+  value: SiteOpsSubscriptionConfig
+  instances: SiteOpsInstanceView[]
+  loadingInstances: boolean
+  loadFailed: boolean
+  disabled: boolean
+  onChange: (patch: Partial<SiteOpsSubscriptionConfig>) => void
+}
+
+function SiteOpsSubscriptionSection({
+  value,
+  instances,
+  loadingInstances,
+  loadFailed,
+  disabled,
+  onChange,
+}: SiteOpsSubscriptionSectionProps) {
+  const allInstancesSelected = value.instance_ids.includes("*")
+  const allEventsSelected = value.events.includes("*")
+
+  const knownInstanceIds = useMemo(
+    () => new Set(instances.map((inst) => String(inst.id))),
+    [instances],
+  )
+  const extraInstanceIds = useMemo(
+    () => value.instance_ids.filter((id) => id !== "*" && !knownInstanceIds.has(id)),
+    [value.instance_ids, knownInstanceIds],
+  )
+
+  function toggleAllInstances(checked: boolean) {
+    onChange({ instance_ids: checked ? ["*"] : [] })
+  }
+
+  function toggleInstanceId(idStr: string, checked: boolean) {
+    const base = value.instance_ids.filter((item) => item !== "*")
+    const next = checked
+      ? Array.from(new Set([...base, idStr]))
+      : base.filter((item) => item !== idStr)
+    onChange({ instance_ids: next })
+  }
+
+  function toggleAllEvents(checked: boolean) {
+    onChange({ events: checked ? ["*"] : [] })
+  }
+
+  function toggleEventKey(eventKey: string, checked: boolean) {
+    const base = value.events.filter((item) => item !== "*")
+    const next = checked
+      ? Array.from(new Set([...base, eventKey]))
+      : base.filter((item) => item !== eventKey)
+    onChange({ events: next })
+  }
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">自有站点运维订阅（默认关闭 · 零广播）</p>
+          <p className="text-[11px] text-muted-foreground">
+            老渠道与未开启此项的渠道一律不会收到自有站点运维告警与日报
+          </p>
+        </div>
+        <Switch
+          checked={value.enabled}
+          onCheckedChange={(checked) => onChange({ enabled: checked })}
+          disabled={disabled}
+          aria-label="开启自有站点运维订阅"
+        />
+      </div>
+
+      {value.enabled ? (
+        <div className="space-y-3 border-t border-border pt-3">
+          {/* 订阅站点 */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="font-medium">订阅站点</span>
+              <span className="text-[11px] text-muted-foreground">
+                {allInstancesSelected
+                  ? "已选全部自有站点 (*)"
+                  : `已选 ${value.instance_ids.length} 个站点`}
+              </span>
+            </div>
+
+            <label className="flex cursor-pointer items-center gap-1.5 rounded border border-border bg-muted/30 px-2.5 py-1.5 text-xs">
+              <Checkbox
+                checked={allInstancesSelected}
+                onCheckedChange={(v) => toggleAllInstances(v === true)}
+                disabled={disabled}
+              />
+              <span className="font-medium">全部自有站点 (*)</span>
+            </label>
+
+            {!allInstancesSelected ? (
+              <div className="space-y-1.5 rounded border border-border bg-muted/20 p-2">
+                {loadingInstances ? (
+                  <p className="text-[11px] text-muted-foreground">正在加载自有站点列表…</p>
+                ) : loadFailed ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    无法拉取自有站点列表（可能未开启鉴权或服务暂不可用），可直接勾选上方「全部自有站点 (*)」。
+                  </p>
+                ) : instances.length === 0 && extraInstanceIds.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    暂无已配置的自有站点，可先勾选上方「全部自有站点 (*)」。
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                    {instances.map((inst) => {
+                      const idStr = String(inst.id)
+                      const fieldId = `siteops-inst-${idStr}`
+                      const checked = value.instance_ids.includes(idStr)
+                      return (
+                        <label
+                          key={idStr}
+                          htmlFor={fieldId}
+                          className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-xs hover:bg-accent/50"
+                        >
+                          <Checkbox
+                            id={fieldId}
+                            checked={checked}
+                            onCheckedChange={(v) => toggleInstanceId(idStr, v === true)}
+                            disabled={disabled}
+                          />
+                          <span className="truncate">
+                            {inst.name}{" "}
+                            <span className="font-mono text-[11px] text-muted-foreground">
+                              #{inst.id}
+                            </span>
+                          </span>
+                        </label>
+                      )
+                    })}
+                    {extraInstanceIds.map((idStr) => {
+                      const fieldId = `siteops-inst-extra-${idStr}`
+                      return (
+                        <label
+                          key={idStr}
+                          htmlFor={fieldId}
+                          className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-xs hover:bg-accent/50"
+                        >
+                          <Checkbox
+                            id={fieldId}
+                            checked
+                            onCheckedChange={(v) => toggleInstanceId(idStr, v === true)}
+                            disabled={disabled}
+                          />
+                          <span className="truncate text-muted-foreground">
+                            站点 #{idStr}（未在当前列表）
+                          </span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </div>
+
+          {/* 订阅事件 */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="font-medium">订阅事件</span>
+              <span className="text-[11px] text-muted-foreground">
+                {allEventsSelected ? "已选全部事件 (*)" : `已选 ${value.events.length} 项事件`}
+              </span>
+            </div>
+
+            <label className="flex cursor-pointer items-center gap-1.5 rounded border border-border bg-muted/30 px-2.5 py-1.5 text-xs">
+              <Checkbox
+                checked={allEventsSelected}
+                onCheckedChange={(v) => toggleAllEvents(v === true)}
+                disabled={disabled}
+              />
+              <span className="font-medium">全部事件 (*)</span>
+            </label>
+
+            {!allEventsSelected ? (
+              <ScrollArea className="max-h-60 rounded border border-border bg-muted/20">
+                <div className="space-y-2.5 p-2.5">
+                  {siteOpsEventGroups.map((group) => (
+                    <div key={group.group} className="space-y-1">
+                      <p className="text-[11px] font-medium text-muted-foreground">
+                        {group.group}
+                      </p>
+                      <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+                        {group.items.map((item) => {
+                          const fieldId = `siteops-event-${item.key}`
+                          const checked = value.events.includes(item.key)
+                          return (
+                            <label
+                              key={item.key}
+                              htmlFor={fieldId}
+                              className="flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 text-xs hover:bg-accent/50"
+                            >
+                              <Checkbox
+                                id={fieldId}
+                                checked={checked}
+                                onCheckedChange={(v) => toggleEventKey(item.key, v === true)}
+                                disabled={disabled}
+                              />
+                              <span className="truncate">{item.label}</span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>
