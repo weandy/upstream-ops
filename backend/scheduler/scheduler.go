@@ -29,6 +29,7 @@ type Scheduler struct {
 	gatewayResort gatewayRateResortService
 	probeLiveness *storage.ProbeLivenessSamples
 	probeRuns     *storage.ProbeIntelligenceRuns
+	siteOps       *storage.SiteOpsStore
 	proxy         config.ProxyConfig
 }
 
@@ -71,6 +72,11 @@ func New(
 func (s *Scheduler) SetIntelligenceRepos(liveness *storage.ProbeLivenessSamples, runs *storage.ProbeIntelligenceRuns) {
 	s.probeLiveness = liveness
 	s.probeRuns = runs
+}
+
+// SetSiteOpsStore 注入自有站点运维仓储，用于分块清理过期时序快照。
+func (s *Scheduler) SetSiteOpsStore(store *storage.SiteOpsStore) {
+	s.siteOps = store
 }
 
 // Start 注册 cron 任务并启动。
@@ -136,7 +142,9 @@ func (s *Scheduler) hasRetention() bool {
 		r.NotificationLogsDays > 0 ||
 		r.AnnouncementsDays > 0 ||
 		r.ProbeLivenessDays > 0 ||
-		r.ProbeIntelligenceRunsDays > 0
+		r.ProbeIntelligenceRunsDays > 0 ||
+		r.SiteOpsSnapshotsDays > 0 ||
+		r.SiteOpsGroupSnapshotsDays > 0
 }
 
 // runRetention 按配置删除过期历史。任一表失败不影响其它，全部错误写日志。
@@ -208,6 +216,30 @@ func (s *Scheduler) runRetention() {
 			s.log.Warn("retention probe_intelligence_runs failed", "err", err)
 		} else if n > 0 {
 			s.log.Info("retention probe_intelligence_runs deleted", "rows", n, "before", cutoff)
+		}
+	}
+
+	if r.SiteOpsSnapshotsDays > 0 && s.siteOps != nil {
+		cutoff := now.UTC().AddDate(0, 0, -r.SiteOpsSnapshotsDays)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		n, err := s.siteOps.DeleteSnapshotsBeforeChunked(ctx, cutoff, 500, 10000, 2*time.Second)
+		cancel()
+		if err != nil {
+			s.log.Warn("retention site_ops_snapshots failed", "err", err)
+		} else if n > 0 {
+			s.log.Info("retention site_ops_snapshots deleted", "rows", n, "before", cutoff)
+		}
+	}
+
+	if r.SiteOpsGroupSnapshotsDays > 0 && s.siteOps != nil {
+		cutoff := now.UTC().AddDate(0, 0, -r.SiteOpsGroupSnapshotsDays)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		n, err := s.siteOps.DeleteGroupSnapshotsBeforeChunked(ctx, cutoff, 500, 10000, 2*time.Second)
+		cancel()
+		if err != nil {
+			s.log.Warn("retention site_ops_group_snapshots failed", "err", err)
+		} else if n > 0 {
+			s.log.Info("retention site_ops_group_snapshots deleted", "rows", n, "before", cutoff)
 		}
 	}
 }

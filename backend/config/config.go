@@ -27,6 +27,7 @@ type Config struct {
 	Pricing       PricingConfig       `mapstructure:"pricing" yaml:"pricing" json:"pricing"`
 	Intelligence  IntelligenceConfig  `mapstructure:"intelligence" yaml:"intelligence" json:"intelligence"`
 	Embed         EmbedConfig         `mapstructure:"embed" yaml:"embed" json:"embed"`
+	SiteOps       SiteOpsConfig       `mapstructure:"siteOps" yaml:"siteOps" json:"siteOps"`
 	Log           LogConfig           `mapstructure:"log" yaml:"log" json:"log"`
 }
 
@@ -113,6 +114,8 @@ type RetentionConfig struct {
 	AnnouncementsDays         int    `mapstructure:"announcementsDays" yaml:"announcementsDays" json:"announcementsDays"`
 	ProbeLivenessDays         int    `mapstructure:"probeLivenessDays" yaml:"probeLivenessDays" json:"probeLivenessDays"`
 	ProbeIntelligenceRunsDays int    `mapstructure:"probeIntelligenceRunsDays" yaml:"probeIntelligenceRunsDays" json:"probeIntelligenceRunsDays"`
+	SiteOpsSnapshotsDays      int    `mapstructure:"siteOpsSnapshotsDays" yaml:"siteOpsSnapshotsDays" json:"siteOpsSnapshotsDays"`
+	SiteOpsGroupSnapshotsDays int    `mapstructure:"siteOpsGroupSnapshotsDays" yaml:"siteOpsGroupSnapshotsDays" json:"siteOpsGroupSnapshotsDays"`
 }
 
 // NotificationsConfig 通知去抖策略。所有字段都是"少烦我"取向，默认不丢消息只合并。
@@ -429,6 +432,84 @@ func (c EmbedConfig) WithDefaults() EmbedConfig {
 	return c
 }
 
+const (
+	DefaultSiteOpsPollIntervalSeconds        = 60
+	MinSiteOpsPollIntervalSeconds            = 30
+	DefaultSiteOpsAuditBudgetPerDay          = 8000
+	DefaultSiteOpsGlobalMaxConcurrency       = 12
+	DefaultSiteOpsPerInstanceMaxConcurrency  = 4
+	DefaultSiteOpsPerInstanceQueueLimit      = 32
+	DefaultSiteOpsQueueWaitTimeoutSeconds    = 3
+	DefaultSiteOpsRequestTimeoutSeconds      = 8
+	DefaultSiteOpsBatchTimeoutSeconds        = 15
+	DefaultSiteOpsMaxResponseBytes           = 8 << 20
+	DefaultSiteOpsGroupArchiveIntervalSecond = 300
+)
+
+// SiteOpsConfig 自有 Sub2API 站点运维模块运行时配置。
+// SiteOpsConfig 配置自有 Sub2API 站点运维模块（backend/siteops）的出站安全、并发与预算策略。
+// P0–P2 鉴权跟随全局 AuthMiddleware；出站默认放行公网地址并拦截内网/回环/保留与云元数据地址。
+// 同机或内网直连可通过 allowLoopback、allowedOrigins、allowedCIDRs 显式配置例外（云元数据/链路本地/未指定地址永久硬拦截）。
+type SiteOpsConfig struct {
+	AllowUnauthenticatedLocalOnly bool     `mapstructure:"allowUnauthenticatedLocalOnly" yaml:"allowUnauthenticatedLocalOnly" json:"allowUnauthenticatedLocalOnly"`
+	AllowLoopback                 bool     `mapstructure:"allowLoopback" yaml:"allowLoopback" json:"allowLoopback"`
+	AllowedOrigins                []string `mapstructure:"allowedOrigins" yaml:"allowedOrigins" json:"allowedOrigins"`
+	AllowedCIDRs                  []string `mapstructure:"allowedCIDRs" yaml:"allowedCIDRs" json:"allowedCIDRs"`
+	DefaultPollIntervalSeconds    int      `mapstructure:"defaultPollIntervalSeconds" yaml:"defaultPollIntervalSeconds" json:"defaultPollIntervalSeconds"`
+	DefaultAuditBudgetPerDay      int      `mapstructure:"defaultAuditBudgetPerDay" yaml:"defaultAuditBudgetPerDay" json:"defaultAuditBudgetPerDay"`
+	GlobalMaxConcurrency          int      `mapstructure:"globalMaxConcurrency" yaml:"globalMaxConcurrency" json:"globalMaxConcurrency"`
+	PerInstanceMaxConcurrency     int      `mapstructure:"perInstanceMaxConcurrency" yaml:"perInstanceMaxConcurrency" json:"perInstanceMaxConcurrency"`
+	PerInstanceQueueLimit         int      `mapstructure:"perInstanceQueueLimit" yaml:"perInstanceQueueLimit" json:"perInstanceQueueLimit"`
+	QueueWaitTimeoutSeconds       int      `mapstructure:"queueWaitTimeoutSeconds" yaml:"queueWaitTimeoutSeconds" json:"queueWaitTimeoutSeconds"`
+	RequestTimeoutSeconds         int      `mapstructure:"requestTimeoutSeconds" yaml:"requestTimeoutSeconds" json:"requestTimeoutSeconds"`
+	BatchTimeoutSeconds           int      `mapstructure:"batchTimeoutSeconds" yaml:"batchTimeoutSeconds" json:"batchTimeoutSeconds"`
+	MaxResponseBytes              int64    `mapstructure:"maxResponseBytes" yaml:"maxResponseBytes" json:"maxResponseBytes"`
+	GroupArchiveIntervalSeconds   int      `mapstructure:"groupArchiveIntervalSeconds" yaml:"groupArchiveIntervalSeconds" json:"groupArchiveIntervalSeconds"`
+}
+
+func (c SiteOpsConfig) WithDefaults() SiteOpsConfig {
+	if c.DefaultPollIntervalSeconds <= 0 {
+		c.DefaultPollIntervalSeconds = DefaultSiteOpsPollIntervalSeconds
+	}
+	if c.DefaultPollIntervalSeconds < MinSiteOpsPollIntervalSeconds {
+		c.DefaultPollIntervalSeconds = MinSiteOpsPollIntervalSeconds
+	}
+	if c.DefaultAuditBudgetPerDay <= 0 {
+		c.DefaultAuditBudgetPerDay = DefaultSiteOpsAuditBudgetPerDay
+	}
+	if c.GlobalMaxConcurrency <= 0 {
+		c.GlobalMaxConcurrency = DefaultSiteOpsGlobalMaxConcurrency
+	}
+	if c.GlobalMaxConcurrency > 64 {
+		c.GlobalMaxConcurrency = 64
+	}
+	if c.PerInstanceMaxConcurrency <= 0 {
+		c.PerInstanceMaxConcurrency = DefaultSiteOpsPerInstanceMaxConcurrency
+	}
+	if c.PerInstanceMaxConcurrency > 16 {
+		c.PerInstanceMaxConcurrency = 16
+	}
+	if c.PerInstanceQueueLimit <= 0 {
+		c.PerInstanceQueueLimit = DefaultSiteOpsPerInstanceQueueLimit
+	}
+	if c.QueueWaitTimeoutSeconds <= 0 {
+		c.QueueWaitTimeoutSeconds = DefaultSiteOpsQueueWaitTimeoutSeconds
+	}
+	if c.RequestTimeoutSeconds <= 0 {
+		c.RequestTimeoutSeconds = DefaultSiteOpsRequestTimeoutSeconds
+	}
+	if c.BatchTimeoutSeconds <= 0 {
+		c.BatchTimeoutSeconds = DefaultSiteOpsBatchTimeoutSeconds
+	}
+	if c.MaxResponseBytes <= 0 {
+		c.MaxResponseBytes = DefaultSiteOpsMaxResponseBytes
+	}
+	if c.GroupArchiveIntervalSeconds <= 0 {
+		c.GroupArchiveIntervalSeconds = DefaultSiteOpsGroupArchiveIntervalSecond
+	}
+	return c
+}
+
 // Load 读取 config.yaml（可选）+ APP_SECRET / * 环境变量覆盖。
 //
 // 关键映射：
@@ -494,6 +575,7 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		_ = v.BindEnv("server.port", "SERVER_PORT")
 		_ = v.BindEnv("server.mode", "SERVER_MODE")
 		_ = v.BindEnv("log.level", "LOG_LEVEL")
+		_ = v.BindEnv("siteOps.allowLoopback", "SITEOPS_ALLOW_LOOPBACK")
 	}
 
 	if err := v.ReadInConfig(); err != nil {
@@ -517,6 +599,7 @@ func load(path string, withEnv bool) (*Config, string, error) {
 	cfg.Pricing = cfg.Pricing.WithDefaults()
 	cfg.Intelligence = cfg.Intelligence.WithDefaults()
 	cfg.Embed = cfg.Embed.WithDefaults()
+	cfg.SiteOps = cfg.SiteOps.WithDefaults()
 	return cfg, v.ConfigFileUsed(), nil
 }
 
@@ -621,6 +704,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.retention.announcementsDays", 90)
 	v.SetDefault("scheduler.retention.probeLivenessDays", 14)
 	v.SetDefault("scheduler.retention.probeIntelligenceRunsDays", 90)
+	v.SetDefault("scheduler.retention.siteOpsSnapshotsDays", 14)
+	v.SetDefault("scheduler.retention.siteOpsGroupSnapshotsDays", 7)
 
 	v.SetDefault("auth.enabled", false)
 	v.SetDefault("auth.username", "admin")
@@ -678,6 +763,19 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("embed.rateLimitEnabled", true)
 	v.SetDefault("embed.rateLimitRPS", DefaultEmbedRateLimitRPS)
 	v.SetDefault("embed.rateLimitBurst", DefaultEmbedRateLimitBurst)
+
+	v.SetDefault("siteOps.allowUnauthenticatedLocalOnly", false)
+	v.SetDefault("siteOps.allowLoopback", false)
+	v.SetDefault("siteOps.defaultPollIntervalSeconds", DefaultSiteOpsPollIntervalSeconds)
+	v.SetDefault("siteOps.defaultAuditBudgetPerDay", DefaultSiteOpsAuditBudgetPerDay)
+	v.SetDefault("siteOps.globalMaxConcurrency", DefaultSiteOpsGlobalMaxConcurrency)
+	v.SetDefault("siteOps.perInstanceMaxConcurrency", DefaultSiteOpsPerInstanceMaxConcurrency)
+	v.SetDefault("siteOps.perInstanceQueueLimit", DefaultSiteOpsPerInstanceQueueLimit)
+	v.SetDefault("siteOps.queueWaitTimeoutSeconds", DefaultSiteOpsQueueWaitTimeoutSeconds)
+	v.SetDefault("siteOps.requestTimeoutSeconds", DefaultSiteOpsRequestTimeoutSeconds)
+	v.SetDefault("siteOps.batchTimeoutSeconds", DefaultSiteOpsBatchTimeoutSeconds)
+	v.SetDefault("siteOps.maxResponseBytes", DefaultSiteOpsMaxResponseBytes)
+	v.SetDefault("siteOps.groupArchiveIntervalSeconds", DefaultSiteOpsGroupArchiveIntervalSecond)
 
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")

@@ -1,0 +1,60 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "enabled": true,
+    "timestamp": "2026-11-24T01:30:00Z",
+    "account": {
+      "101": {
+        "account_id": 101,
+        "platform": "anthropic",
+        "is_available": true,
+        "is_rate_limited": false,
+        "is_overloaded": false,
+        "has_error": false,
+        "error_message": ""
+      },
+      "102": {
+        "account_id": 102,
+        "platform": "openai",
+        "is_available": false,
+        "is_rate_limited": false,
+        "is_overloaded": false,
+        "has_error": true,
+        "error_message": "upstream 401 invalid api key sk-live-secret-9999999999"
+      }
+    },
+    "group": {
+      "10": {
+        "group_id": 10,
+        "group_name": "claude-shared",
+        "platform": "anthropic",
+        "total_count": 1,
+        "available_count": 1,
+        "rate_limit_count": 0,
+        "overload_count": 0,
+        "error_count": 0
+      },
+      "11": {
+        "group_id": 11,
+        "group_name": "claude-vip",
+        "platform": "anthropic",
+        "total_count": 1,
+        "available_count": 1,
+        "rate_limit_count": 0,
+        "overload_count": 0,
+        "error_count": 0
+      },
+      "20": {
+        "group_id": 20,
+        "group_name": "codex-main",
+        "platform": "openai",
+        "total_count": 1,
+        "available_count": 0,
+        "rate_limit_count": 0,
+        "overload_count": 0,
+        "error_count": 1
+      }
+    }
+  }
+}

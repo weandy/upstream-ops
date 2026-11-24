@@ -18,6 +18,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/intelligence"
 	"github.com/bejix/upstream-ops/backend/notify"
 	"github.com/bejix/upstream-ops/backend/runtimeconfig"
+	"github.com/bejix/upstream-ops/backend/siteops"
 	"github.com/bejix/upstream-ops/backend/storage"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -73,6 +74,7 @@ type Deps struct {
 	ModelPrices   *storage.ModelPriceOverrides
 	Intelligence  *intelligence.Service
 	Embed         *embedsvc.Service
+	SiteOps       *siteops.Service
 	Log           *slog.Logger
 
 	// Frontend 可选：传入嵌入的前端 dist 文件系统。nil 表示不挂载（本地开发用 vite dev server）。
@@ -126,6 +128,7 @@ func Register(r *gin.Engine, d *Deps) {
 		registerGatewayAdmin(api, d)
 		registerIntelligence(api, d)
 		registerEmbedSites(api, d)
+		registerSiteOps(api, d)
 	}
 
 	if d.Frontend != nil {

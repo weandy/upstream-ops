@@ -1,0 +1,9 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": [
+    {"id": 10, "name": "claude-shared", "platform": "anthropic", "status": "active"},
+    {"id": 11, "name": "claude-vip", "platform": "anthropic", "status": "active"},
+    {"id": 20, "name": "codex-main", "platform": "openai", "status": "active"}
+  ]
+}

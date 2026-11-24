@@ -1,0 +1,5 @@
+{
+  "code": 404,
+  "reason": "OPS_DISABLED",
+  "message": "ops monitoring is disabled"
+}
