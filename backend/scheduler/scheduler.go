@@ -147,7 +147,8 @@ func (s *Scheduler) hasRetention() bool {
 		r.SiteOpsGroupSnapshotsDays > 0 ||
 		r.SiteOpsEventsDays > 0 ||
 		r.SiteOpsAlertDeliveriesDays > 0 ||
-		r.SiteOpsAccountWindowSamplesDays > 0
+		r.SiteOpsAccountWindowSamplesDays > 0 ||
+		r.SiteOpsMailBatchesDays > 0
 }
 
 // runRetention 按配置删除过期历史。任一表失败不影响其它，全部错误写日志。
@@ -279,6 +280,15 @@ func (s *Scheduler) runRetention() {
 			s.log.Warn("retention site_ops_account_window_samples failed", "err", err)
 		} else if n > 0 {
 			s.log.Info("retention site_ops_account_window_samples deleted", "rows", n, "before", cutoff)
+		}
+	}
+	if r.SiteOpsMailBatchesDays > 0 && s.siteOps != nil {
+		cutoff := now.UTC().AddDate(0, 0, -r.SiteOpsMailBatchesDays)
+		n, err := s.siteOps.DeleteFinishedMailBatchesBeforeChunked(context.Background(), cutoff, 200, 10000, 2*time.Second)
+		if err != nil {
+			s.log.Warn("retention site_ops_mail_batches failed", "err", err)
+		} else if n > 0 {
+			s.log.Info("retention site_ops_mail_batches deleted", "rows", n, "before", cutoff)
 		}
 	}
 }

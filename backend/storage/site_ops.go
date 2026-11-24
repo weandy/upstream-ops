@@ -109,6 +109,20 @@ func (s *SiteOpsStore) UpdateInstance(ctx context.Context, inst *SiteOpsInstance
 		if inst.Generation != current.Generation+1 {
 			return ErrSiteOpsGenerationMismatch
 		}
+		if inst.BaseURL != current.BaseURL {
+			if err := tx.Where("instance_id = ?", inst.ID).Delete(&SiteOpsMailSMTP{}).Error; err != nil {
+				return mailError(err)
+			}
+		}
+		batch, err := activeMailBatch(tx, inst.ID)
+		if err != nil {
+			return mailError(err)
+		}
+		if batch != nil {
+			if _, err := stopMailBatch(tx, batch, time.Now().UTC(), ""); err != nil {
+				return mailError(err)
+			}
+		}
 		fields := []string{"name", "slug", "base_url", "api_key_cipher", "api_key_hint", "key_kind", "cred_gen", "generation", "proxy_enabled", "enabled", "sort_order", "poll_interval_seconds", "audit_budget_per_day"}
 		if inst.BaseURL != current.BaseURL || inst.CredGen != current.CredGen || inst.KeyKind != current.KeyKind || inst.ProxyEnabled != current.ProxyEnabled {
 			fields = append(fields, "capabilities_json", "last_reachability", "last_status", "last_health_score", "last_version", "last_observed_at", "last_verified_at", "backoff_until", "last_error_code", "last_error_summary")
@@ -119,12 +133,11 @@ func (s *SiteOpsStore) UpdateInstance(ctx context.Context, inst *SiteOpsInstance
 
 func (s *SiteOpsStore) DeleteInstance(ctx context.Context, id uint) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		result := tx.Where("id = ?", id).Delete(&SiteOpsInstance{})
-		if result.Error != nil {
-			return result.Error
+		if _, err := findSiteOpsInstance(tx.Clauses(clause.Locking{Strength: "UPDATE"}), id); err != nil {
+			return err
 		}
-		if result.RowsAffected == 0 {
-			return ErrSiteOpsNotFound
+		if err := deleteInstanceMail(tx, id); err != nil {
+			return mailError(err)
 		}
 		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsSnapshot{}).Error; err != nil {
 			return err
@@ -147,7 +160,10 @@ func (s *SiteOpsStore) DeleteInstance(ctx context.Context, id uint) error {
 		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsReferencePrice{}).Error; err != nil {
 			return err
 		}
-		return tx.Where("instance_id = ?", id).Delete(&SiteOpsUserConcurrencyPeak{}).Error
+		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsUserConcurrencyPeak{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ?", id).Delete(&SiteOpsInstance{}).Error
 	})
 }
 

@@ -235,6 +235,10 @@ func AutoMigrate(db *gorm.DB) error {
 	); err != nil {
 		return err
 	}
+	if err := NewSiteOpsStore(db).db.AutoMigrate(&SiteOpsMailScope{}, &SiteOpsMailSMTP{}, &SiteOpsMailTemplate{},
+		&SiteOpsMailSuppression{}, &SiteOpsMailBatch{}, &SiteOpsMailItem{}); err != nil {
+		return fmt.Errorf("mail schema migration failed")
+	}
 	return backfillChannelTodayCostAt(db)
 }
 
