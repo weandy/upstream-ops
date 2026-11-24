@@ -291,6 +291,11 @@ export interface SiteOpsGroupCapacityItem {
   conc_max?: number | null
   conc_waiting?: number | null
   load_percent?: number | null
+  sessions_used?: number | null
+  sessions_max?: number | null
+  rpm_used?: number | null
+  rpm_max?: number | null
+  pool_exhaust_risk_count?: number
 }
 
 export interface SiteOpsGroupsResponse {
@@ -432,4 +437,148 @@ export interface SiteOpsDailyReportSendResult {
   preview: SiteOpsDailyReportPreview
   matched_targets: number
   deliveries: SiteOpsEventDelivery[]
+}
+
+// ---------- Wave 3 (P1-B: M4 被动号池周期预测 + M5 单号成本效率) ----------
+
+export type SiteOpsForecastStatus =
+  | "safe"
+  | "tight"
+  | "will_exhaust"
+  | "will_exhaust_high"
+  | "exhausted"
+  | "idle"
+  | "insufficient_data"
+  | string
+
+export type SiteOpsForecastConfidence = "high" | "medium" | "low" | string
+
+export type SiteOpsPassiveSupport =
+  | "passive_proven"
+  | "passive_unverified"
+  | "excluded_payg"
+  | string
+
+export interface SiteOpsWindowForecastView {
+  window_key: string
+  source: string
+  window_duration_sec: number
+  utilization: number
+  resets_at?: string | null
+  remaining_seconds: number
+  upstream_observed_at: string
+  burn_rate_per_hour?: number | null
+  eta_seconds?: number | null
+  predicted_end_util?: number | null
+  margin_hours?: number | null
+  forecast_status: SiteOpsForecastStatus
+  confidence: SiteOpsForecastConfidence
+  note?: string
+}
+
+export interface SiteOpsAccountForecastView {
+  account_id: number
+  name: string
+  platform: string
+  account_type: string
+  group_ids?: number[]
+  passive_support: SiteOpsPassiveSupport
+  passive_support_reason?: string
+  expires_at?: string | null
+  earliest_blocking_window?: string
+  overall_status: SiteOpsForecastStatus
+  overall_confidence: SiteOpsForecastConfidence
+  earliest_eta_seconds?: number | null
+  earliest_margin_hours?: number | null
+  windows: SiteOpsWindowForecastView[]
+}
+
+export interface SiteOpsGroupForecastRiskView {
+  group_id: number
+  group_name: string
+  platform: string
+  proven_accounts: number
+  unverified_accounts: number
+  excluded_payg_accounts: number
+  exhausted_count: number
+  will_exhaust_high_count: number
+  will_exhaust_count: number
+  tight_count: number
+  safe_or_idle_count: number
+  insufficient_data_count: number
+  high_risk_ratio_pct?: number | null
+  cannot_sustain_risk: boolean
+  risk_note?: string
+}
+
+export interface SiteOpsPoolForecastResponse {
+  instance_id: number
+  observed_at?: string | null
+  trust_state: SiteOpsFieldQualityState
+  reset_constraint_note: string
+  passive_matrix_note: string
+  proven_count: number
+  unverified_count: number
+  excluded_payg_count: number
+  exhausted_count: number
+  will_exhaust_high_count: number
+  will_exhaust_count: number
+  tight_count: number
+  safe_or_idle_count: number
+  insufficient_count: number
+  groups: SiteOpsGroupForecastRiskView[]
+  accounts: SiteOpsAccountForecastView[]
+}
+
+export interface SiteOpsAccountEfficiencyItem {
+  account_id: number
+  name: string
+  platform: string
+  account_type: string
+  status?: string
+  current_concurrency: number
+  stats_source: string
+  days_window: number
+  total_requests: number
+  total_tokens: number
+  standard_cost_30d: number
+  account_cost_30d: number
+  user_cost_30d: number
+  today_requests: number
+  today_standard_cost: number
+  today_account_cost: number
+  today_user_cost: number
+  monetization_ratio?: number | null
+  output_per_concurrency_usd?: number | null
+  req_per_concurrency?: number | null
+  window_full_leverage_usd?: number | null
+  window_leverage_key?: string
+  monthly_cost_usd?: number | null
+  monthly_cost_note?: string
+  standard_cost_leverage?: number | null
+  user_cost_per_monthly_ref?: number | null
+  cost_updated_at?: string | null
+}
+
+export interface SiteOpsAccountsEfficiencyResponse {
+  instance_id: number
+  observed_at?: string | null
+  trust_state: SiteOpsFieldQualityState
+  today_stats_batch_gated: boolean
+  today_stats_batch_gate_note: string
+  metric_semantics_note: string
+  items: SiteOpsAccountEfficiencyItem[]
+}
+
+export interface SiteOpsUpdateAccountCostInput {
+  monthly_cost_usd: number
+  note: string
+}
+
+export interface SiteOpsAccountCostView {
+  instance_id: number
+  account_id: number
+  monthly_cost_usd: number
+  note: string
+  updated_at: string
 }

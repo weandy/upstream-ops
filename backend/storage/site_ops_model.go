@@ -113,6 +113,12 @@ type SiteOpsGroupSnapshot struct {
 	ConcUsed             *int64    `json:"conc_used,omitempty"`
 	ConcMax              *int64    `json:"conc_max,omitempty"`
 	ConcWaiting          *int64    `json:"conc_waiting,omitempty"`
+	// P1-B 会话/RPM 容量与号池断档风险扩列
+	SessionsUsed         *int64    `json:"sessions_used,omitempty"`
+	SessionsMax          *int64    `json:"sessions_max,omitempty"`
+	RPMUsed              *int64    `json:"rpm_used,omitempty"`
+	RPMMax               *int64    `json:"rpm_max,omitempty"`
+	PoolExhaustRiskCount int       `gorm:"not null;default:0" json:"pool_exhaust_risk_count"`
 }
 
 func (SiteOpsGroupSnapshot) TableName() string { return "site_ops_group_snapshots" }
@@ -162,3 +168,45 @@ type SiteOpsAlertDelivery struct {
 }
 
 func (SiteOpsAlertDelivery) TableName() string { return "site_ops_alert_deliveries" }
+
+// SiteOpsAccountWindowSample 被动证实订阅号窗口采样表（P1-B · M4，默认保留 7 天）。
+// 仅记录通过被动只读证明矩阵准入的样本；唯一键含 upstream_observed_at 防止 304 / 缓存重放伪造推进。
+type SiteOpsAccountWindowSample struct {
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	InstanceID         uint       `gorm:"not null;uniqueIndex:uniq_site_ops_win,priority:1;index:idx_site_ops_win_lookup,priority:1" json:"instance_id"`
+	AccountID          int64      `gorm:"not null;uniqueIndex:uniq_site_ops_win,priority:2;index:idx_site_ops_win_lookup,priority:2" json:"account_id"`
+	AccountName        string     `gorm:"size:128;not null;default:''" json:"account_name"`
+	Platform           string     `gorm:"size:32;not null;default:''" json:"platform"`
+	AccountType        string     `gorm:"size:32;not null;default:''" json:"account_type"`
+	Source             string     `gorm:"size:32;not null;default:'passive_cache';uniqueIndex:uniq_site_ops_win,priority:3;index:idx_site_ops_win_lookup,priority:3" json:"source"`
+	WindowKey          string     `gorm:"size:32;not null;uniqueIndex:uniq_site_ops_win,priority:4;index:idx_site_ops_win_lookup,priority:4" json:"window_key"`
+	WindowDurationSec  int64      `gorm:"not null;default:0" json:"window_duration_sec"`
+	Utilization        float64    `gorm:"not null;default:0" json:"utilization"`
+	ResetsAt           *time.Time `json:"resets_at,omitempty"`
+	RemainingSeconds   int64      `gorm:"not null;default:0" json:"remaining_seconds"`
+	UpstreamObservedAt time.Time  `gorm:"not null;uniqueIndex:uniq_site_ops_win,priority:5" json:"upstream_observed_at"`
+	WindowStandardCost *float64   `json:"window_standard_cost,omitempty"`
+	WindowUserCost     *float64   `json:"window_user_cost,omitempty"`
+	WindowRequests     *int64     `json:"window_requests,omitempty"`
+	BurnRatePerHour    *float64   `json:"burn_rate_per_hour,omitempty"`
+	ETASeconds         *int64     `json:"eta_seconds,omitempty"`
+	PredictedEndUtil   *float64   `json:"predicted_end_util,omitempty"`
+	MarginHours        *float64   `json:"margin_hours,omitempty"`
+	ForecastStatus     string     `gorm:"size:24;not null;default:'insufficient_data'" json:"forecast_status"`
+	Confidence         string     `gorm:"size:16;not null;default:'low'" json:"confidence"`
+	ObservedAt         time.Time  `gorm:"not null;index:idx_site_ops_win_lookup,priority:5;index:idx_site_ops_win_observed" json:"observed_at"`
+}
+
+func (SiteOpsAccountWindowSample) TableName() string { return "site_ops_account_window_samples" }
+
+// SiteOpsAccountCost 可选本地参考月租成本表（P1-B · M5）。
+type SiteOpsAccountCost struct {
+	ID             uint      `gorm:"primaryKey" json:"id"`
+	InstanceID     uint      `gorm:"not null;uniqueIndex:uniq_site_ops_acc_cost,priority:1" json:"instance_id"`
+	AccountID      int64     `gorm:"not null;uniqueIndex:uniq_site_ops_acc_cost,priority:2" json:"account_id"`
+	MonthlyCostUSD float64   `gorm:"not null;default:0" json:"monthly_cost_usd"`
+	Note           string    `gorm:"size:256;not null;default:''" json:"note"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (SiteOpsAccountCost) TableName() string { return "site_ops_account_costs" }

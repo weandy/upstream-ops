@@ -551,6 +551,12 @@ type GroupCapacityItem struct {
 	ConcMax              *int64            `json:"conc_max,omitempty"`
 	ConcWaiting          *int64            `json:"conc_waiting,omitempty"`
 	LoadPercent          *float64          `json:"load_percent,omitempty"`
+	// P1-B 会话/RPM 容量与号池断档风险计数
+	SessionsUsed         *int64            `json:"sessions_used,omitempty"`
+	SessionsMax          *int64            `json:"sessions_max,omitempty"`
+	RPMUsed              *int64            `json:"rpm_used,omitempty"`
+	RPMMax               *int64            `json:"rpm_max,omitempty"`
+	PoolExhaustRiskCount int               `json:"pool_exhaust_risk_count"`
 }
 
 // GroupsResponse GET /api/site-ops/instances/:id/groups 响应体。

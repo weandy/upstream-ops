@@ -3,6 +3,8 @@
  */
 import { apiFetch, type ApiError } from "@/lib/api"
 import type {
+  SiteOpsAccountCostView,
+  SiteOpsAccountsEfficiencyResponse,
   SiteOpsAccountsStatusResponse,
   SiteOpsCreateInstanceInput,
   SiteOpsDailyReportPreview,
@@ -11,11 +13,13 @@ import type {
   SiteOpsGroupsResponse,
   SiteOpsInstanceView,
   SiteOpsOverviewResponse,
+  SiteOpsPoolForecastResponse,
   SiteOpsProbeReport,
   SiteOpsRefreshResult,
   SiteOpsSummaryResponse,
   SiteOpsTrendRange,
   SiteOpsTrendsResponse,
+  SiteOpsUpdateAccountCostInput,
   SiteOpsUpdateInstanceInput,
 } from "@/lib/site-ops-types"
 
@@ -126,4 +130,30 @@ export function sendSiteOpsDailyReport(id: number): Promise<SiteOpsDailyReportSe
   return apiFetch<SiteOpsDailyReportSendResult>(`/site-ops/instances/${id}/report/send`, {
     method: "POST",
   })
+}
+
+export function fetchSiteOpsPoolForecast(id: number): Promise<SiteOpsPoolForecastResponse> {
+  return apiFetch<SiteOpsPoolForecastResponse>(`/site-ops/instances/${id}/pool-forecast`)
+}
+
+export function fetchSiteOpsAccountsEfficiency(
+  id: number,
+): Promise<SiteOpsAccountsEfficiencyResponse> {
+  return apiFetch<SiteOpsAccountsEfficiencyResponse>(
+    `/site-ops/instances/${id}/accounts?view=efficiency`,
+  )
+}
+
+export function updateSiteOpsAccountCost(
+  id: number,
+  accountId: number,
+  input: SiteOpsUpdateAccountCostInput,
+): Promise<SiteOpsAccountCostView> {
+  return apiFetch<SiteOpsAccountCostView>(
+    `/site-ops/instances/${id}/accounts/${accountId}/cost`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    },
+  )
 }

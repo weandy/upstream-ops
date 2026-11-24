@@ -118,6 +118,7 @@ type RetentionConfig struct {
 	SiteOpsGroupSnapshotsDays  int    `mapstructure:"siteOpsGroupSnapshotsDays" yaml:"siteOpsGroupSnapshotsDays" json:"siteOpsGroupSnapshotsDays"`
 	SiteOpsEventsDays          int    `mapstructure:"siteOpsEventsDays" yaml:"siteOpsEventsDays" json:"siteOpsEventsDays"`
 	SiteOpsAlertDeliveriesDays int    `mapstructure:"siteOpsAlertDeliveriesDays" yaml:"siteOpsAlertDeliveriesDays" json:"siteOpsAlertDeliveriesDays"`
+	SiteOpsAccountWindowSamplesDays int `mapstructure:"siteOpsAccountWindowSamplesDays" yaml:"siteOpsAccountWindowSamplesDays" json:"siteOpsAccountWindowSamplesDays"`
 }
 
 // NotificationsConfig 通知去抖策略。所有字段都是"少烦我"取向，默认不丢消息只合并。
@@ -725,6 +726,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.retention.siteOpsGroupSnapshotsDays", 7)
 	v.SetDefault("scheduler.retention.siteOpsEventsDays", 30)
 	v.SetDefault("scheduler.retention.siteOpsAlertDeliveriesDays", 30)
+	v.SetDefault("scheduler.retention.siteOpsAccountWindowSamplesDays", 7)
 
 	v.SetDefault("auth.enabled", false)
 	v.SetDefault("auth.username", "admin")
