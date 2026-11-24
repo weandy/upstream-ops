@@ -5,9 +5,9 @@
     "overview": {
       "health_score": 94,
       "uptime_seconds": 864200,
-      "sla": 99.12,
-      "error_rate": 0.88,
-      "upstream_error_rate": 0.62,
+      "sla": 0.9912,
+      "error_rate": 0.0088,
+      "upstream_error_rate": 0.0062,
       "request_count_total": 12450,
       "error_count_total": 110,
       "upstream_429_count": 48,
@@ -33,9 +33,9 @@
         "p50": 54.2
       },
       "system_metrics": {
-        "collected_at": "2026-11-24T01:30:00Z",
-        "cpu_percent": 32.5,
-        "memory_percent": 58.1,
+        "created_at": "2026-11-24T01:30:00Z",
+        "cpu_usage_percent": 32.5,
+        "memory_usage_percent": 58.1,
         "memory_used_mb": 2380,
         "db_ok": true,
         "db_conn_active": 8,
@@ -46,22 +46,21 @@
         "redis_conn_idle": 9,
         "redis_pool_size": 64,
         "goroutine_count": 215,
-        "queue_depth": 0,
+        "concurrency_queue_depth": 0,
         "account_switch_count": 7
       },
       "job_heartbeats": [
         {
           "job_name": "ops_metrics_collector",
-          "status": "ok",
           "last_success_at": "2026-11-24T01:30:00Z",
           "last_run_at": "2026-11-24T01:30:00Z",
           "last_error": ""
         },
         {
           "job_name": "usage_preagg",
-          "status": "error",
           "last_success_at": "2026-11-24T01:10:00Z",
           "last_run_at": "2026-11-24T01:29:00Z",
+          "last_error_at": "2026-11-24T01:29:00Z",
           "last_error": "dial tcp failed with Bearer sk-secret-should-be-redacted-123456"
         }
       ]

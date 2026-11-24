@@ -67,9 +67,11 @@ export function OverviewPanel({ overview }: { overview: SiteOpsOverviewResponse 
       <section className="space-y-2.5">
         <h2 className="text-sm font-semibold">实时 SRE 总览</h2>
         <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
-          <Stat label="健康分与 Uptime">
+          <Stat label={snapshot.uptime_seconds != null ? "健康分与 Uptime" : "综合健康分"}>
             <MetricValue value={snapshot.health_score} quality={ops} unit=" 分" />
-            <MetricValue value={snapshot.uptime_seconds} quality={ops} format={formatUptime} />
+            {snapshot.uptime_seconds != null && (
+              <MetricValue value={snapshot.uptime_seconds} quality={ops} format={formatUptime} />
+            )}
           </Stat>
           <Stat label="近 1 小时 SLA" note={overview.sla_denominator_note}>
             <MetricValue value={snapshot.sla_percent_1h} quality={ops} unit="%" />

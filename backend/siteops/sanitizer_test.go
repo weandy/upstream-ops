@@ -59,19 +59,27 @@ func TestProjectionFixtures(t *testing.T) {
 	}
 	if overview.HealthScore == nil || *overview.HealthScore != 94 ||
 		overview.DBConnWaiting == nil || *overview.DBConnWaiting != 0 ||
-		overview.SystemMetricsAt == nil || overview.SLAPercent1h == nil || *overview.SLAPercent1h != 99.12 ||
+		overview.SystemMetricsAt == nil || overview.CPUPercent == nil || *overview.CPUPercent != 32.5 ||
+		overview.MemPercent == nil || *overview.MemPercent != 58.1 || overview.QueueDepth == nil || *overview.QueueDepth != 0 ||
+		overview.SLAPercent1h == nil || *overview.SLAPercent1h != 99.12 ||
+		overview.ErrorRatePercent1h == nil || *overview.ErrorRatePercent1h != 0.88 ||
+		overview.UpstreamErrorRatePct1h == nil || *overview.UpstreamErrorRatePct1h != 0.62 ||
 		overview.TTFTP95MS == nil || *overview.TTFTP95MS != 1480 || len(overview.JobHeartbeats) != 2 {
 		t.Fatalf("unexpected overview fields: %+v", overview)
 	}
-	if beat := overview.JobHeartbeats[1]; !beat.HasError || beat.ErrorSummary != "dial tcp failed with [redacted]" {
-		t.Fatalf("heartbeat = %+v", beat)
+	if okBeat := overview.JobHeartbeats[0]; okBeat.Status != "ok" || okBeat.HasError {
+		t.Fatalf("ok heartbeat = %+v", okBeat)
+	}
+	if beat := overview.JobHeartbeats[1]; beat.Status != "error" || !beat.HasError || beat.ErrorSummary != "dial tcp failed with [redacted]" {
+		t.Fatalf("error heartbeat = %+v", beat)
 	}
 	avail, err := ParseAccountAvailability(fixture(t, "ops_account_availability"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !avail.Accounts[101].Available || !avail.Accounts[102].HasError ||
-		avail.Accounts[102].ErrorSummary != "upstream 401 invalid api key [redacted]" || avail.Groups[20].ErrorCount != 1 {
+		avail.Accounts[102].ErrorSummary != "upstream 401 invalid api key [redacted]" ||
+		avail.Groups[10].TotalCount != 1 || avail.Groups[20].TotalCount != 1 || avail.Groups[20].ErrorCount != 1 {
 		t.Fatalf("unexpected availability: %+v", avail)
 	}
 	for _, projected := range []any{overview, avail} {
@@ -119,5 +127,89 @@ func TestProjectionDirectAndWrapped(t *testing.T) {
 	}
 	if _, err := ParseSystemVersion([]byte(`{"code":500,"message":"raw example"}`)); err == nil || strings.Contains(err.Error(), "raw example") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSub2APIV0224SchemaCalibration(t *testing.T) {
+	// 1. Ratio (0..1) -> Percentage (0..100) including exact 1.0 -> 100%, plus recovered heartbeat.
+	ratioBody := []byte(`{
+		"overview": {
+			"health_score": 61,
+			"sla": 1,
+			"error_rate": 0,
+			"upstream_error_rate": 0,
+			"system_metrics": {
+				"created_at": "2026-11-24T04:53:38Z",
+				"cpu_usage_percent": 12.4,
+				"memory_usage_percent": 44.2,
+				"memory_used_mb": 881,
+				"concurrency_queue_depth": 3
+			},
+			"job_heartbeats": [
+				{
+					"job_name": "ops_metrics_collector",
+					"last_run_at": "2026-11-24T04:53:38Z",
+					"last_success_at": "2026-11-24T04:53:38Z",
+					"last_error_at": "2026-11-24T03:00:00Z",
+					"last_error": "transient error before recovery"
+				}
+			]
+		}
+	}`)
+	ov, err := ParseOpsOverview(ratioBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ov.SLAPercent1h == nil || *ov.SLAPercent1h != 100 ||
+		ov.ErrorRatePercent1h == nil || *ov.ErrorRatePercent1h != 0 ||
+		ov.UpstreamErrorRatePct1h == nil || *ov.UpstreamErrorRatePct1h != 0 ||
+		ov.CPUPercent == nil || *ov.CPUPercent != 12.4 ||
+		ov.MemPercent == nil || *ov.MemPercent != 44.2 ||
+		ov.QueueDepth == nil || *ov.QueueDepth != 3 ||
+		ov.SystemMetricsAt == nil {
+		t.Fatalf("v0.2.24 ratio/metrics calibration failed: %+v", ov)
+	}
+	if len(ov.JobHeartbeats) != 1 || ov.JobHeartbeats[0].Status != "ok" || ov.JobHeartbeats[0].HasError {
+		t.Fatalf("recovered heartbeat should be ok without error: %+v", ov.JobHeartbeats)
+	}
+
+	// 2. Already-percentage payload + legacy alias fields remain supported.
+	pctBody := []byte(`{
+		"sla": 99.12,
+		"error_rate": 0.88,
+		"upstream_error_rate": 0.62,
+		"system_metrics": {
+			"collected_at": "2026-11-24T04:50:00Z",
+			"cpu_percent": 20.5,
+			"memory_percent": 50.0,
+			"queue_depth": 2
+		}
+	}`)
+	ovPct, err := ParseOpsOverview(pctBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ovPct.SLAPercent1h == nil || *ovPct.SLAPercent1h != 99.12 ||
+		ovPct.ErrorRatePercent1h == nil || *ovPct.ErrorRatePercent1h != 0.88 ||
+		ovPct.UpstreamErrorRatePct1h == nil || *ovPct.UpstreamErrorRatePct1h != 0.62 ||
+		ovPct.CPUPercent == nil || *ovPct.CPUPercent != 20.5 ||
+		ovPct.MemPercent == nil || *ovPct.MemPercent != 50.0 ||
+		ovPct.QueueDepth == nil || *ovPct.QueueDepth != 2 ||
+		ovPct.SystemMetricsAt == nil {
+		t.Fatalf("legacy percentage/alias fallback failed: %+v", ovPct)
+	}
+
+	// 3. Group total_accounts (v0.2.24) and legacy total_count alias both work.
+	avail, err := ParseAccountAvailability([]byte(`{
+		"group": {
+			"4": {"group_id": 4, "group_name": "g4", "total_accounts": 4, "available_count": 3, "error_count": 1},
+			"5": {"group_id": 5, "group_name": "g5", "total_count": 2, "available_count": 1}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if avail.Groups[4].TotalCount != 4 || avail.Groups[5].TotalCount != 2 {
+		t.Fatalf("group totals = %+v", avail.Groups)
 	}
 }

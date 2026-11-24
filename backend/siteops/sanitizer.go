@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"regexp"
 	"strings"
@@ -107,21 +108,25 @@ func decodeProjection(body []byte, dst any) error {
 }
 
 type overviewMetrics struct {
-	CollectedAt        *time.Time `json:"collected_at"`
-	CPUPercent         *float64   `json:"cpu_percent"`
-	MemoryPercent      *float64   `json:"memory_percent"`
-	MemoryUsedMB       *int64     `json:"memory_used_mb"`
-	DBOK               *bool      `json:"db_ok"`
-	DBConnActive       *int       `json:"db_conn_active"`
-	DBConnWaiting      *int       `json:"db_conn_waiting"`
-	DBMaxOpenConns     *int       `json:"db_max_open_conns"`
-	RedisOK            *bool      `json:"redis_ok"`
-	RedisConnTotal     *int       `json:"redis_conn_total"`
-	RedisConnIdle      *int       `json:"redis_conn_idle"`
-	RedisPoolSize      *int       `json:"redis_pool_size"`
-	GoroutineCount     *int       `json:"goroutine_count"`
-	QueueDepth         *int       `json:"queue_depth"`
-	AccountSwitchCount *int64     `json:"account_switch_count"`
+	CreatedAt             *time.Time `json:"created_at"`
+	CollectedAt           *time.Time `json:"collected_at"`
+	CPUUsagePercent       *float64   `json:"cpu_usage_percent"`
+	CPUPercent            *float64   `json:"cpu_percent"`
+	MemoryUsagePercent    *float64   `json:"memory_usage_percent"`
+	MemoryPercent         *float64   `json:"memory_percent"`
+	MemoryUsedMB          *int64     `json:"memory_used_mb"`
+	DBOK                  *bool      `json:"db_ok"`
+	DBConnActive          *int       `json:"db_conn_active"`
+	DBConnWaiting         *int       `json:"db_conn_waiting"`
+	DBMaxOpenConns        *int       `json:"db_max_open_conns"`
+	RedisOK               *bool      `json:"redis_ok"`
+	RedisConnTotal        *int       `json:"redis_conn_total"`
+	RedisConnIdle         *int       `json:"redis_conn_idle"`
+	RedisPoolSize         *int       `json:"redis_pool_size"`
+	GoroutineCount        *int       `json:"goroutine_count"`
+	ConcurrencyQueueDepth *int       `json:"concurrency_queue_depth"`
+	QueueDepth            *int       `json:"queue_depth"`
+	AccountSwitchCount    *int64     `json:"account_switch_count"`
 }
 
 type overviewWire struct {
@@ -157,6 +162,7 @@ type overviewWire struct {
 		Status        string     `json:"status"`
 		LastSuccessAt *time.Time `json:"last_success_at"`
 		LastRunAt     *time.Time `json:"last_run_at"`
+		LastErrorAt   *time.Time `json:"last_error_at"`
 		LastError     string     `json:"last_error"`
 	} `json:"job_heartbeats"`
 }
@@ -166,6 +172,23 @@ func preferValue[T any](preferred, fallback *T) *T {
 		return preferred
 	}
 	return fallback
+}
+
+// normalizeRatesToPercent 将 Sub2API v0.2.24 返回的 0..1 比例值统一转为 0..100 百分数；
+// 若上游已按百分数返回（任一比率字段 > 1），则保留原值。
+func normalizeRatesToPercent(sla, errRate, upErrRate *float64) (*float64, *float64, *float64) {
+	alreadyPercent := (sla != nil && *sla > 1) || (errRate != nil && *errRate > 1) || (upErrRate != nil && *upErrRate > 1)
+	scale := func(v *float64) *float64 {
+		if v == nil {
+			return nil
+		}
+		out := *v
+		if !alreadyPercent && out >= 0 && out <= 1 {
+			out = math.Round(out*10000) / 100
+		}
+		return &out
+	}
+	return scale(sla), scale(errRate), scale(upErrRate)
 }
 
 func ParseOpsOverview(body []byte) (*SanitizedOpsOverview, error) {
@@ -182,9 +205,9 @@ func ParseOpsOverview(body []byte) (*SanitizedOpsOverview, error) {
 	}
 	out := raw.SanitizedOpsOverview
 	m := raw.SystemMetrics
-	out.SystemMetricsAt = preferValue(m.CollectedAt, out.SystemMetricsAt)
-	out.CPUPercent = preferValue(m.CPUPercent, out.CPUPercent)
-	out.MemPercent = preferValue(m.MemoryPercent, out.MemPercent)
+	out.SystemMetricsAt = preferValue(m.CreatedAt, preferValue(m.CollectedAt, out.SystemMetricsAt))
+	out.CPUPercent = preferValue(m.CPUUsagePercent, preferValue(m.CPUPercent, out.CPUPercent))
+	out.MemPercent = preferValue(m.MemoryUsagePercent, preferValue(m.MemoryPercent, out.MemPercent))
 	out.MemUsedMB = preferValue(m.MemoryUsedMB, out.MemUsedMB)
 	out.DBOK = preferValue(m.DBOK, out.DBOK)
 	out.DBConnActive = preferValue(m.DBConnActive, out.DBConnActive)
@@ -195,11 +218,12 @@ func ParseOpsOverview(body []byte) (*SanitizedOpsOverview, error) {
 	out.RedisConnIdle = preferValue(m.RedisConnIdle, out.RedisConnIdle)
 	out.RedisPoolSize = preferValue(m.RedisPoolSize, out.RedisPoolSize)
 	out.GoroutineCount = preferValue(m.GoroutineCount, out.GoroutineCount)
-	out.QueueDepth = preferValue(m.QueueDepth, out.QueueDepth)
+	out.QueueDepth = preferValue(m.ConcurrencyQueueDepth, preferValue(m.QueueDepth, out.QueueDepth))
 	out.AccountSwitchCount1m = preferValue(m.AccountSwitchCount, out.AccountSwitchCount1m)
-	out.SLAPercent1h = preferValue(raw.SLA, out.SLAPercent1h)
-	out.ErrorRatePercent1h = preferValue(raw.ErrorRate, out.ErrorRatePercent1h)
-	out.UpstreamErrorRatePct1h = preferValue(raw.UpstreamErrorRate, out.UpstreamErrorRatePct1h)
+	slaPct, errPct, upErrPct := normalizeRatesToPercent(raw.SLA, raw.ErrorRate, raw.UpstreamErrorRate)
+	out.SLAPercent1h = preferValue(slaPct, out.SLAPercent1h)
+	out.ErrorRatePercent1h = preferValue(errPct, out.ErrorRatePercent1h)
+	out.UpstreamErrorRatePct1h = preferValue(upErrPct, out.UpstreamErrorRatePct1h)
 	out.ReqTotal1h = preferValue(raw.RequestCountTotal, out.ReqTotal1h)
 	out.ErrTotal1h = preferValue(raw.ErrorCountTotal, out.ErrTotal1h)
 	out.Upstream4291h = preferValue(raw.Upstream429Count, out.Upstream4291h)
@@ -213,10 +237,28 @@ func ParseOpsOverview(body []byte) (*SanitizedOpsOverview, error) {
 	out.DurationP95MS = preferValue(raw.Duration.P95MS, out.DurationP95MS)
 	out.OutputTPSP50 = preferValue(raw.OutputTPS.P50, out.OutputTPSP50)
 	for _, heartbeat := range raw.JobHeartbeats {
+		rawErr := strings.TrimSpace(heartbeat.LastError)
+		recovered := rawErr != "" && heartbeat.LastErrorAt != nil && heartbeat.LastSuccessAt != nil && heartbeat.LastSuccessAt.After(*heartbeat.LastErrorAt)
+		hasError := rawErr != "" && !recovered
+		status := strings.ToLower(SanitizeErrorText(heartbeat.Status, 200))
+		if status == "" {
+			if hasError {
+				status = "error"
+			} else if heartbeat.LastSuccessAt != nil {
+				status = "ok"
+			}
+		}
+		if status == "error" {
+			hasError = true
+		}
+		errSummary := ""
+		if hasError && rawErr != "" {
+			errSummary = SanitizeErrorText(rawErr, 0)
+		}
 		out.JobHeartbeats = append(out.JobHeartbeats, SanitizedJobHeartbeat{
-			JobName: SanitizeErrorText(heartbeat.JobName, 200), Status: SanitizeErrorText(heartbeat.Status, 200),
+			JobName: SanitizeErrorText(heartbeat.JobName, 200), Status: status,
 			LastSuccessAt: heartbeat.LastSuccessAt, LastRunAt: heartbeat.LastRunAt,
-			HasError: strings.TrimSpace(heartbeat.LastError) != "", ErrorSummary: SanitizeErrorText(heartbeat.LastError, 0),
+			HasError: hasError, ErrorSummary: errSummary,
 		})
 	}
 	return &out, nil
@@ -286,8 +328,20 @@ type accountAvailabilityWire struct {
 	ErrorMessage  string `json:"error_message"`
 }
 
+type groupAvailabilityWire struct {
+	GroupID        int64  `json:"group_id"`
+	GroupName      string `json:"group_name"`
+	Platform       string `json:"platform"`
+	TotalAccounts  *int64 `json:"total_accounts"`
+	TotalCount     *int64 `json:"total_count"`
+	AvailableCount int64  `json:"available_count"`
+	RateLimitCount int64  `json:"rate_limit_count"`
+	OverloadCount  int64  `json:"overload_count"`
+	ErrorCount     int64  `json:"error_count"`
+}
+
 func ParseAccountAvailability(body []byte) (*SanitizedAvailabilityPayload, error) {
-	var wire realtimeWire[accountAvailabilityWire, SanitizedGroupAvailability]
+	var wire realtimeWire[accountAvailabilityWire, groupAvailabilityWire]
 	if err := decodeProjection(body, &wire); err != nil {
 		return nil, err
 	}
@@ -306,17 +360,30 @@ func ParseAccountAvailability(body []byte) (*SanitizedAvailabilityPayload, error
 			ErrorSummary: SanitizeErrorText(account.ErrorMessage, 0),
 		}
 	}
+	groups := make(map[int64]SanitizedGroupAvailability, len(wire.Groups))
 	for id, group := range wire.Groups {
-		if group.GroupID == 0 {
-			group.GroupID = id
+		gid := group.GroupID
+		if gid == 0 {
+			gid = id
 		}
-		group.GroupName = SanitizeErrorText(group.GroupName, 200)
-		group.Platform = SanitizeErrorText(group.Platform, 200)
-		wire.Groups[id] = group
+		var total int64
+		if picked := preferValue(group.TotalAccounts, group.TotalCount); picked != nil {
+			total = *picked
+		}
+		groups[id] = SanitizedGroupAvailability{
+			GroupID:        gid,
+			GroupName:      SanitizeErrorText(group.GroupName, 200),
+			Platform:       SanitizeErrorText(group.Platform, 200),
+			TotalCount:     total,
+			AvailableCount: group.AvailableCount,
+			RateLimitCount: group.RateLimitCount,
+			OverloadCount:  group.OverloadCount,
+			ErrorCount:     group.ErrorCount,
+		}
 	}
 	return &SanitizedAvailabilityPayload{
-		Enabled: wire.Enabled, Timestamp: wire.Timestamp, Accounts: accounts, Groups: wire.Groups,
-		RawEmpty: len(accounts) == 0 && len(wire.Groups) == 0,
+		Enabled: wire.Enabled, Timestamp: wire.Timestamp, Accounts: accounts, Groups: groups,
+		RawEmpty: len(accounts) == 0 && len(groups) == 0,
 	}, nil
 }
 

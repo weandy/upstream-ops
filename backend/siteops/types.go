@@ -114,7 +114,7 @@ const (
 	KeyKindFull   = "full"
 
 	SystemMetricsResolutionNote = "system_metrics 原始采集分辨率为 60s"
-	SLADenominatorNote          = "基于 Sub2API 上游有效请求分母口径（具体排除项以目标实例 M0 核验为准）"
+	SLADenominatorNote          = "基于 Sub2API SLA 有效请求分母（排除业务限流 is_business_limited；上游错误率另排除 429/529）"
 	OpsAvailabilityLabel        = "Ops 判定可用（不等同调度器 IsSchedulable，后者另校验到期与配额）"
 	ConfiguredCapacityLabel     = "配置并发容量（账号跨组共享，各分组容量不可直接相加）"
 )
