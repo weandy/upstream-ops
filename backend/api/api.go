@@ -83,6 +83,7 @@ type Deps struct {
 
 // Register 把所有路由挂到给定 gin engine。
 func Register(r *gin.Engine, d *Deps) {
+	r.Use(mailCacheHeaders)
 	r.GET("/healthz", func(c *gin.Context) {
 		sqlDB, err := d.DB.DB()
 		if err != nil {
