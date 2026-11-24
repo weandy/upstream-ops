@@ -1,0 +1,70 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "overview": {
+      "health_score": 94,
+      "uptime_seconds": 864200,
+      "sla": 99.12,
+      "error_rate": 0.88,
+      "upstream_error_rate": 0.62,
+      "request_count_total": 12450,
+      "error_count_total": 110,
+      "upstream_429_count": 48,
+      "upstream_529_count": 12,
+      "upstream_error_count_excl_429_529": 17,
+      "qps": {
+        "current": 3.45,
+        "peak": 12.8
+      },
+      "tps": {
+        "current": 412.6
+      },
+      "rpm_5m": 204,
+      "tpm_5m": 24800,
+      "ttft": {
+        "p50_ms": 620,
+        "p95_ms": 1480
+      },
+      "duration": {
+        "p95_ms": 4820
+      },
+      "output_tps": {
+        "p50": 54.2
+      },
+      "system_metrics": {
+        "collected_at": "2026-11-24T01:30:00Z",
+        "cpu_percent": 32.5,
+        "memory_percent": 58.1,
+        "memory_used_mb": 2380,
+        "db_ok": true,
+        "db_conn_active": 8,
+        "db_conn_waiting": 0,
+        "db_max_open_conns": 50,
+        "redis_ok": true,
+        "redis_conn_total": 14,
+        "redis_conn_idle": 9,
+        "redis_pool_size": 64,
+        "goroutine_count": 215,
+        "queue_depth": 0,
+        "account_switch_count": 7
+      },
+      "job_heartbeats": [
+        {
+          "job_name": "ops_metrics_collector",
+          "status": "ok",
+          "last_success_at": "2026-11-24T01:30:00Z",
+          "last_run_at": "2026-11-24T01:30:00Z",
+          "last_error": ""
+        },
+        {
+          "job_name": "usage_preagg",
+          "status": "error",
+          "last_success_at": "2026-11-24T01:10:00Z",
+          "last_run_at": "2026-11-24T01:29:00Z",
+          "last_error": "dial tcp failed with Bearer sk-secret-should-be-redacted-123456"
+        }
+      ]
+    }
+  }
+}

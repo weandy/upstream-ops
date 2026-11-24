@@ -223,6 +223,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&ProbeLivenessSample{},
 		&ProbeIntelligenceRun{},
 		&EmbedSite{},
+		&SiteOpsInstance{},
+		&SiteOpsSnapshot{},
+		&SiteOpsGroupSnapshot{},
 	); err != nil {
 		return err
 	}

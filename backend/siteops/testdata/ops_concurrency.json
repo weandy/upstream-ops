@@ -1,0 +1,50 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "enabled": true,
+    "timestamp": "2026-11-24T01:30:00Z",
+    "account": {
+      "101": {
+        "account_id": 101,
+        "platform": "anthropic",
+        "current_in_use": 3,
+        "max_capacity": 5,
+        "waiting_in_queue": 1
+      },
+      "102": {
+        "account_id": 102,
+        "platform": "openai",
+        "current_in_use": 2,
+        "max_capacity": 4,
+        "waiting_in_queue": 0
+      }
+    },
+    "group": {
+      "10": {
+        "group_id": 10,
+        "group_name": "claude-shared",
+        "platform": "anthropic",
+        "current_in_use": 3,
+        "max_capacity": 5,
+        "waiting_in_queue": 1
+      },
+      "11": {
+        "group_id": 11,
+        "group_name": "claude-vip",
+        "platform": "anthropic",
+        "current_in_use": 3,
+        "max_capacity": 5,
+        "waiting_in_queue": 1
+      },
+      "20": {
+        "group_id": 20,
+        "group_name": "codex-main",
+        "platform": "openai",
+        "current_in_use": 2,
+        "max_capacity": 4,
+        "waiting_in_queue": 0
+      }
+    }
+  }
+}

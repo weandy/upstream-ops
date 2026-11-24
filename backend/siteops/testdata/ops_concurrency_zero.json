@@ -1,0 +1,34 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "enabled": true,
+    "timestamp": "2026-11-24T01:31:00Z",
+    "account": {
+      "101": {
+        "account_id": 101,
+        "platform": "anthropic",
+        "current_in_use": 0,
+        "max_capacity": 5,
+        "waiting_in_queue": 0
+      },
+      "102": {
+        "account_id": 102,
+        "platform": "openai",
+        "current_in_use": 0,
+        "max_capacity": 4,
+        "waiting_in_queue": 0
+      }
+    },
+    "group": {
+      "10": {
+        "group_id": 10,
+        "group_name": "claude-shared",
+        "platform": "anthropic",
+        "current_in_use": 0,
+        "max_capacity": 5,
+        "waiting_in_queue": 0
+      }
+    }
+  }
+}
