@@ -337,6 +337,8 @@ http://localhost:8080
 
 宿主机对应文件是项目根目录下的 `data/upstream-ops.db`。系统设置配置文件会持久化到 `data/config.yaml`。
 
+> **两层配置约定**：`APP_SECRET`、`DATABASE_*`、`SERVER_*`、`LOG_*` 等基础设施项每次启动均以 `.env` / 环境变量为准；鉴权、调度、通知、代理、上游、网关、智力监测、嵌入页与站点运维等动态业务配置仅在首次 `data/config.yaml` 不存在时接受 `.env` 初始化，文件生成后统一以 `data/config.yaml` 为唯一真相源，网页保存/应用后重启容器不会被 `.env` 覆盖。
+
 ### 固定镜像版本
 
 默认镜像 Tag 来自 `.env`：

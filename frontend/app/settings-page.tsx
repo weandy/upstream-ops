@@ -373,7 +373,7 @@ export default function SettingsPage() {
           </Badge>
         </div>
         <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-          这里集中管理鉴权、调度、通知策略、通知渠道和验证码服务。保存只写入配置文件，应用会让鉴权、调度和通知策略立即生效；通知渠道和验证码服务本身是实时写库生效。
+          这里集中管理鉴权、调度、通知策略、代理、网关、通知渠道和验证码服务。动态业务配置以当前配置文件为唯一真相源（保存写盘、应用热生效，重启后保留）；APP_SECRET、数据库、端口和日志等级等基础设施项由环境变量 / .env 管理；通知渠道和验证码服务实时写库生效。
         </p>
         <p className="text-xs text-muted-foreground">
           配置文件路径：{query.data?.config_path ?? "—"}

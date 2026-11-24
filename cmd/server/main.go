@@ -55,7 +55,9 @@ func main() {
 			log.Error("create config failed", "path", resolvedConfigPath, "err", err)
 			os.Exit(1)
 		}
-		log.Info("config created", "path", resolvedConfigPath)
+		log.Info("config bootstrapped from defaults and env", "path", resolvedConfigPath)
+	} else {
+		log.Info("config loaded", "path", resolvedConfigPath, "dynamic_source", "file", "infra_source", "env_over_file")
 	}
 
 	cipher, err := crypto.NewCipher(cfg.Security.AppSecret)

@@ -446,7 +446,6 @@ const (
 	DefaultSiteOpsGroupArchiveIntervalSecond = 300
 )
 
-// SiteOpsConfig 自有 Sub2API 站点运维模块运行时配置。
 // SiteOpsConfig 配置自有 Sub2API 站点运维模块（backend/siteops）的出站安全、并发与预算策略。
 // P0–P2 鉴权跟随全局 AuthMiddleware；出站默认放行公网地址并拦截内网/回环/保留与云元数据地址。
 // 同机或内网直连可通过 allowLoopback、allowedOrigins、allowedCIDRs 显式配置例外（云元数据/链路本地/未指定地址永久硬拦截）。
@@ -510,16 +509,13 @@ func (c SiteOpsConfig) WithDefaults() SiteOpsConfig {
 	return c
 }
 
-// Load 读取 config.yaml（可选）+ APP_SECRET / * 环境变量覆盖。
+// Load 读取配置文件并按两层规则合并环境变量：
 //
-// 关键映射：
-//
-//	APP_SECRET                       -> security.appSecret
-//	DATABASE_DRIVER      -> database.driver
-//	DATABASE_PATH        -> database.path
-//	DATABASE_HOST        -> database.host
-//	SERVER_PORT          -> server.port
-//	SCHEDULER_BALANCECRON-> scheduler.balanceCron
+//  1. 基础设施层（security.appSecret / database.* / server.* / log.*）：
+//     始终允许环境变量覆盖配置文件（适用于 Docker .env 与重启切换基础设施参数）。
+//  2. 动态业务层（app / auth / scheduler / notifications / proxy / upstream / gateway / pricing / intelligence / embed / siteOps）：
+//     - 首次启动（配置文件尚不存在）：允许使用环境变量作为一次性初始化种子（Bootstrap-Once）；
+//     - 配置文件已存在后：严格以 config.yaml 为唯一真相源，不被环境变量反手覆盖，确保冷启动与热重载完全一致。
 func Load(path string) (*Config, error) {
 	cfg, _, err := load(path, true)
 	return cfg, err
@@ -532,6 +528,37 @@ func LoadWithPath(path string) (*Config, string, error) {
 func LoadFile(path string) (*Config, error) {
 	cfg, _, err := load(path, false)
 	return cfg, err
+}
+
+// bindInfraEnv 仅绑定基础设施层环境变量（不覆盖动态业务配置）。
+func bindInfraEnv(v *viper.Viper) {
+	_ = v.BindEnv("security.appSecret", "APP_SECRET")
+	_ = v.BindEnv("database.driver", "DATABASE_DRIVER")
+	_ = v.BindEnv("database.path", "DATABASE_PATH")
+	_ = v.BindEnv("database.dsn", "DATABASE_DSN")
+	_ = v.BindEnv("database.host", "DATABASE_HOST")
+	_ = v.BindEnv("database.port", "DATABASE_PORT")
+	_ = v.BindEnv("database.user", "DATABASE_USER")
+	_ = v.BindEnv("database.password", "DATABASE_PASSWORD")
+	_ = v.BindEnv("database.name", "DATABASE_NAME")
+	_ = v.BindEnv("database.sslMode", "DATABASE_SSLMODE")
+	_ = v.BindEnv("database.timeZone", "DATABASE_TIMEZONE")
+	_ = v.BindEnv("database.maxOpenConns", "DATABASE_MAXOPENCONNS")
+	_ = v.BindEnv("database.maxIdleConns", "DATABASE_MAXIDLECONNS")
+	_ = v.BindEnv("server.port", "SERVER_PORT")
+	_ = v.BindEnv("server.mode", "SERVER_MODE")
+	_ = v.BindEnv("server.baseURL", "SERVER_BASEURL")
+	_ = v.BindEnv("log.level", "LOG_LEVEL")
+	_ = v.BindEnv("log.format", "LOG_FORMAT")
+}
+
+// bindBootstrapDynamicEnv 仅在配置文件尚不存在时绑定动态业务层初始化环境变量。
+func bindBootstrapDynamicEnv(v *viper.Viper) {
+	_ = v.BindEnv("auth.enabled", "AUTH_ENABLED")
+	_ = v.BindEnv("auth.username", "ADMIN_USERNAME")
+	_ = v.BindEnv("auth.password", "ADMIN_PASSWORD")
+	_ = v.BindEnv("auth.tokenSecret", "AUTH_TOKEN_SECRET")
+	_ = v.BindEnv("siteOps.allowLoopback", "SITEOPS_ALLOW_LOOPBACK")
 }
 
 func load(path string, withEnv bool) (*Config, string, error) {
@@ -550,34 +577,7 @@ func load(path string, withEnv bool) (*Config, string, error) {
 
 	setDefaults(v)
 
-	if withEnv {
-		v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-		v.AutomaticEnv()
-		// APP_SECRET / ADMIN_USERNAME / ADMIN_PASSWORD / AUTH_ENABLED 是独立约定的环境变量名，不带前缀。
-		_ = v.BindEnv("security.appSecret", "APP_SECRET")
-		_ = v.BindEnv("auth.enabled", "AUTH_ENABLED")
-		_ = v.BindEnv("auth.username", "ADMIN_USERNAME")
-		_ = v.BindEnv("auth.password", "ADMIN_PASSWORD")
-		_ = v.BindEnv("auth.tokenSecret", "AUTH_TOKEN_SECRET")
-		// Viper 坑：AutomaticEnv 只对已通过 SetDefault / BindEnv / 配置文件注册过的 key 生效；
-		// 数据库的 user/password 没有合理的默认值（拒绝写"change-me"作默认），
-		// 因此显式 BindEnv 以确保从环境变量读取。
-		_ = v.BindEnv("database.driver", "DATABASE_DRIVER")
-		_ = v.BindEnv("database.path", "DATABASE_PATH")
-		_ = v.BindEnv("database.dsn", "DATABASE_DSN")
-		_ = v.BindEnv("database.host", "DATABASE_HOST")
-		_ = v.BindEnv("database.port", "DATABASE_PORT")
-		_ = v.BindEnv("database.user", "DATABASE_USER")
-		_ = v.BindEnv("database.password", "DATABASE_PASSWORD")
-		_ = v.BindEnv("database.name", "DATABASE_NAME")
-		_ = v.BindEnv("database.sslMode", "DATABASE_SSLMODE")
-		_ = v.BindEnv("database.timeZone", "DATABASE_TIMEZONE")
-		_ = v.BindEnv("server.port", "SERVER_PORT")
-		_ = v.BindEnv("server.mode", "SERVER_MODE")
-		_ = v.BindEnv("log.level", "LOG_LEVEL")
-		_ = v.BindEnv("siteOps.allowLoopback", "SITEOPS_ALLOW_LOOPBACK")
-	}
-
+	fileLoaded := false
 	if err := v.ReadInConfig(); err != nil {
 		if path != "" {
 			if !os.IsNotExist(err) {
@@ -587,6 +587,17 @@ func load(path string, withEnv bool) (*Config, string, error) {
 			if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 				return nil, "", fmt.Errorf("read config: %w", err)
 			}
+		}
+	} else {
+		fileLoaded = true
+	}
+
+	if withEnv {
+		bindInfraEnv(v)
+		if !fileLoaded {
+			v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+			v.AutomaticEnv()
+			bindBootstrapDynamicEnv(v)
 		}
 	}
 
@@ -600,7 +611,11 @@ func load(path string, withEnv bool) (*Config, string, error) {
 	cfg.Intelligence = cfg.Intelligence.WithDefaults()
 	cfg.Embed = cfg.Embed.WithDefaults()
 	cfg.SiteOps = cfg.SiteOps.WithDefaults()
-	return cfg, v.ConfigFileUsed(), nil
+	usedPath := ""
+	if fileLoaded {
+		usedPath = v.ConfigFileUsed()
+	}
+	return cfg, usedPath, nil
 }
 
 func Save(path string, cfg *Config) error {

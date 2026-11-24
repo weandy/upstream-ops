@@ -326,6 +326,8 @@ Default database file inside the container:
 
 The host file is `data/upstream-ops.db`. Runtime system settings are persisted to `data/config.yaml`.
 
+> **Two-layer config model**: Infrastructure settings (`APP_SECRET`, `DATABASE_*`, `SERVER_*`, `LOG_*`) always prioritize environment variables / `.env` on startup. Dynamic business settings (auth, scheduler, notifications, proxy, upstream, gateway, intelligence, embed, siteOps) use `.env` only as initial bootstrap seeds when `data/config.yaml` does not exist yet; once `data/config.yaml` exists, it is the single source of truth so changes saved in the Settings UI persist across container restarts.
+
 ### Pin the Image Version
 
 The default image tag comes from `.env`:

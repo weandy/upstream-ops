@@ -139,3 +139,141 @@ func TestSaveAtomicReplacesWithoutLeavingTempFiles(t *testing.T) {
 		t.Fatalf("expected only %s in dir after atomic save, got %v", path, matches)
 	}
 }
+
+func TestLayeredConfigBootstrapFromEnvWhenFileMissing(t *testing.T) {
+	t.Setenv("APP_SECRET", "bootstrap-app-secret-32bytes-minimum")
+	t.Setenv("SERVER_PORT", "9091")
+	t.Setenv("SERVER_MODE", "release")
+	t.Setenv("LOG_LEVEL", "warn")
+	t.Setenv("DATABASE_DRIVER", "sqlite")
+	t.Setenv("DATABASE_PATH", "/tmp/boot.db")
+	t.Setenv("AUTH_ENABLED", "true")
+	t.Setenv("ADMIN_USERNAME", "boss")
+	t.Setenv("ADMIN_PASSWORD", "init-pass")
+	t.Setenv("AUTH_TOKEN_SECRET", "init-token-secret")
+	t.Setenv("SITEOPS_ALLOW_LOOPBACK", "true")
+	t.Setenv("SCHEDULER_CONCURRENCY", "9")
+
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	cfg, used, err := LoadWithPath(missing)
+	if err != nil {
+		t.Fatalf("LoadWithPath: %v", err)
+	}
+	if used != "" {
+		t.Fatalf("expected empty used path for missing file, got %q", used)
+	}
+	if cfg.Security.AppSecret != "bootstrap-app-secret-32bytes-minimum" ||
+		cfg.Server.Port != 9091 ||
+		cfg.Server.Mode != "release" ||
+		cfg.Log.Level != "warn" ||
+		cfg.Database.Path != "/tmp/boot.db" {
+		t.Fatalf("infra env not applied on bootstrap: %+v %+v %+v %+v", cfg.Security, cfg.Server, cfg.Log, cfg.Database)
+	}
+	if !cfg.Auth.Enabled ||
+		cfg.Auth.Username != "boss" ||
+		cfg.Auth.Password != "init-pass" ||
+		cfg.Auth.TokenSecret != "init-token-secret" ||
+		!cfg.SiteOps.AllowLoopback ||
+		cfg.Scheduler.Concurrency != 9 {
+		t.Fatalf("dynamic bootstrap env not applied when file missing: auth=%+v siteOps=%+v scheduler=%+v", cfg.Auth, cfg.SiteOps, cfg.Scheduler)
+	}
+}
+
+func TestLayeredConfigFileWinsForDynamicSectionsWhenFileExists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	initial := &Config{
+		App: AppConfig{Title: "SavedOps", NotificationPrefix: "[Saved] "},
+		Server: ServerConfig{
+			Port: 8418,
+			Mode: "debug",
+		},
+		Database: DatabaseConfig{
+			Driver: "sqlite",
+			Path:   "./data/old.db",
+		},
+		Security: SecurityConfig{
+			AppSecret: "file-app-secret",
+		},
+		Auth: AuthConfig{
+			Enabled:         true,
+			Username:        "owner",
+			Password:        "saved-file-password",
+			TokenSecret:     "saved-file-token",
+			SessionTTLHours: 72,
+		},
+		Scheduler: SchedulerConfig{
+			Concurrency: 8,
+		},
+		SiteOps: SiteOpsConfig{
+			AllowLoopback:  true,
+			AllowedOrigins: []string{"http://sub2api:8080"},
+		},
+		Log: LogConfig{
+			Level:  "debug",
+			Format: "text",
+		},
+	}
+	if err := Save(path, initial); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// 模拟容器重启时 Compose 仍注入旧的环境变量（包括基础设施项 + 冲突的动态业务项）。
+	t.Setenv("APP_SECRET", "env-app-secret-overrides-file")
+	t.Setenv("SERVER_PORT", "9092")
+	t.Setenv("SERVER_MODE", "release")
+	t.Setenv("LOG_LEVEL", "error")
+	t.Setenv("LOG_FORMAT", "json")
+	t.Setenv("DATABASE_DRIVER", "postgres")
+	t.Setenv("DATABASE_HOST", "pg.internal")
+	t.Setenv("DATABASE_PORT", "5432")
+	t.Setenv("DATABASE_NAME", "uops")
+
+	// 这些动态业务环境变量在 config.yaml 已存在后不得覆盖文件中的值。
+	t.Setenv("AUTH_ENABLED", "false")
+	t.Setenv("ADMIN_USERNAME", "admin")
+	t.Setenv("ADMIN_PASSWORD", "env-pass-must-not-override")
+	t.Setenv("AUTH_TOKEN_SECRET", "env-token-must-not-override")
+	t.Setenv("SCHEDULER_CONCURRENCY", "2")
+	t.Setenv("SITEOPS_ALLOW_LOOPBACK", "false")
+	t.Setenv("APP_TITLE", "EnvTitleMustNotOverride")
+
+	cold, used, err := LoadWithPath(path)
+	if err != nil {
+		t.Fatalf("LoadWithPath: %v", err)
+	}
+	if used != path {
+		t.Fatalf("used = %q, want %q", used, path)
+	}
+
+	// 1. 基础设施层：环境变量覆盖文件。
+	if cold.Security.AppSecret != "env-app-secret-overrides-file" ||
+		cold.Server.Port != 9092 ||
+		cold.Server.Mode != "release" ||
+		cold.Log.Level != "error" ||
+		cold.Log.Format != "json" ||
+		cold.Database.Driver != "postgres" ||
+		cold.Database.Host != "pg.internal" ||
+		cold.Database.Port != 5432 ||
+		cold.Database.Name != "uops" {
+		t.Fatalf("infra env did not override file: sec=%+v srv=%+v log=%+v db=%+v", cold.Security, cold.Server, cold.Log, cold.Database)
+	}
+
+	// 2. 动态业务层：文件胜出，重启前后与热重载（LoadFile）完全一致。
+	hot, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if !cold.Auth.Enabled ||
+		cold.Auth.Username != "owner" ||
+		cold.Auth.Password != "saved-file-password" ||
+		cold.Auth.TokenSecret != "saved-file-token" ||
+		cold.Auth.SessionTTLHours != 72 {
+		t.Fatalf("file auth was overwritten by env: %+v", cold.Auth)
+	}
+	if cold.App.Title != "SavedOps" || cold.Scheduler.Concurrency != 8 || !cold.SiteOps.AllowLoopback {
+		t.Fatalf("file dynamic sections overwritten by env: app=%+v sched=%+v siteOps=%+v", cold.App, cold.Scheduler, cold.SiteOps)
+	}
+	if cold.Auth != hot.Auth || cold.App != hot.App || cold.Scheduler != hot.Scheduler || cold.SiteOps.AllowLoopback != hot.SiteOps.AllowLoopback {
+		t.Fatalf("cold start and hot reload diverged on dynamic sections:\ncold=%+v\nhot=%+v", cold, hot)
+	}
+}
