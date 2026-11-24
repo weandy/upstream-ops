@@ -13,6 +13,9 @@ import { EventsTimelinePanel } from "@/components/site-ops/events-timeline-panel
 import { GroupsMatrixPanel } from "@/components/site-ops/groups-matrix-panel"
 import { InstanceFormDialog } from "@/components/site-ops/instance-form-dialog"
 import { InstanceSwitcher } from "@/components/site-ops/instance-switcher"
+import { MailPanel } from "@/components/site-ops/mail-panel"
+import { mailRequestId, clearMailDraft, confirmMailDiscard, leaveMailDraft } from "@/lib/site-ops-mail-state"
+import type { SiteOpsMailDraft } from "@/lib/site-ops-mail-types"
 import { OverviewPanel } from "@/components/site-ops/overview-panel"
 import { PoolForecastPanel } from "@/components/site-ops/pool-forecast-panel"
 import { TrendsPanel } from "@/components/site-ops/trends-panel"
@@ -87,7 +90,7 @@ interface EventsSectionState {
 }
 
 type Action = "refresh" | "probe"
-type DetailSection = "overview" | "forecast" | "accounts" | "events" | "analytics"
+type DetailSection = "overview" | "forecast" | "accounts" | "events" | "analytics" | "mail"
 
 function ReadState({ error, loading, empty }: { error?: string; loading: boolean; empty: string }) {
   return (
@@ -106,6 +109,12 @@ export default function SiteOpsPage() {
   const [catalogError, setCatalogError] = useState("")
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [activeSection, setActiveSection] = useState<DetailSection>("analytics")
+  const [mailDraft, setMailDraft] = useState<SiteOpsMailDraft | null>(null)
+  const [mailBadge, setMailBadge] = useState<{ scope: string; id: number } | null>(null)
+  const dirtyMail = useRef(false)
+  const editingScope = useRef<SiteOpsInstanceView | null>(null)
+  const onMailDirty = useCallback((dirty: boolean) => { dirtyMail.current = dirty }, [])
+  const consumeMailDraft = useCallback((nonce: string) => setMailDraft(current => clearMailDraft(current, nonce)), [])
   const [range, setRange] = useState<SiteOpsTrendRange>("6h")
   const [details, setDetails] = useState<InstanceDetails | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
@@ -134,7 +143,12 @@ export default function SiteOpsPage() {
   const eventsRequest = useRef(0)
 
   const selected = catalog?.instances.find((instance) => instance.id === selectedId) ?? catalog?.instances[0]
+  const mailScopeKey = selected ? `${selected.id}:${selected.generation}:${selected.cred_gen}` : ""
+  const updateMailBadge = useCallback((batchId: number | null) => {
+    setMailBadge(batchId === null ? null : { scope: mailScopeKey, id: batchId })
+  }, [mailScopeKey])
   const id = selected?.id
+  useEffect(() => { editingScope.current = selected ?? null }, [selected])
   const readOnly = false
   const currentDetails = details?.id === id ? details : null
   const currentTrends = currentDetails?.range === range ? currentDetails : null
@@ -162,6 +176,8 @@ export default function SiteOpsPage() {
     efficiencyRequest.current += 1
     accountsRequest.current += 1
     eventsRequest.current += 1
+    setMailDraft(null)
+    setMailBadge(null)
     setBlocked(true)
     setCatalog(null)
     setDetails(null)
@@ -180,6 +196,12 @@ export default function SiteOpsPage() {
     Promise.all([fetchSiteOpsSummary(), fetchSiteOpsInstances()])
       .then(([summary, instances]) => {
         if (sequence !== catalogRequest.current) return
+        const previous = editingScope.current
+        const next = instances?.find(item => item.id === previous?.id)
+        if (previous && (next?.generation !== previous.generation || next.cred_gen !== previous.cred_gen)) {
+          if (!leaveMailDraft(dirtyMail.current, confirmMailDiscard)) return
+          setMailDraft(null)
+        }
         setCatalog({ summary, instances: instances ?? [] })
         setCatalogError("")
         setBlocked(false)
@@ -343,7 +365,8 @@ export default function SiteOpsPage() {
   }, [id, tick, reload, eventsReload, blocked, requireAuth])
 
   function selectInstance(nextId: number) {
-    if (nextId === id) return
+    if (nextId === id || !leaveMailDraft(dirtyMail.current, confirmMailDiscard)) return
+    setMailDraft(null)
     detailRequest.current += 1
     forecastRequest.current += 1
     efficiencyRequest.current += 1
@@ -418,7 +441,7 @@ export default function SiteOpsPage() {
         confirmLabel: "删除站点",
         destructive: true,
       })
-      if (!confirmed) return
+      if (!confirmed || !leaveMailDraft(dirtyMail.current, confirmMailDiscard)) return
 
       setNotice(null)
       const result = await deleteSiteOpsInstance(deletedId)
@@ -437,6 +460,7 @@ export default function SiteOpsPage() {
         ...current,
         instances: current.instances.filter((item) => item.id !== deletedId),
       })
+      setMailDraft(null)
       setSelectedId((current) => current === deletedId ? null : current)
       setDetails((current) => current?.id === deletedId ? null : current)
       setForecastState((current) => current?.id === deletedId ? null : current)
@@ -501,8 +525,8 @@ export default function SiteOpsPage() {
                 selected={selected}
                 readOnly={readOnly}
                 busy={activeAction !== null}
-                onAdd={() => setForm({ instance: null })}
-                onEdit={() => setForm({ instance: selected })}
+                onAdd={() => { if (leaveMailDraft(dirtyMail.current, confirmMailDiscard)) setForm({ instance: null }) }}
+                onEdit={() => { if (leaveMailDraft(dirtyMail.current, confirmMailDiscard)) setForm({ instance: selected }) }}
                 onDelete={() => { void deleteInstance(selected) }}
                 onDiagnose={() => {
                   setReport(undefined)
@@ -520,7 +544,9 @@ export default function SiteOpsPage() {
                 {currentNotice?.action === "delete" && <p role="alert" className="text-sm text-destructive">{currentNotice.message}</p>}
                 <Tabs
                   value={activeSection}
-                  onValueChange={(value) => setActiveSection(value as DetailSection)}
+                  onValueChange={(value) => {
+                    if (leaveMailDraft(dirtyMail.current, confirmMailDiscard)) setActiveSection(value as DetailSection)
+                  }}
                   className="gap-4"
                 >
                   <TabsList className="h-auto max-w-full flex-wrap justify-start">
@@ -558,6 +584,9 @@ export default function SiteOpsPage() {
                           {firingEventsCount}
                         </Badge>
                       ) : null}
+                    </TabsTrigger>
+                    <TabsTrigger value="mail">营销邮件
+                      {activeSection === "mail" && mailBadge?.scope === mailScopeKey && <Badge variant="secondary">活跃 #{mailBadge.id}</Badge>}
                     </TabsTrigger>
                   </TabsList>
 
@@ -641,8 +670,19 @@ export default function SiteOpsPage() {
                       <AnalyticsPanel
                         key={`${selected.id}:${selected.generation}:${selected.cred_gen}`}
                         instance={selected}
+                        onComposeMail={(userIds, sourceLabel) => {
+                          setMailDraft({ nonce: mailRequestId(), instanceId: selected.id, generation: selected.generation,
+                            credGen: selected.cred_gen, userIds, sourceLabel })
+                          setActiveSection("mail")
+                        }}
                         onAuthRequired={requireAuth}
                       />
+                    </TabsContent>
+                  )}
+                  {selected && activeSection === "mail" && !blocked && (
+                    <TabsContent value="mail">
+                      <MailPanel key={`${selected.id}:${selected.generation}:${selected.cred_gen}`}
+                        instance={selected} draft={mailDraft} onActiveBatch={updateMailBadge} onConsume={consumeMailDraft} onDirty={onMailDirty} />
                     </TabsContent>
                   )}
                 </Tabs>

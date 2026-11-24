@@ -11,6 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { positiveIds, toggleValue } from "@/lib/site-ops-mail-state"
 import { copyText } from "@/lib/clipboard"
 import { decimal, money } from "@/lib/format"
 import type {
@@ -150,11 +151,13 @@ export function AnalyticsUsersTable({
   data,
   onTop,
   onPage,
+  onComposeMail,
   disabled,
 }: {
   data: SiteOpsAnalyticsUsersResponse
   onTop: (n: number) => void
   onPage: (page: number) => void
+  onComposeMail?: (userIds: number[], sourceLabel: string) => void
   disabled: boolean
 }) {
   const [search, setSearch] = useState("")
@@ -274,6 +277,12 @@ export function AnalyticsUsersTable({
       return (av - bv) * mult || a.raw.user_id - b.raw.user_id
     })
   }, [baseFiltered, conds, sortKey, sortDir])
+
+  const [checked, setChecked] = useState<number[]>([])
+  const matchedIds = positiveIds(filtered.map(item => item.raw.user_id))
+  const selectedIds = matchedIds.filter(id => checked.includes(id))
+  const mailIds = selectedIds.length ? selectedIds : matchedIds
+  const mailSource = selectedIds.length ? "当前页已勾选" : "当前页筛选命中"
 
   const kpis = useMemo(() => {
     const subUsers = filtered.filter((x) => x.raw.active_sub_count > 0)
@@ -427,6 +436,10 @@ export function AnalyticsUsersTable({
           >
             重置
           </Button>
+          {onComposeMail && <Button size="sm" variant="outline" disabled={disabled || !mailIds.length || mailIds.length > 500}
+            onClick={() => onComposeMail(mailIds, `${mailSource} ${mailIds.length} 人`)}>
+            给{mailSource}客户发邮件（{mailIds.length}）
+          </Button>}
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
@@ -746,6 +759,9 @@ export function AnalyticsUsersTable({
         <Table>
           <TableHeader>
             <TableRow>
+              {onComposeMail && <TableHead><input type="checkbox" aria-label="全选当前页筛选命中客户"
+                checked={matchedIds.length > 0 && selectedIds.length === matchedIds.length}
+                onChange={event => setChecked(event.target.checked ? matchedIds : [])} /></TableHead>}
               <TableHead>客户</TableHead>
               <TableHead
                 className="cursor-pointer text-right select-none"
@@ -790,12 +806,13 @@ export function AnalyticsUsersTable({
                 <SortIcon k="cache" />
               </TableHead>
               <TableHead>活跃度</TableHead>
+              {onComposeMail && <TableHead>操作</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="py-6 text-center text-xs text-muted-foreground">
+                <TableCell colSpan={onComposeMail ? 10 : 8} className="py-6 text-center text-xs text-muted-foreground">
                   当前筛选条件下无匹配客户
                 </TableCell>
               </TableRow>
@@ -814,6 +831,9 @@ export function AnalyticsUsersTable({
                     onMouseLeave={() => setHoverUserId(null)}
                     className={isHi ? "bg-primary/5" : undefined}
                   >
+                    {onComposeMail && <TableCell><input type="checkbox" aria-label={`选择客户 #${u.user_id}`}
+                      disabled={!matchedIds.includes(u.user_id)} checked={selectedIds.includes(u.user_id)}
+                      onChange={() => setChecked(ids => toggleValue(ids, u.user_id))} /></TableCell>}
                     <TableCell>
                       <div className="flex flex-col gap-0.5">
                         <div className="inline-flex items-center gap-1.5">
@@ -896,6 +916,8 @@ export function AnalyticsUsersTable({
                         {actMeta.label}
                       </Badge>
                     </TableCell>
+                    {onComposeMail && <TableCell><Button size="sm" variant="ghost" disabled={disabled || !matchedIds.includes(u.user_id)}
+                      onClick={() => onComposeMail([u.user_id], "当前页单个客户")}>发邮件</Button></TableCell>}
                   </TableRow>
                 )
               })
@@ -908,6 +930,7 @@ export function AnalyticsUsersTable({
         page={data.users}
         onPage={(page) => {
           setSearch("")
+          setChecked([])
           onPage(page)
         }}
         disabled={disabled}
