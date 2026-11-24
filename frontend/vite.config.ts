@@ -59,7 +59,7 @@ export default defineConfig({
       '/api':            { target: BACKEND_TARGET, changeOrigin: true },
       '/healthz':        { target: BACKEND_TARGET, changeOrigin: true },
       '/v1':             { target: BACKEND_TARGET, changeOrigin: true },
-      '^/embed($|/)':    { target: BACKEND_TARGET, changeOrigin: true },
+      '^/embed($|/|\\?)': { target: BACKEND_TARGET, changeOrigin: true },
     },
   },
 })
