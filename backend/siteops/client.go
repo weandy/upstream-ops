@@ -27,12 +27,12 @@ import (
 )
 
 const (
-	adminPath          = "/api/v1/admin"
-	healthPath         = "/health"
-	snapshotPath       = adminPath + "/ops/dashboard/snapshot-v2"
-	overviewPath       = adminPath + "/ops/dashboard/overview"
-	concurrencyPath    = adminPath + "/ops/concurrency"
-	availabilityPath   = adminPath + "/ops/account-availability"
+	adminPath                 = "/api/v1/admin"
+	healthPath                = "/health"
+	snapshotPath              = adminPath + "/ops/dashboard/snapshot-v2"
+	overviewPath              = adminPath + "/ops/dashboard/overview"
+	concurrencyPath           = adminPath + "/ops/concurrency"
+	availabilityPath          = adminPath + "/ops/account-availability"
 	groupsPath                = adminPath + "/groups/all"
 	groupsCapacitySummaryPath = adminPath + "/groups/capacity-summary"
 	versionPath               = adminPath + "/system/version"
@@ -74,7 +74,24 @@ type targetIdentity struct {
 	keyDigest  [sha256.Size]byte
 }
 
+type cachePolicy uint8
+
+const (
+	cachePolicyETag cachePolicy = iota
+	cachePolicyAnalyticsLRU
+	cachePolicyNoCache
+)
+
+type requestSpec struct {
+	endpoint, method, path, parserTag string
+	body                              []byte
+	policy                            cachePolicy
+}
 type flightKey struct {
+	method, parserTag string
+	bodyHash          [sha256.Size]byte
+	policy            cachePolicy
+	policyEpoch       uint64
 	endpointKey
 	targetIdentity
 }
@@ -100,8 +117,9 @@ type requestFlight struct {
 }
 
 type requestSlots struct {
-	active int
-	queued int
+	analytics int
+	active    int
+	queued    int
 }
 
 type auditWindow struct {
@@ -112,17 +130,22 @@ type auditWindow struct {
 }
 
 type Client struct {
-	mu          sync.Mutex
-	runtime     clientRuntime
-	guard       OutboundValidator
-	log         *slog.Logger
-	flights     map[flightKey]*requestFlight
-	cache       map[endpointKey]observation
-	budgets     map[uint]*auditWindow
-	slots       map[uint]*requestSlots
-	active      int
-	changed     chan struct{}
-	batchMinGap time.Duration
+	analyticsGlobalBudget auditWindow
+	backoffs              map[uint]adminBackoffState
+	p2Caps                map[uint]p2CapOverlay
+	policyEpoch           uint64
+	analytics             *AnalyticsCache
+	mu                    sync.Mutex
+	runtime               clientRuntime
+	guard                 OutboundValidator
+	log                   *slog.Logger
+	flights               map[flightKey]*requestFlight
+	cache                 map[endpointKey]observation
+	budgets               map[uint]*auditWindow
+	slots                 map[uint]*requestSlots
+	active                int
+	changed               chan struct{}
+	batchMinGap           time.Duration
 }
 
 var (
@@ -139,7 +162,7 @@ func NewClient(siteCfg config.SiteOpsConfig, proxyCfg config.ProxyConfig, upstre
 		runtime: clientRuntime{siteCfg.WithDefaults(), proxyCfg, upstreamCfg.WithDefaults().UserAgent},
 		guard:   guard, log: log, flights: make(map[flightKey]*requestFlight), cache: make(map[endpointKey]observation),
 		budgets: make(map[uint]*auditWindow), slots: make(map[uint]*requestSlots), changed: make(chan struct{}),
-		batchMinGap: PassiveUsageBatchMinGap,
+		backoffs: make(map[uint]adminBackoffState), p2Caps: make(map[uint]p2CapOverlay), analytics: newAnalyticsCache(time.Now), batchMinGap: PassiveUsageBatchMinGap,
 	}
 }
 
@@ -147,6 +170,9 @@ func (c *Client) UpdateRuntimeConfig(siteCfg config.SiteOpsConfig, proxyCfg conf
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.runtime = clientRuntime{siteCfg.WithDefaults(), proxyCfg, upstreamCfg.WithDefaults().UserAgent}
+	c.policyEpoch++
+	clear(c.p2Caps)
+	c.analytics.invalidate(0, ErrGenerationMismatch)
 	c.guard.UpdatePolicy(siteCfg.AllowLoopback, siteCfg.AllowedOrigins, siteCfg.AllowedCIDRs)
 	for key, flight := range c.flights {
 		flight.cancel()
@@ -158,6 +184,8 @@ func (c *Client) UpdateRuntimeConfig(siteCfg config.SiteOpsConfig, proxyCfg conf
 func (c *Client) ResetInstanceState(instanceID uint) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	delete(c.p2Caps, instanceID)
+	c.analytics.invalidate(instanceID, ErrGenerationMismatch)
 	for key := range c.cache {
 		if key.instanceID == instanceID {
 			delete(c.cache, key)
@@ -205,7 +233,7 @@ func (c *Client) BudgetUsage(instanceID uint, dailyLimit int) AuditBudgetUsage {
 }
 
 // reserveAudit reserves room before dialing and charges the budget when the Admin request is sent.
-func (c *Client) reserveAudit(inst TargetEndpoint, ctx context.Context) (charge func(), release func(), err error) {
+func (c *Client) reserveAudit(inst TargetEndpoint, ctx context.Context, analytics ...bool) (charge func(), release func(), err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -224,12 +252,33 @@ func (c *Client) reserveAudit(inst TargetEndpoint, ctx context.Context) (charge 
 	if w.used+w.pending >= limit || len(w.recent)+w.pending >= max(12, limit/240) {
 		return nil, nil, ErrBudgetExceeded
 	}
+	p2 := len(analytics) > 0 && analytics[0]
+	if until, ok := c.backoffLocked(inst); ok {
+		return nil, nil, &backoffError{until}
+	}
+	if p2 {
+		available, _, _ := c.headroomLocked(inst.InstanceID, limit)
+		if available <= 0 {
+			return nil, nil, ErrBudgetExceeded
+		}
+		c.analyticsGlobalBudget.pending++
+	}
 	w.pending++
 	var once sync.Once
 	finish := func(sent bool) {
 		once.Do(func() {
 			c.mu.Lock()
 			defer c.mu.Unlock()
+			if p2 {
+				c.analyticsGlobalBudget.pending--
+				if sent {
+					now := time.Now()
+					g := &c.analyticsGlobalBudget
+					g.advance(now)
+					g.used++
+					g.recent = append(g.recent, now)
+				}
+			}
 			w.pending--
 			if sent {
 				now := time.Now()
@@ -247,16 +296,23 @@ func (c *Client) signalSlots() {
 	c.changed = make(chan struct{})
 }
 
-func (c *Client) tryAcquire(slots *requestSlots) bool {
+func (c *Client) tryAcquire(slots *requestSlots, p2 bool) bool {
+	if p2 && slots.analytics >= max(1, min(3, c.runtime.site.PerInstanceMaxConcurrency-1)) {
+		return false
+	}
 	if c.active >= c.runtime.site.GlobalMaxConcurrency || slots.active >= c.runtime.site.PerInstanceMaxConcurrency {
 		return false
 	}
 	c.active++
 	slots.active++
+	if p2 {
+		slots.analytics++
+	}
 	return true
 }
 
-func (c *Client) acquire(ctx context.Context, instanceID uint, wait time.Duration) error {
+func (c *Client) acquire(ctx context.Context, instanceID uint, wait time.Duration, analytics ...bool) error {
+	p2 := len(analytics) > 0 && analytics[0]
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -267,7 +323,7 @@ func (c *Client) acquire(ctx context.Context, instanceID uint, wait time.Duratio
 		slots = &requestSlots{}
 		c.slots[instanceID] = slots
 	}
-	if c.tryAcquire(slots) {
+	if c.tryAcquire(slots, p2) {
 		return nil
 	}
 	if slots.queued >= c.runtime.site.PerInstanceQueueLimit {
@@ -294,7 +350,7 @@ func (c *Client) acquire(ctx context.Context, instanceID uint, wait time.Duratio
 		if waitCtx.Err() != nil {
 			return ErrQueueTimeout
 		}
-		if c.tryAcquire(slots) {
+		if c.tryAcquire(slots, p2) {
 			return nil
 		}
 	}
@@ -306,12 +362,15 @@ func (c *Client) removeEmptySlots(instanceID uint, slots *requestSlots) {
 	}
 }
 
-func (c *Client) release(instanceID uint) {
+func (c *Client) release(instanceID uint, analytics ...bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	slots := c.slots[instanceID]
 	c.active--
 	slots.active--
+	if len(analytics) > 0 && analytics[0] {
+		slots.analytics--
+	}
 	c.removeEmptySlots(instanceID, slots)
 	c.signalSlots()
 }
@@ -319,7 +378,10 @@ func (c *Client) release(instanceID uint) {
 type projection func([]byte) ([]byte, error)
 
 func fetch[T any](c *Client, ctx context.Context, inst TargetEndpoint, endpoint, path string, parse func([]byte) (T, error)) (T, UpstreamFetchMeta, error) {
-	result := c.fetchShared(ctx, inst, endpoint, path, func(body []byte) ([]byte, error) {
+	return fetchSpec(c, ctx, inst, requestSpec{endpoint: endpoint, path: path, method: http.MethodGet, policy: cachePolicyETag}, parse)
+}
+func fetchSpec[T any](c *Client, ctx context.Context, inst TargetEndpoint, spec requestSpec, parse func([]byte) (T, error)) (T, UpstreamFetchMeta, error) {
+	result := c.fetchShared(ctx, inst, spec, func(body []byte) ([]byte, error) {
 		value, err := parse(body)
 		if err != nil {
 			return nil, err
@@ -337,8 +399,8 @@ func fetch[T any](c *Client, ctx context.Context, inst TargetEndpoint, endpoint,
 	return value, result.meta, nil
 }
 
-func (c *Client) fetchShared(ctx context.Context, inst TargetEndpoint, endpoint, path string, project projection) fetchResult {
-	meta := UpstreamFetchMeta{Endpoint: endpoint}
+func (c *Client) fetchShared(ctx context.Context, inst TargetEndpoint, spec requestSpec, project projection) fetchResult {
+	meta := UpstreamFetchMeta{Endpoint: spec.endpoint}
 	if err := ctx.Err(); err != nil {
 		return failedFetch(meta, err)
 	}
@@ -348,10 +410,26 @@ func (c *Client) fetchShared(ctx context.Context, inst TargetEndpoint, endpoint,
 		c.mu.Unlock()
 		return failedFetch(meta, ErrOriginNotAllowed)
 	}
-	key := flightKey{
-		endpointKey{inst.InstanceID, endpoint, path},
-		targetIdentity{baseURL, inst.Generation, inst.CredGen, inst.ProxyEnabled, sha256.Sum256([]byte(inst.APIKey))},
+	if token, ok := ctx.Value(analyticsTokenKey{}).(analyticsScope); ok && !c.analytics.valid(token) {
+		c.mu.Unlock()
+		return failedFetch(meta, ErrGenerationMismatch)
 	}
+	if spec.endpoint != EndpointHealth {
+		if until, ok := c.backoffLocked(inst); ok {
+			delay := time.Until(until)
+			meta.RetryAfter = &delay
+			c.mu.Unlock()
+			return failedFetch(meta, ErrRateLimited)
+		}
+	}
+	if spec.policy == cachePolicyAnalyticsLRU {
+		if cap, ok := c.negativeCapLocked(inst, spec.endpoint); ok {
+			c.mu.Unlock()
+			meta.HTTPStatus = cap.HTTPStatus
+			return failedFetch(meta, capError(cap.State))
+		}
+	}
+	key := flightKey{endpointKey: endpointKey{inst.InstanceID, spec.endpoint, spec.path}, targetIdentity: targetIdentity{baseURL, inst.Generation, inst.CredGen, inst.ProxyEnabled, sha256.Sum256([]byte(inst.APIKey))}, method: spec.method, parserTag: spec.parserTag, policy: spec.policy, bodyHash: sha256.Sum256(spec.body), policyEpoch: c.policyEpoch}
 	flight := c.flights[key]
 	if flight == nil {
 		runtime := c.runtime
@@ -359,11 +437,14 @@ func (c *Client) fetchShared(ctx context.Context, inst TargetEndpoint, endpoint,
 		flightCtx, cancel := context.WithTimeout(context.Background(), limit)
 		flight = &requestFlight{done: make(chan struct{}), cancel: cancel}
 		c.flights[key] = flight
-		cached := c.cache[key.endpointKey]
+		var cached observation
+		if spec.policy == cachePolicyETag {
+			cached = c.cache[key.endpointKey]
+		}
 		if cached.target != key.targetIdentity {
 			cached = observation{}
 		}
-		go c.runFlight(flightCtx, runtime, key, flight, inst, cached, project)
+		go c.runFlight(flightCtx, runtime, key, flight, inst, cached, spec.body, project)
 	}
 	flight.waiters++
 	c.mu.Unlock()
@@ -388,9 +469,21 @@ func (c *Client) fetchShared(ctx context.Context, inst TargetEndpoint, endpoint,
 	}
 }
 
-func (c *Client) runFlight(ctx context.Context, runtime clientRuntime, key flightKey, flight *requestFlight, inst TargetEndpoint, cached observation, project projection) {
+func (c *Client) runFlight(ctx context.Context, runtime clientRuntime, key flightKey, flight *requestFlight, inst TargetEndpoint, cached observation, body []byte, project projection) {
 	defer flight.cancel()
-	result := c.execute(ctx, runtime, key, inst, cached, project)
+	defer func() {
+		if recover() != nil {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			if c.flights[key] == flight {
+				delete(c.flights, key)
+			}
+			flight.result = failedFetch(UpstreamFetchMeta{Endpoint: key.endpoint}, errUpstreamRequest)
+			close(flight.done)
+		}
+	}()
+	sentAt := time.Now()
+	result := c.execute(ctx, runtime, key, inst, cached, body, project)
 	if c.log != nil {
 		c.log.Debug("site-ops upstream request", "instance_id", inst.InstanceID, "endpoint", key.endpoint,
 			"http_status", result.meta.HTTPStatus, "latency_ms", result.meta.LatencyMS, "error_code", result.meta.ErrorCode)
@@ -399,7 +492,10 @@ func (c *Client) runFlight(ctx context.Context, runtime clientRuntime, key fligh
 	defer c.mu.Unlock()
 	if c.flights[key] == flight {
 		delete(c.flights, key)
-		if project != nil && result.err == nil && !result.meta.NotModified {
+		if key.endpoint != EndpointHealth {
+			c.recordAdminLocked(inst, key, sentAt, &result)
+		}
+		if key.policy == cachePolicyETag && project != nil && result.err == nil && !result.meta.NotModified {
 			delete(c.cache, key.endpointKey)
 			if result.meta.ETag != "" {
 				c.cache[key.endpointKey] = observation{key.targetIdentity, result.meta.ETag, result.projected, result.meta.ObservedAt}
@@ -407,10 +503,12 @@ func (c *Client) runFlight(ctx context.Context, runtime clientRuntime, key fligh
 		}
 		if errors.Is(result.err, ErrUnauthorized) || errors.Is(result.err, ErrForbidden) ||
 			errors.Is(result.err, ErrOpsDisabled) || errors.Is(result.err, ErrUnsupportedRoute) {
-			if c.cache[key.endpointKey].target == key.targetIdentity {
+			if key.policy == cachePolicyETag && c.cache[key.endpointKey].target == key.targetIdentity {
 				delete(c.cache, key.endpointKey)
 			}
 		}
+	} else if key.policy == cachePolicyAnalyticsLRU {
+		result = failedFetch(result.meta, ErrGenerationMismatch)
 	}
 	flight.result = result
 	close(flight.done)
@@ -447,20 +545,23 @@ func failedFetch(meta UpstreamFetchMeta, err error) fetchResult {
 	return fetchResult{meta: meta, err: err}
 }
 
-func (c *Client) execute(ctx context.Context, runtime clientRuntime, key flightKey, inst TargetEndpoint, cached observation, project projection) fetchResult {
+func (c *Client) execute(ctx context.Context, runtime clientRuntime, key flightKey, inst TargetEndpoint, cached observation, body []byte, project projection) fetchResult {
 	meta := UpstreamFetchMeta{Endpoint: key.endpoint}
-	if err := c.acquire(ctx, inst.InstanceID, time.Duration(runtime.site.QueueWaitTimeoutSeconds)*time.Second); err != nil {
+	if err := c.acquire(ctx, inst.InstanceID, time.Duration(runtime.site.QueueWaitTimeoutSeconds)*time.Second, key.policy == cachePolicyAnalyticsLRU); err != nil {
 		return failedFetch(meta, err)
 	}
-	defer c.release(inst.InstanceID)
+	defer c.release(inst.InstanceID, key.policy == cachePolicyAnalyticsLRU)
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(runtime.site.RequestTimeoutSeconds)*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, key.baseURL+key.path, nil)
+	req, err := http.NewRequestWithContext(ctx, key.method, key.baseURL+key.path, bytes.NewReader(body))
 	if err != nil {
 		return failedFetch(meta, errUpstreamRequest)
 	}
 	if key.endpoint == EndpointHealth {
 		req.URL.Path, req.URL.RawPath = healthPath, ""
+	}
+	if key.method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("User-Agent", runtime.userAgent)
 	if project != nil {
@@ -480,8 +581,13 @@ func (c *Client) execute(ctx context.Context, runtime clientRuntime, key flightK
 	defer transport.CloseIdleConnections()
 	var charge func()
 	if project != nil {
-		markSent, release, err := c.reserveAudit(inst, ctx)
+		markSent, release, err := c.reserveAudit(inst, ctx, key.policy == cachePolicyAnalyticsLRU)
 		if err != nil {
+			var bo *backoffError
+			if errors.As(err, &bo) {
+				meta.RetryAfter = ptr(time.Until(bo.until))
+				err = ErrRateLimited
+			}
 			return failedFetch(meta, err)
 		}
 		defer release()
@@ -511,7 +617,11 @@ func (c *Client) execute(ctx context.Context, runtime clientRuntime, key flightK
 		meta.VerifiedAt = time.Now().UTC()
 		return fetchResult{meta: meta}
 	}
-	return readAdminResponse(ctx, resp, meta, cached, project, inst.APIKey, runtime.site.MaxResponseBytes, start)
+	limit := runtime.site.MaxResponseBytes
+	if key.policy == cachePolicyAnalyticsLRU {
+		limit = min(limit, 8<<20)
+	}
+	return readAdminResponse(ctx, resp, meta, cached, project, inst.APIKey, limit, start)
 }
 
 func safeRequestError(ctx context.Context, err error) error {
@@ -637,6 +747,9 @@ func readAdminResponse(ctx context.Context, resp *http.Response, meta UpstreamFe
 	case http.StatusUnauthorized:
 		return failedFetch(meta, ErrUnauthorized)
 	case http.StatusForbidden:
+		if meta.Endpoint == EndpointChannelMonitorV2 && channelDisabled(resp.Body) {
+			return failedFetch(meta, ErrOpsDisabled)
+		}
 		return failedFetch(meta, ErrForbidden)
 	}
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
@@ -734,7 +847,7 @@ func parseRetryAfter(value string, now time.Time) *time.Duration {
 
 func (c *Client) ProbeHealth(ctx context.Context, inst TargetEndpoint) (*HealthProbeResult, error) {
 	inst.APIKey = ""
-	result := c.fetchShared(ctx, inst, EndpointHealth, healthPath, nil)
+	result := c.fetchShared(ctx, inst, requestSpec{endpoint: EndpointHealth, path: healthPath, method: http.MethodGet, policy: cachePolicyNoCache}, nil)
 	return &HealthProbeResult{
 		Reachable: result.err == nil, HTTPStatus: result.meta.HTTPStatus, LatencyMS: result.meta.LatencyMS,
 		CheckedAt: time.Now().UTC(), ErrorCode: result.meta.ErrorCode, SanitizedError: result.meta.SanitizedError,
@@ -839,102 +952,12 @@ func (c *Client) FetchAccountsDirectory(ctx context.Context, inst TargetEndpoint
 }
 
 func postAdminJSON[T any](c *Client, ctx context.Context, inst TargetEndpoint, endpoint, path string, reqBody any, parse func([]byte) (T, error)) (T, UpstreamFetchMeta, error) {
-	var zero T
-	meta := UpstreamFetchMeta{Endpoint: endpoint}
-	if err := ctx.Err(); err != nil {
-		res := failedFetch(meta, err)
-		return zero, res.meta, res.err
-	}
-	c.mu.Lock()
-	runtime := c.runtime
-	baseURL, err := c.guard.ValidateBaseURL(inst.BaseURL)
-	c.mu.Unlock()
+	body, err := json.Marshal(reqBody)
 	if err != nil {
-		res := failedFetch(meta, ErrOriginNotAllowed)
-		return zero, res.meta, res.err
+		var zero T
+		return zero, UpstreamFetchMeta{Endpoint: endpoint}, errUpstreamRequest
 	}
-	if strings.TrimSpace(inst.APIKey) == "" {
-		res := failedFetch(meta, ErrUnauthorized)
-		return zero, res.meta, res.err
-	}
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		res := failedFetch(meta, errUpstreamRequest)
-		return zero, res.meta, res.err
-	}
-	if err := c.acquire(ctx, inst.InstanceID, time.Duration(runtime.site.QueueWaitTimeoutSeconds)*time.Second); err != nil {
-		res := failedFetch(meta, err)
-		return zero, res.meta, res.err
-	}
-	defer c.release(inst.InstanceID)
-
-	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(runtime.site.RequestTimeoutSeconds)*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL+path, bytes.NewReader(bodyBytes))
-	if err != nil {
-		res := failedFetch(meta, errUpstreamRequest)
-		return zero, res.meta, res.err
-	}
-	req.Header.Set("User-Agent", runtime.userAgent)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", inst.APIKey)
-
-	start := time.Now()
-	transport, err := c.transport(req, inst.ProxyEnabled, runtime.proxy)
-	if err != nil {
-		res := failedFetch(meta, safeRequestError(reqCtx, err))
-		return zero, res.meta, res.err
-	}
-	defer transport.CloseIdleConnections()
-
-	markSent, releaseBudget, err := c.reserveAudit(inst, reqCtx)
-	if err != nil {
-		res := failedFetch(meta, err)
-		return zero, res.meta, res.err
-	}
-	defer releaseBudget()
-	req = req.WithContext(httptrace.WithClientTrace(reqCtx, &httptrace.ClientTrace{WroteRequest: func(info httptrace.WroteRequestInfo) {
-		if info.Err == nil {
-			markSent()
-		}
-	}}))
-
-	client := http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
-		return ErrRedirectBlocked
-	}}
-	resp, err := client.Do(req)
-	meta.LatencyMS = time.Since(start).Milliseconds()
-	if resp != nil {
-		meta.HTTPStatus = resp.StatusCode
-		markSent()
-	}
-	if err != nil {
-		res := failedFetch(meta, safeRequestError(reqCtx, err))
-		return zero, res.meta, res.err
-	}
-	defer resp.Body.Close()
-
-	project := func(body []byte) ([]byte, error) {
-		value, err := parse(body)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(value)
-	}
-	result := readAdminResponse(reqCtx, resp, meta, observation{}, project, inst.APIKey, runtime.site.MaxResponseBytes, start)
-	if c.log != nil {
-		c.log.Debug("site-ops upstream post request", "instance_id", inst.InstanceID, "endpoint", endpoint,
-			"http_status", result.meta.HTTPStatus, "latency_ms", result.meta.LatencyMS, "error_code", result.meta.ErrorCode)
-	}
-	if result.err != nil {
-		return zero, result.meta, result.err
-	}
-	var value T
-	if err := json.Unmarshal(result.projected, &value); err != nil {
-		res := failedFetch(result.meta, errInvalidPayload)
-		return zero, res.meta, res.err
-	}
-	return value, result.meta, nil
+	return fetchSpec(c, ctx, inst, requestSpec{endpoint: endpoint, path: path, method: http.MethodPost, policy: cachePolicyNoCache, body: body}, parse)
 }
 
 func (c *Client) FetchGroupCapacitySummary(ctx context.Context, inst TargetEndpoint) ([]SanitizedGroupCapacitySummary, UpstreamFetchMeta, error) {
@@ -973,12 +996,12 @@ func (c *Client) FetchAccountsUsageBatch(ctx context.Context, inst TargetEndpoin
 	if len(ids) == 0 {
 		now := time.Now().UTC()
 		return &SanitizedBatchUsageResult{
-			Usage: make(map[int64]SanitizedAccountUsage),
-		}, UpstreamFetchMeta{
-			Endpoint:   EndpointAccountsUsageBatch,
-			ObservedAt: now,
-			VerifiedAt: now,
-		}, nil
+				Usage: make(map[int64]SanitizedAccountUsage),
+			}, UpstreamFetchMeta{
+				Endpoint:   EndpointAccountsUsageBatch,
+				ObservedAt: now,
+				VerifiedAt: now,
+			}, nil
 	}
 
 	c.mu.Lock()

@@ -141,14 +141,17 @@ func (s *SiteOpsStore) DeleteInstance(ctx context.Context, id uint) error {
 		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsAccountWindowSample{}).Error; err != nil {
 			return err
 		}
-		return tx.Where("instance_id = ?", id).Delete(&SiteOpsAccountCost{}).Error
+		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsAccountCost{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("instance_id = ?", id).Delete(&SiteOpsReferencePrice{}).Error
 	})
 }
 
-func (s *SiteOpsStore) collectionTx(ctx context.Context, id uint, generation int64, work func(*gorm.DB) error) error {
+func (s *SiteOpsStore) collectionTx(ctx context.Context, id uint, generation int64, patch SiteOpsRuntimePatch, columns map[string]any, work func(*gorm.DB) error) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var inst SiteOpsInstance
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("generation", "enabled").Where("id = ?", id).Take(&inst).Error
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("generation", "enabled", "backoff_until").Where("id = ?", id).Take(&inst).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrSiteOpsNotFound
 		}
@@ -157,6 +160,12 @@ func (s *SiteOpsStore) collectionTx(ctx context.Context, id uint, generation int
 		}
 		if inst.Generation != generation || !inst.Enabled {
 			return ErrSiteOpsGenerationMismatch
+		}
+		if patch.BackoffUntil != nil && inst.BackoffUntil != nil {
+			proposed := *patch.BackoffUntil
+			if (proposed == nil && inst.BackoffUntil.After(time.Now())) || (proposed != nil && proposed.Before(*inst.BackoffUntil)) {
+				delete(columns, "backoff_until")
+			}
 		}
 		return work(tx.Session(&gorm.Session{SkipDefaultTransaction: true}))
 	})
@@ -175,7 +184,7 @@ func (s *SiteOpsStore) CommitCollection(ctx context.Context, id uint, generation
 		rows[i].ObservedAt = rows[i].ObservedAt.UTC()
 	}
 	columns := patch.columns()
-	return s.collectionTx(ctx, id, generation, func(tx *gorm.DB) error {
+	return s.collectionTx(ctx, id, generation, patch, columns, func(tx *gorm.DB) error {
 		if len(columns) > 0 {
 			if err := tx.Model(&SiteOpsInstance{}).Where("id = ?", id).Updates(columns).Error; err != nil {
 				return err
@@ -202,7 +211,7 @@ func (s *SiteOpsStore) TouchSnapshotVerified(ctx context.Context, id uint, gener
 	columns := patch.columns()
 	delete(columns, "last_observed_at")
 	columns["last_verified_at"] = verifiedAt
-	return s.collectionTx(ctx, id, generation, func(tx *gorm.DB) error {
+	return s.collectionTx(ctx, id, generation, patch, columns, func(tx *gorm.DB) error {
 		latest := tx.Model(&SiteOpsSnapshot{}).Select("id").Where("instance_id = ?", id).Order("observed_at DESC").Limit(1)
 		// Fetch the ID first so this also works with MySQL's same-table update restriction.
 		var ids []uint
@@ -606,7 +615,7 @@ func (s *SiteOpsStore) deleteBeforeChunkedByColumn(ctx context.Context, model an
 		var ids []uint
 		var deleted int64
 		err := batchDB.Transaction(func(tx *gorm.DB) error {
-			err := tx.Model(model).Where(column+" < ?", cutoff.UTC()).Order(column + " ASC").
+			err := tx.Model(model).Where(column+" < ?", cutoff.UTC()).Order(column+" ASC").
 				Limit(min(batchSize, maxRows-int(total))).Pluck("id", &ids).Error
 			if err != nil || len(ids) == 0 {
 				return err
@@ -630,4 +639,79 @@ func (s *SiteOpsStore) deleteBeforeChunkedByColumn(ctx context.Context, model an
 		}
 	}
 	return total, ctx.Err()
+}
+
+func (s *SiteOpsStore) ListReferencePrices(ctx context.Context, id uint, binding string) ([]SiteOpsReferencePrice, error) {
+	rows := []SiteOpsReferencePrice{}
+	err := s.db.WithContext(ctx).Where("instance_id = ? AND target_binding = ?", id, binding).Order("scope, scope_id").Find(&rows).Error
+	return rows, err
+}
+func (s *SiteOpsStore) ListReferencePricesByIDs(ctx context.Context, id uint, binding, scope string, ids []int64) ([]SiteOpsReferencePrice, error) {
+	seen := make(map[int64]bool, len(ids))
+	unique := make([]int64, 0, len(ids))
+	for _, v := range ids {
+		if !seen[v] {
+			unique = append(unique, v)
+			seen[v] = true
+		}
+	}
+	rows := []SiteOpsReferencePrice{}
+	for len(unique) > 0 {
+		n := min(100, len(unique))
+		var part []SiteOpsReferencePrice
+		if err := s.db.WithContext(ctx).Where("instance_id = ? AND target_binding = ? AND scope = ? AND scope_id IN ?", id, binding, scope, unique[:n]).Find(&part).Error; err != nil {
+			return nil, err
+		}
+		rows = append(rows, part...)
+		unique = unique[n:]
+	}
+	return rows, nil
+}
+func (s *SiteOpsStore) withAnalyticsGeneration(ctx context.Context, id uint, generation int64, fn func(*gorm.DB, *SiteOpsInstance) error) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		inst, err := findSiteOpsInstance(tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "generation", "backoff_until"), id)
+		if err != nil {
+			return err
+		}
+		if inst.Generation != generation {
+			return ErrSiteOpsGenerationMismatch
+		}
+		return fn(tx, inst)
+	})
+}
+func (s *SiteOpsStore) PutReferencePrice(ctx context.Context, generation int64, row *SiteOpsReferencePrice) error {
+	if row == nil {
+		return errors.New("missing reference price")
+	}
+	value := *row
+	value.ID = 0
+	value.UpdatedAt = time.Now().UTC()
+	err := s.withAnalyticsGeneration(ctx, value.InstanceID, generation, func(tx *gorm.DB, _ *SiteOpsInstance) error {
+		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "instance_id"}, {Name: "target_binding"}, {Name: "scope"}, {Name: "scope_id"}}, DoUpdates: clause.AssignmentColumns([]string{"currency", "monthly_minor", "cny_per_usd_micros", "updated_at"})}).Create(&value).Error
+	})
+	if err == nil {
+		*row = value
+	}
+	return err
+}
+func (s *SiteOpsStore) ClearReferencePrice(ctx context.Context, id uint, generation int64, binding, scope string, scopeID int64) error {
+	return s.withAnalyticsGeneration(ctx, id, generation, func(tx *gorm.DB, _ *SiteOpsInstance) error {
+		return tx.Where("instance_id = ? AND target_binding = ? AND scope = ? AND scope_id = ?", id, binding, scope, scopeID).Delete(&SiteOpsReferencePrice{}).Error
+	})
+}
+func (s *SiteOpsStore) ExtendAdminBackoff(ctx context.Context, id uint, generation int64, until time.Time) error {
+	return s.withAnalyticsGeneration(ctx, id, generation, func(tx *gorm.DB, inst *SiteOpsInstance) error {
+		if inst.BackoffUntil != nil && !until.After(*inst.BackoffUntil) {
+			return nil
+		}
+		return tx.Model(inst).Update("backoff_until", until.UTC()).Error
+	})
+}
+func (s *SiteOpsStore) UpdateAnalyticsConfig(ctx context.Context, id uint, configJSON string) error {
+	res := s.db.WithContext(ctx).Model(&SiteOpsInstance{}).Where("id = ?", id).Update("analytics_config_json", configJSON)
+	if res.Error == nil && res.RowsAffected == 0 {
+		_, err := s.GetInstance(ctx, id)
+		return err
+	}
+	return res.Error
 }

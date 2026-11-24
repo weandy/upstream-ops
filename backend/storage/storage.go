@@ -230,6 +230,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&SiteOpsAlertDelivery{},
 		&SiteOpsAccountWindowSample{},
 		&SiteOpsAccountCost{},
+		&SiteOpsReferencePrice{},
 	); err != nil {
 		return err
 	}

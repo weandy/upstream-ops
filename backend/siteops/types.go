@@ -292,11 +292,18 @@ type SanitizedAvailabilityPayload struct {
 }
 
 // SanitizedGroupInfo 经白名单投影后的 /groups/all 元数据。
+var ErrAnalyticsResourceNotFound = errors.New("site-ops analytics resource not found")
+
 type SanitizedGroupInfo struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	Platform string `json:"platform"`
-	Status   string `json:"status,omitempty"`
+	SubscriptionType *string  `json:"subscription_type,omitempty"`
+	RateMultiplier   *float64 `json:"rate_multiplier,omitempty"`
+	DailyLimitUSD    *float64 `json:"daily_limit_usd,omitempty"`
+	WeeklyLimitUSD   *float64 `json:"weekly_limit_usd,omitempty"`
+	MonthlyLimitUSD  *float64 `json:"monthly_limit_usd,omitempty"`
+	ID               int64    `json:"id"`
+	Name             string   `json:"name"`
+	Platform         string   `json:"platform"`
+	Status           string   `json:"status,omitempty"`
 }
 
 // SanitizedVersionInfo 经白名单投影后的 /system/version。
@@ -495,12 +502,12 @@ type SnapshotView struct {
 
 // OverviewResponse GET /api/site-ops/instances/:id/overview 响应体。
 type OverviewResponse struct {
-	Instance                 InstanceView  `json:"instance"`
-	Latest                   *SnapshotView `json:"latest,omitempty"`
-	SystemMetricsResolution  string        `json:"system_metrics_resolution"`
-	SLADenominatorNote       string        `json:"sla_denominator_note"`
-	OpsAvailabilityLabel     string        `json:"ops_availability_label"`
-	ConfiguredCapacityLabel  string        `json:"configured_capacity_label"`
+	Instance                InstanceView  `json:"instance"`
+	Latest                  *SnapshotView `json:"latest,omitempty"`
+	SystemMetricsResolution string        `json:"system_metrics_resolution"`
+	SLADenominatorNote      string        `json:"sla_denominator_note"`
+	OpsAvailabilityLabel    string        `json:"ops_availability_label"`
+	ConfiguredCapacityLabel string        `json:"configured_capacity_label"`
 }
 
 // TrendPoint GET /api/site-ops/instances/:id/trends 的单个时序点。
@@ -552,11 +559,11 @@ type GroupCapacityItem struct {
 	ConcWaiting          *int64            `json:"conc_waiting,omitempty"`
 	LoadPercent          *float64          `json:"load_percent,omitempty"`
 	// P1-B 会话/RPM 容量与号池断档风险计数
-	SessionsUsed         *int64            `json:"sessions_used,omitempty"`
-	SessionsMax          *int64            `json:"sessions_max,omitempty"`
-	RPMUsed              *int64            `json:"rpm_used,omitempty"`
-	RPMMax               *int64            `json:"rpm_max,omitempty"`
-	PoolExhaustRiskCount int               `json:"pool_exhaust_risk_count"`
+	SessionsUsed         *int64 `json:"sessions_used,omitempty"`
+	SessionsMax          *int64 `json:"sessions_max,omitempty"`
+	RPMUsed              *int64 `json:"rpm_used,omitempty"`
+	RPMMax               *int64 `json:"rpm_max,omitempty"`
+	PoolExhaustRiskCount int    `json:"pool_exhaust_risk_count"`
 }
 
 // GroupsResponse GET /api/site-ops/instances/:id/groups 响应体。
@@ -573,10 +580,10 @@ type GroupsResponse struct {
 
 // RefreshResult POST /api/site-ops/instances/:id/refresh 响应体。
 type RefreshResult struct {
-	InstanceID uint          `json:"instance_id"`
-	Snapshot   *SnapshotView `json:"snapshot,omitempty"`
+	InstanceID uint           `json:"instance_id"`
+	Snapshot   *SnapshotView  `json:"snapshot,omitempty"`
 	Status     InstanceStatus `json:"status"`
-	Message    string        `json:"message,omitempty"`
+	Message    string         `json:"message,omitempty"`
 }
 
 // ---------- 包内模块协作接口（确保 W1-A 与 W1-B 零冲突并行开发） ----------

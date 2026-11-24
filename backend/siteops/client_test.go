@@ -244,6 +244,8 @@ func TestRetryAfterFormatsAndBodyLimit(t *testing.T) {
 		if !errors.Is(err, ErrRateLimited) || meta.RetryAfter == nil || *meta.RetryAfter < bounds[0] || *meta.RetryAfter > bounds[1] {
 			t.Fatalf("retry format %d: %+v, %v", i, meta, err)
 		}
+		// 下一个响应样本使用独立实例，避免继承本次 429 的退避。
+		inst.InstanceID++
 	}
 	if _, _, err := client.FetchSystemVersion(ctx, inst); !errors.Is(err, errResponseLimit) {
 		t.Fatalf("oversized body = %v", err)

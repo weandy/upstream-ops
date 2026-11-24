@@ -265,6 +265,7 @@ func registerSiteOps(g *gin.RouterGroup, d *Deps) {
 		}
 		c.JSON(http.StatusOK, gin.H{"data": res})
 	})
+	registerSiteOpsAnalytics(sg, d)
 }
 
 func failSiteOps(c *gin.Context, err error) {
@@ -275,6 +276,8 @@ func failSiteOps(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": siteops.ErrCodeOriginNotAllowed, "error": siteops.ErrOriginNotAllowed.Error()})
 	case errors.Is(err, siteops.ErrInvalidInput):
 		c.JSON(http.StatusBadRequest, gin.H{"error": siteops.SanitizeErrorText(err.Error(), 200)})
+	case errors.Is(err, siteops.ErrAnalyticsResourceNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": siteops.ErrAnalyticsResourceNotFound.Error()})
 	case errors.Is(err, siteops.ErrInstanceNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": siteops.ErrInstanceNotFound.Error()})
 	case errors.Is(err, siteops.ErrGenerationMismatch):
@@ -288,6 +291,6 @@ func failSiteOps(c *gin.Context, err error) {
 	case errors.Is(err, siteops.ErrUnauthorized):
 		c.JSON(http.StatusBadGateway, gin.H{"code": siteops.ErrCodeUnauthorized, "error": siteops.ErrUnauthorized.Error()})
 	default:
-		c.JSON(http.StatusInternalServerError, gin.H{"error": siteops.SanitizeErrorText(err.Error(), 200)})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "site-ops internal error"})
 	}
 }

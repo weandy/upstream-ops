@@ -61,6 +61,7 @@ type Poller struct {
 	live         map[uint]liveGroupSample
 	accounts     map[uint]liveAccountsSample
 	accountsDir  map[uint][]SanitizedAccountSummary
+	groupMetaAt  map[uint]time.Time
 	groupMeta    map[uint][]SanitizedGroupInfo
 	forecasts    map[uint]livePoolForecastSample
 	usageWindows map[uint]map[int64][]SanitizedUsageWindow
@@ -114,13 +115,14 @@ type instanceWorker struct {
 	wake     chan struct{}
 	requests map[pollAction]*pollRequest // Protected by Poller.mu.
 
-	initialized   bool
-	caps          CapabilitiesMap
-	security      pollSecurity
-	last          *storage.SiteOpsSnapshot
-	trusted       *storage.SiteOpsSnapshot
-	trustedGroups bool
+	initialized        bool
+	caps               CapabilitiesMap
+	security           pollSecurity
+	last               *storage.SiteOpsSnapshot
+	trusted            *storage.SiteOpsSnapshot
+	trustedGroups      bool
 	lastArchive        time.Time
+	groupVerifiedAt    time.Time
 	groupMetadata      []SanitizedGroupInfo
 	lastL2At           time.Time
 	lastAccountsAt     time.Time
@@ -170,7 +172,7 @@ func NewPoller(deps PollerDeps) *Poller {
 		instances: make(map[uint]storage.SiteOpsInstance), workers: make(map[uint]*instanceWorker),
 		tails: make(map[uint]chan struct{}), security: make(map[uint]pollSecurity),
 		live: make(map[uint]liveGroupSample), accounts: make(map[uint]liveAccountsSample),
-		accountsDir: make(map[uint][]SanitizedAccountSummary), groupMeta: make(map[uint][]SanitizedGroupInfo),
+		accountsDir: make(map[uint][]SanitizedAccountSummary), groupMetaAt: make(map[uint]time.Time), groupMeta: make(map[uint][]SanitizedGroupInfo),
 		forecasts: make(map[uint]livePoolForecastSample), usageWindows: make(map[uint]map[int64][]SanitizedUsageWindow),
 		evaluator: evaluator, alerter: alerter, dailySent: make(map[uint]string),
 	}
@@ -336,6 +338,7 @@ func (p *Poller) stopWorkerLocked(id uint) {
 	delete(p.accounts, id)
 	delete(p.accountsDir, id)
 	delete(p.groupMeta, id)
+	delete(p.groupMetaAt, id)
 	delete(p.forecasts, id)
 	delete(p.usageWindows, id)
 	if p.deps.Client != nil {
@@ -597,7 +600,24 @@ type collectionRound struct {
 	authenticated bool
 }
 
+func (p *Poller) LatestGroupMetadataFresh(id uint, now time.Time) ([]SanitizedGroupInfo, time.Time, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	at := p.groupMetaAt[id]
+	if at.IsZero() || !now.Before(at.Add(metadataRefreshPeriod)) {
+		return nil, time.Time{}, false
+	}
+	return append([]SanitizedGroupInfo{}, p.groupMeta[id]...), at, true
+}
 func (w *instanceWorker) newRound() *collectionRound {
+	if c, ok := w.poller.deps.Client.(BackoffAwareClient); ok {
+		if t := w.instance.BackoffUntil; t != nil && t.After(w.poller.now()) {
+			c.SeedAdminBackoff(w.instance.ID, w.instance.CredGen, *t)
+		}
+		if t, active := c.AdminBackoff(w.instance.ID, w.instance.CredGen); active {
+			w.instance.BackoffUntil = &t
+		}
+	}
 	return &collectionRound{w: w, now: w.poller.now(), caps: maps.Clone(w.caps), security: w.security, backoff: w.instance.BackoffUntil}
 }
 
@@ -626,6 +646,11 @@ func (r *collectionRound) noteAdmin(meta UpstreamFetchMeta, err error) {
 			delay = r.security.backoff
 		}
 		r.backoff = ptr(r.w.poller.now().Add(delay))
+		if c, ok := r.w.poller.deps.Client.(BackoffAwareClient); ok {
+			if until, active := c.AdminBackoff(r.w.instance.ID, r.w.instance.CredGen); active {
+				r.backoff = &until
+			}
+		}
 		r.adminErr, r.haltAdmin = err, true
 	case errors.Is(err, ErrBudgetExceeded), errors.Is(err, ErrQueueTimeout), errors.Is(err, context.DeadlineExceeded):
 		r.haltAdmin = true
@@ -889,6 +914,7 @@ func (r *collectionRound) collectAdmin(ctx context.Context, target TargetEndpoin
 		})
 		if groups != nil {
 			w.groupMetadata = groups
+			w.groupVerifiedAt = r.now
 		}
 	}
 	in.Groups = w.groupMetadata
@@ -975,6 +1001,18 @@ func (r *collectionRound) persist(ctx context.Context, snap *storage.SiteOpsSnap
 	if r.authenticated && !errors.Is(r.adminErr, ErrRateLimited) {
 		r.security.backoff, r.backoff = 0, nil
 	}
+	if client, ok := p.deps.Client.(BackoffAwareClient); ok {
+		if until, active := client.AdminBackoff(w.instance.ID, w.instance.CredGen); active {
+			r.backoff = &until
+			if errors.Is(r.adminErr, ErrRateLimited) {
+				if store, ok := p.deps.Store.(AnalyticsStore); ok {
+					if err := store.ExtendAdminBackoff(ctx, w.instance.ID, w.instance.Generation, until); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
 	r.patch.CapabilitiesJSON = ptr(jsonString(r.caps))
 	r.patch.BackoffUntil = &r.backoff
 	p.mu.Lock()
@@ -1024,10 +1062,11 @@ func (r *collectionRound) persist(ctx context.Context, snap *storage.SiteOpsSnap
 	if len(w.accountsDir) > 0 {
 		p.accountsDir[id] = cloneAccountsDir(w.accountsDir)
 	}
-	if len(w.groupMetadata) > 0 {
+	if w.groupMetadata != nil {
 		gm := make([]SanitizedGroupInfo, len(w.groupMetadata))
 		copy(gm, w.groupMetadata)
 		p.groupMeta[id] = gm
+		p.groupMetaAt[id] = w.groupVerifiedAt
 	}
 	if w.latestForecast != nil {
 		p.forecasts[id] = livePoolForecastSample{response: *clonePoolForecastResponse(*w.latestForecast), cachedAt: p.now()}

@@ -19,6 +19,7 @@ import (
 )
 
 type ServiceDeps struct {
+	AnalyticsStore AnalyticsStore
 	Store          Store
 	EventStore     EventStore
 	P1BStore       P1BStore
@@ -37,12 +38,13 @@ type ServiceDeps struct {
 }
 
 type Service struct {
-	deps      ServiceDeps
-	poller    *Poller
-	mu        sync.Mutex
-	cfg       config.SiteOpsConfig
-	auth      bool
-	active    bool
+	analytics  *AnalyticsCache
+	deps       ServiceDeps
+	poller     *Poller
+	mu         sync.Mutex
+	cfg        config.SiteOpsConfig
+	auth       bool
+	active     bool
 	statsCache map[uint]cachedAccountStats
 }
 
@@ -57,6 +59,13 @@ func NewService(deps ServiceDeps) *Service {
 			deps.P1BStore = ps
 		}
 	}
+	if deps.AnalyticsStore == nil {
+		deps.AnalyticsStore, _ = deps.Store.(AnalyticsStore)
+	}
+	cache := newAnalyticsCache(deps.Now)
+	if c, ok := deps.Client.(*Client); ok {
+		c.analytics = cache
+	}
 	cfg := copySiteOpsConfig(deps.InitialConfig)
 	poller := NewPoller(PollerDeps{
 		Store: deps.Store, EventStore: deps.EventStore, P1BStore: deps.P1BStore, Notifier: deps.Notifier, Cipher: deps.Cipher, Validator: deps.Validator, Client: deps.Client, Prober: deps.Prober,
@@ -66,7 +75,7 @@ func NewService(deps ServiceDeps) *Service {
 		deps.Validator.UpdatePolicy(cfg.AllowLoopback, cfg.AllowedOrigins, cfg.AllowedCIDRs)
 	}
 	poller.SetPollingAllowed(IsPollingAllowed(deps.AuthActive, cfg))
-	return &Service{deps: deps, poller: poller, cfg: cfg, auth: deps.AuthActive, statsCache: make(map[uint]cachedAccountStats)}
+	return &Service{analytics: cache, deps: deps, poller: poller, cfg: cfg, auth: deps.AuthActive, statsCache: make(map[uint]cachedAccountStats)}
 }
 
 // SetNotifier 注入专用直投通知器（零广播、不碰旧 fanout 与 notification_cooldowns）。
@@ -95,6 +104,9 @@ func (s *Service) Start() error {
 	if err != nil {
 		return err
 	}
+	s.analytics.mu.Lock()
+	s.analytics.stopped = false
+	s.analytics.mu.Unlock()
 	s.poller.SyncInstances(instances)
 	s.poller.Start()
 	s.active = true
@@ -104,6 +116,8 @@ func (s *Service) Start() error {
 func (s *Service) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.invalidateAnalytics(0, "stop")
+	s.analytics.stop()
 	s.poller.Stop()
 	s.active = false
 }
@@ -113,6 +127,7 @@ func (s *Service) ApplyRuntimeConfig(authActive bool, siteCfg config.SiteOpsConf
 	defer s.mu.Unlock()
 	siteCfg = copySiteOpsConfig(siteCfg)
 	s.poller.applyRuntimeConfig(IsPollingAllowed(authActive, siteCfg), siteCfg, proxyCfg, upstreamCfg)
+	s.invalidateAnalytics(0, "policy")
 	s.cfg, s.auth = siteCfg, authActive
 }
 
@@ -213,6 +228,11 @@ func (s *Service) UpdateInstance(ctx context.Context, id uint, input UpdateInsta
 	if err := s.deps.Store.UpdateInstance(ctx, &inst); err != nil {
 		return nil, err
 	}
+	reason := "update"
+	if previous.BaseURL != inst.BaseURL || previous.CredGen != inst.CredGen {
+		reason = "target"
+	}
+	s.invalidateAnalytics(id, reason)
 	s.poller.ReconcileInstance(inst)
 	if credentialTargetChanged(*previous, inst) {
 		s.invalidateStatsCacheLocked(id)
@@ -350,6 +370,7 @@ func (s *Service) DeleteInstance(ctx context.Context, id uint) error {
 	if err != nil {
 		return err
 	}
+	s.invalidateAnalytics(id, "delete")
 	s.poller.RemoveInstance(id)
 	s.invalidateStatsCacheLocked(id)
 	if err := s.deps.Store.DeleteInstance(ctx, id); err != nil {
@@ -362,7 +383,22 @@ func (s *Service) DeleteInstance(ctx context.Context, id uint) error {
 }
 
 func (s *Service) ProbeInstance(ctx context.Context, id uint) (*ProbeReport, error) {
-	return s.poller.request(ctx, id, actionProbe)
+	report, err := s.poller.request(ctx, id, actionProbe)
+	if err != nil || report == nil {
+		return report, err
+	}
+	inst, err := s.deps.Store.GetInstance(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	caps := make(CapabilitiesMap)
+	for k, v := range report.Capabilities {
+		caps[k] = v
+	}
+	s.mergeAnalyticsCapabilities(*inst, caps)
+	result := *report
+	result.Capabilities = caps
+	return &result, nil
 }
 
 func (s *Service) RefreshInstance(ctx context.Context, id uint) (*RefreshResult, error) {
@@ -534,11 +570,13 @@ func (s *Service) instanceView(inst storage.SiteOpsInstance, auth bool) Instance
 	if !auth && inst.Enabled {
 		status = StatusPausedNoAuth
 	}
+	caps := decodeCapabilities(inst.CapabilitiesJSON)
+	inst.BackoffUntil = s.mergeAnalyticsCapabilities(inst, caps)
 	return InstanceView{ID: inst.ID, Name: inst.Name, Slug: inst.Slug, BaseURL: inst.BaseURL,
 		APIKeySet: inst.APIKeyCipher != "", APIKeyHint: inst.APIKeyHint, KeyKind: inst.KeyKind, CredGen: inst.CredGen,
 		Generation: inst.Generation, ProxyEnabled: inst.ProxyEnabled, Enabled: inst.Enabled, SortOrder: inst.SortOrder,
 		PollIntervalSeconds: inst.PollIntervalSeconds, AuditBudgetPerDay: inst.AuditBudgetPerDay, AuditBudget: budget,
-		Capabilities: decodeCapabilities(inst.CapabilitiesJSON), LastReachability: ReachabilityState(inst.LastReachability),
+		Capabilities: caps, LastReachability: ReachabilityState(inst.LastReachability),
 		LastStatus: status, LastHealthScore: inst.LastHealthScore, LastVersion: inst.LastVersion,
 		LastObservedAt: inst.LastObservedAt, LastVerifiedAt: inst.LastVerifiedAt, BackoffUntil: inst.BackoffUntil,
 		LastErrorCode: inst.LastErrorCode, LastErrorSummary: inst.LastErrorSummary, CreatedAt: inst.CreatedAt, UpdatedAt: inst.UpdatedAt}

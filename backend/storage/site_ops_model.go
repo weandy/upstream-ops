@@ -31,6 +31,7 @@ type SiteOpsInstance struct {
 	LastErrorCode       string     `gorm:"size:64;not null;default:''" json:"last_error_code"`
 	LastErrorSummary    string     `gorm:"size:256;not null;default:''" json:"last_error_summary"`
 	AlertConfigJSON     string     `gorm:"type:text;not null;default:''" json:"alert_config_json,omitempty"`
+	AnalyticsConfigJSON string     `gorm:"type:text;not null;default:''" json:"-"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
@@ -40,57 +41,57 @@ func (SiteOpsInstance) TableName() string { return "site_ops_instances" }
 // SiteOpsSnapshot 站点级时序快照（P0-A + P0-B，默认保留 14 天）。
 // 所有可能缺失/未授权/未证实的指标使用指针（nil 表示缺失，严禁用 0 冒充）。
 type SiteOpsSnapshot struct {
-	ID                       uint      `gorm:"primaryKey" json:"id"`
-	InstanceID               uint      `gorm:"not null;uniqueIndex:uniq_site_ops_snap_inst_time,priority:1" json:"instance_id"`
-	ObservedAt               time.Time `gorm:"not null;uniqueIndex:uniq_site_ops_snap_inst_time,priority:2;index:idx_site_ops_snap_observed" json:"observed_at"`
-	VerifiedAt               time.Time `gorm:"not null" json:"verified_at"`
-	Reachable                bool      `gorm:"not null;default:false" json:"reachable"`
-	ProbeLatencyMS           int64     `gorm:"not null;default:0" json:"probe_latency_ms"`
-	FieldQualityJSON         string    `gorm:"type:text;not null;default:'{}'" json:"field_quality_json"`
-	HealthScore              *int      `json:"health_score,omitempty"`
-	UptimeSeconds            *int64    `json:"uptime_seconds,omitempty"`
-	CPUPercent               *float64  `json:"cpu_percent,omitempty"`
-	MemPercent               *float64  `json:"mem_percent,omitempty"`
-	MemUsedMB                *int64    `json:"mem_used_mb,omitempty"`
-	DBOK                     *bool     `json:"db_ok,omitempty"`
-	DBConnActive             *int      `json:"db_conn_active,omitempty"`
-	DBConnWaiting            *int      `json:"db_conn_waiting,omitempty"`
-	DBMaxOpenConns           *int      `json:"db_max_open_conns,omitempty"`
-	RedisOK                  *bool     `json:"redis_ok,omitempty"`
-	RedisConnTotal           *int      `json:"redis_conn_total,omitempty"`
-	RedisConnIdle            *int      `json:"redis_conn_idle,omitempty"`
-	RedisPoolSize            *int      `json:"redis_pool_size,omitempty"`
-	GoroutineCount           *int      `json:"goroutine_count,omitempty"`
-	QueueDepth               *int      `json:"queue_depth,omitempty"`
-	AccountSwitchCount1m     *int64    `json:"account_switch_count_1m,omitempty"`
-	SLAPercent1h             *float64  `json:"sla_percent_1h,omitempty"`
-	ErrorRatePercent1h       *float64  `json:"error_rate_percent_1h,omitempty"`
-	UpstreamErrorRatePct1h   *float64  `json:"upstream_error_rate_percent_1h,omitempty"`
-	ReqTotal1h               *int64    `json:"req_total_1h,omitempty"`
-	ErrTotal1h               *int64    `json:"err_total_1h,omitempty"`
-	Upstream4291h            *int64    `json:"upstream_429_1h,omitempty"`
-	Upstream5291h            *int64    `json:"upstream_529_1h,omitempty"`
-	UpstreamErrExcl4295291h  *int64    `json:"upstream_err_excl_429_529_1h,omitempty"`
-	QPSCurrent               *float64  `json:"qps_current,omitempty"`
-	QPSPeak                  *float64  `json:"qps_peak,omitempty"`
-	TPSCurrent               *float64  `json:"tps_current,omitempty"`
-	RPM5m                    *int64    `json:"rpm_5m,omitempty"`
-	TPM5m                    *int64    `json:"tpm_5m,omitempty"`
-	TTFTP50MS                *int      `json:"ttft_p50_ms,omitempty"`
-	TTFTP95MS                *int      `json:"ttft_p95_ms,omitempty"`
-	DurationP95MS            *int      `json:"duration_p95_ms,omitempty"`
-	OutputTPSP50             *float64  `json:"output_tps_p50,omitempty"`
+	ID                      uint      `gorm:"primaryKey" json:"id"`
+	InstanceID              uint      `gorm:"not null;uniqueIndex:uniq_site_ops_snap_inst_time,priority:1" json:"instance_id"`
+	ObservedAt              time.Time `gorm:"not null;uniqueIndex:uniq_site_ops_snap_inst_time,priority:2;index:idx_site_ops_snap_observed" json:"observed_at"`
+	VerifiedAt              time.Time `gorm:"not null" json:"verified_at"`
+	Reachable               bool      `gorm:"not null;default:false" json:"reachable"`
+	ProbeLatencyMS          int64     `gorm:"not null;default:0" json:"probe_latency_ms"`
+	FieldQualityJSON        string    `gorm:"type:text;not null;default:'{}'" json:"field_quality_json"`
+	HealthScore             *int      `json:"health_score,omitempty"`
+	UptimeSeconds           *int64    `json:"uptime_seconds,omitempty"`
+	CPUPercent              *float64  `json:"cpu_percent,omitempty"`
+	MemPercent              *float64  `json:"mem_percent,omitempty"`
+	MemUsedMB               *int64    `json:"mem_used_mb,omitempty"`
+	DBOK                    *bool     `json:"db_ok,omitempty"`
+	DBConnActive            *int      `json:"db_conn_active,omitempty"`
+	DBConnWaiting           *int      `json:"db_conn_waiting,omitempty"`
+	DBMaxOpenConns          *int      `json:"db_max_open_conns,omitempty"`
+	RedisOK                 *bool     `json:"redis_ok,omitempty"`
+	RedisConnTotal          *int      `json:"redis_conn_total,omitempty"`
+	RedisConnIdle           *int      `json:"redis_conn_idle,omitempty"`
+	RedisPoolSize           *int      `json:"redis_pool_size,omitempty"`
+	GoroutineCount          *int      `json:"goroutine_count,omitempty"`
+	QueueDepth              *int      `json:"queue_depth,omitempty"`
+	AccountSwitchCount1m    *int64    `json:"account_switch_count_1m,omitempty"`
+	SLAPercent1h            *float64  `json:"sla_percent_1h,omitempty"`
+	ErrorRatePercent1h      *float64  `json:"error_rate_percent_1h,omitempty"`
+	UpstreamErrorRatePct1h  *float64  `json:"upstream_error_rate_percent_1h,omitempty"`
+	ReqTotal1h              *int64    `json:"req_total_1h,omitempty"`
+	ErrTotal1h              *int64    `json:"err_total_1h,omitempty"`
+	Upstream4291h           *int64    `json:"upstream_429_1h,omitempty"`
+	Upstream5291h           *int64    `json:"upstream_529_1h,omitempty"`
+	UpstreamErrExcl4295291h *int64    `json:"upstream_err_excl_429_529_1h,omitempty"`
+	QPSCurrent              *float64  `json:"qps_current,omitempty"`
+	QPSPeak                 *float64  `json:"qps_peak,omitempty"`
+	TPSCurrent              *float64  `json:"tps_current,omitempty"`
+	RPM5m                   *int64    `json:"rpm_5m,omitempty"`
+	TPM5m                   *int64    `json:"tpm_5m,omitempty"`
+	TTFTP50MS               *int      `json:"ttft_p50_ms,omitempty"`
+	TTFTP95MS               *int      `json:"ttft_p95_ms,omitempty"`
+	DurationP95MS           *int      `json:"duration_p95_ms,omitempty"`
+	OutputTPSP50            *float64  `json:"output_tps_p50,omitempty"`
 	// P0-B 去重全站真实并发与 Ops 判定号池状态
-	ConcUsed                 *int64    `json:"conc_used,omitempty"`
-	ConcMax                  *int64    `json:"conc_max,omitempty"`
-	ConcWaiting              *int64    `json:"conc_waiting,omitempty"`
-	ConcTrustState           string    `gorm:"size:24;not null;default:'unavailable'" json:"conc_trust_state"`
-	AccountsTotal            *int64    `json:"accounts_total,omitempty"`
-	AccountsOpsAvailable     *int64    `json:"accounts_ops_available,omitempty"`
-	AccountsRateLimited      *int64    `json:"accounts_rate_limited,omitempty"`
-	AccountsOverloaded       *int64    `json:"accounts_overloaded,omitempty"`
-	AccountsError            *int64    `json:"accounts_error,omitempty"`
-	DetailJSON               string    `gorm:"type:text" json:"detail_json,omitempty"`
+	ConcUsed             *int64 `json:"conc_used,omitempty"`
+	ConcMax              *int64 `json:"conc_max,omitempty"`
+	ConcWaiting          *int64 `json:"conc_waiting,omitempty"`
+	ConcTrustState       string `gorm:"size:24;not null;default:'unavailable'" json:"conc_trust_state"`
+	AccountsTotal        *int64 `json:"accounts_total,omitempty"`
+	AccountsOpsAvailable *int64 `json:"accounts_ops_available,omitempty"`
+	AccountsRateLimited  *int64 `json:"accounts_rate_limited,omitempty"`
+	AccountsOverloaded   *int64 `json:"accounts_overloaded,omitempty"`
+	AccountsError        *int64 `json:"accounts_error,omitempty"`
+	DetailJSON           string `gorm:"type:text" json:"detail_json,omitempty"`
 }
 
 func (SiteOpsSnapshot) TableName() string { return "site_ops_snapshots" }
@@ -114,11 +115,11 @@ type SiteOpsGroupSnapshot struct {
 	ConcMax              *int64    `json:"conc_max,omitempty"`
 	ConcWaiting          *int64    `json:"conc_waiting,omitempty"`
 	// P1-B 会话/RPM 容量与号池断档风险扩列
-	SessionsUsed         *int64    `json:"sessions_used,omitempty"`
-	SessionsMax          *int64    `json:"sessions_max,omitempty"`
-	RPMUsed              *int64    `json:"rpm_used,omitempty"`
-	RPMMax               *int64    `json:"rpm_max,omitempty"`
-	PoolExhaustRiskCount int       `gorm:"not null;default:0" json:"pool_exhaust_risk_count"`
+	SessionsUsed         *int64 `json:"sessions_used,omitempty"`
+	SessionsMax          *int64 `json:"sessions_max,omitempty"`
+	RPMUsed              *int64 `json:"rpm_used,omitempty"`
+	RPMMax               *int64 `json:"rpm_max,omitempty"`
+	PoolExhaustRiskCount int    `gorm:"not null;default:0" json:"pool_exhaust_risk_count"`
 }
 
 func (SiteOpsGroupSnapshot) TableName() string { return "site_ops_group_snapshots" }
@@ -210,3 +211,20 @@ type SiteOpsAccountCost struct {
 }
 
 func (SiteOpsAccountCost) TableName() string { return "site_ops_account_costs" }
+
+// SiteOpsReferencePrice 运营分析可选本地参考月收款表（Wave 4 P2-Lite，严格零用户 PII）。
+// 仅按 (instance_id, target_binding, scope, scope_id) 保存纯数字资源键的 30 天基准参考价，
+// 严禁存储 user_id、邮箱、用户名、API Key 或自由文本备注。
+type SiteOpsReferencePrice struct {
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	InstanceID      uint      `gorm:"not null;uniqueIndex:uniq_so_ref_price,priority:1" json:"instance_id"`
+	TargetBinding   string    `gorm:"size:64;not null;uniqueIndex:uniq_so_ref_price,priority:2" json:"-"`
+	Scope           string    `gorm:"size:16;not null;uniqueIndex:uniq_so_ref_price,priority:3" json:"scope"` // "group" | "subscription"
+	ScopeID         int64     `gorm:"not null;uniqueIndex:uniq_so_ref_price,priority:4" json:"scope_id"`      // group_id 或 subscription_id (> 0)
+	Currency        string    `gorm:"size:3;not null" json:"currency"`                                        // "CNY" | "USD"
+	MonthlyMinor    int64     `gorm:"not null" json:"monthly_minor"`                                          // 30 天基准原币分值 [0, 1_000_000_000]；0 = 显式赠送
+	CNYPerUSDMicros *int64    `json:"cny_per_usd_micros,omitempty"`                                           // 可选单行 CNY 汇率百万分位 [1, 1_000_000_000]；USD 时恒为 nil；CNY 为 nil 时继承实例默认汇率
+	UpdatedAt       time.Time `gorm:"not null" json:"updated_at"`
+}
+
+func (SiteOpsReferencePrice) TableName() string { return "site_ops_reference_prices" }

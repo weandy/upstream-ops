@@ -390,16 +390,8 @@ func ParseAccountAvailability(body []byte) (*SanitizedAvailabilityPayload, error
 }
 
 func ParseGroupsAll(body []byte) ([]SanitizedGroupInfo, error) {
-	var groups []SanitizedGroupInfo
-	if err := decodeProjection(body, &groups); err != nil {
-		return nil, err
-	}
-	for i := range groups {
-		groups[i].Name = SanitizeErrorText(groups[i].Name, 200)
-		groups[i].Platform = SanitizeErrorText(groups[i].Platform, 200)
-		groups[i].Status = SanitizeErrorText(groups[i].Status, 200)
-	}
-	return groups, nil
+	page, err := projectPage(body, 10000, []string{"items", "groups", "rows"}, func(g SanitizedGroupInfo) (SanitizedGroupInfo, bool) { return cleanGroup(g), g.ID > 0 })
+	return page.Items, err
 }
 
 func ParseSystemVersion(body []byte) (*SanitizedVersionInfo, error) {

@@ -201,6 +201,8 @@ func TestClientP1AErrorHandling401_403_429(t *testing.T) {
 		meta.ErrorCode != ErrCodeRateLimited || meta.RetryAfter == nil || *meta.RetryAfter != 45*time.Second {
 		t.Fatalf("429 handling = (%+v, %v)", meta, err)
 	}
+	// 账户目录的 403 样本使用独立实例。
+	inst.InstanceID++
 	if _, meta, err := client.FetchAccountsDirectory(ctx, inst); !errors.Is(err, ErrForbidden) ||
 		meta.ErrorCode != ErrCodeForbidden {
 		t.Fatalf("accounts 403 handling = (%+v, %v)", meta, err)
