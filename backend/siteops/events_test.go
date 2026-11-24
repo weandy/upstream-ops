@@ -771,3 +771,111 @@ func TestEventAccountErrorExcludesPure429AndRateLimitWaveDuration(t *testing.T) 
 		t.Fatalf("expected account_rate_limit_wave recovery, got %+v", trs)
 	}
 }
+
+func TestEventPoolCannotSustainResetAndSameDomainRecovery(t *testing.T) {
+	ctx := context.Background()
+	store := newMemEventStore()
+	eval := NewEventEvaluator()
+	inst := testInstance()
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+
+	riskyForecast := &PoolForecastResponse{
+		InstanceID: inst.ID,
+		TrustState: QualityTrusted,
+		Groups: []GroupForecastRiskView{
+			{
+				GroupID:              9,
+				GroupName:            "claude-max-pool",
+				Platform:             "anthropic",
+				ProvenAccounts:       5,
+				ExhaustedCount:       1,
+				WillExhaustHighCount: 2,
+				SafeOrIdleCount:      2,
+				HighRiskRatioPct:     ptr(60.0),
+				CannotSustainRisk:    true,
+				RiskNote:             "高危占比 60.0%",
+			},
+		},
+	}
+
+	// 1. DomainPoolForecast 非 trusted（stale）时，即使 CannotSustainRisk=true 也绝不触发
+	trs, err := eval.Evaluate(ctx, store, EvalInput{
+		Instance:     inst,
+		Now:          now,
+		FieldQuality: FieldQualityMap{DomainPoolForecast: QualityStale},
+		PoolForecast: riskyForecast,
+	})
+	if err != nil {
+		t.Fatalf("eval stale: %v", err)
+	}
+	if len(trs) != 0 {
+		t.Fatalf("stale pool_forecast must not trigger alert, got %+v", trs)
+	}
+
+	// 2. DomainPoolForecast == QualityTrusted 时，连续 1 次即触发 warning 告警
+	trs, err = eval.Evaluate(ctx, store, EvalInput{
+		Instance:     inst,
+		Now:          now.Add(time.Minute),
+		FieldQuality: FieldQualityMap{DomainPoolForecast: QualityTrusted},
+		PoolForecast: riskyForecast,
+	})
+	if err != nil {
+		t.Fatalf("eval fire: %v", err)
+	}
+	tr := findTransition(trs, RulePoolCannotSustainReset, "group:9", DeliveryKindAlert)
+	if tr == nil || tr.Event.Severity != SeverityWarning || !tr.NewlyTransitioned {
+		t.Fatalf("expected warning pool_cannot_sustain_reset alert for group:9, got %+v", trs)
+	}
+	var reqDomains []string
+	_ = json.Unmarshal([]byte(tr.Event.RequiredDomainsJSON), &reqDomains)
+	if len(reqDomains) != 1 || reqDomains[0] != DomainPoolForecast {
+		t.Fatalf("expected required domains [%s], got %v", DomainPoolForecast, reqDomains)
+	}
+
+	// 3. 非 trusted（stale）时即使 CannotSustainRisk=false 也绝不自动恢复
+	healthyForecast := &PoolForecastResponse{
+		InstanceID: inst.ID,
+		TrustState: QualityTrusted,
+		Groups: []GroupForecastRiskView{
+			{
+				GroupID:           9,
+				GroupName:         "claude-max-pool",
+				Platform:          "anthropic",
+				ProvenAccounts:    5,
+				SafeOrIdleCount:   5,
+				HighRiskRatioPct:  ptr(0.0),
+				CannotSustainRisk: false,
+			},
+		},
+	}
+	trs, err = eval.Evaluate(ctx, store, EvalInput{
+		Instance:     inst,
+		Now:          now.Add(2 * time.Minute),
+		FieldQuality: FieldQualityMap{DomainPoolForecast: QualityStale},
+		PoolForecast: healthyForecast,
+	})
+	if err != nil {
+		t.Fatalf("eval stale recovery: %v", err)
+	}
+	if len(trs) != 0 {
+		t.Fatalf("stale pool_forecast must not resolve alert, got %+v", trs)
+	}
+
+	// 4. 同域 DomainPoolForecast == QualityTrusted 且 CannotSustainRisk=false（即使无关域 unauthorized）→ 自动恢复
+	trs, err = eval.Evaluate(ctx, store, EvalInput{
+		Instance: inst,
+		Now:      now.Add(3 * time.Minute),
+		FieldQuality: FieldQualityMap{
+			DomainPoolForecast:  QualityTrusted,
+			DomainSystemVersion: QualityUnauthorized,
+		},
+		PoolForecast: healthyForecast,
+	})
+	if err != nil {
+		t.Fatalf("eval recovery: %v", err)
+	}
+	rec := findTransition(trs, RulePoolCannotSustainReset, "group:9", DeliveryKindRecovery)
+	if rec == nil || rec.Event.State != EventStateResolved || rec.Event.ResolvedAt == nil {
+		t.Fatalf("expected pool_cannot_sustain_reset recovery for group:9, got %+v", trs)
+	}
+}

@@ -134,6 +134,17 @@ func (p *DefaultProber) ProbeInstance(ctx context.Context, inst TargetEndpoint, 
 			}},
 		)
 	}
+	if p1b, ok := p.client.(P1BClient); ok {
+		steps = append(steps,
+			struct {
+				endpoint string
+				fetch    func() (UpstreamFetchMeta, error)
+			}{EndpointGroupsCapacitySummary, func() (UpstreamFetchMeta, error) {
+				_, meta, err := p1b.FetchGroupCapacitySummary(ctx, inst)
+				return meta, err
+			}},
+		)
+	}
 	for _, step := range steps {
 		if err := ctx.Err(); err != nil {
 			return report, err

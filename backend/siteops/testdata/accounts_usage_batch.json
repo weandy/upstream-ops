@@ -1,0 +1,87 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "usage": {
+      "101": {
+        "source": "passive_cache",
+        "updated_at": "2026-11-24T06:00:00Z",
+        "five_hour": {
+          "utilization": 62.5,
+          "utilization_unknown": false,
+          "resets_at": "2026-11-24T09:00:00Z",
+          "remaining_seconds": 10800,
+          "window_stats": {
+            "requests": 145,
+            "tokens": 1240000,
+            "cost": 18.4,
+            "standard_cost": 24.0,
+            "user_cost": 31.2
+          }
+        },
+        "seven_day": {
+          "utilization": 41.2,
+          "utilization_unknown": false,
+          "resets_at": "2026-11-29T00:00:00Z",
+          "remaining_seconds": 410400,
+          "window_stats": {
+            "requests": 980,
+            "tokens": 8600000,
+            "cost": 122.5,
+            "standard_cost": 158.0,
+            "user_cost": 205.4
+          }
+        },
+        "seven_day_sonnet": {
+          "utilization": 28.0,
+          "utilization_unknown": false,
+          "resets_at": "2026-11-29T00:00:00Z",
+          "remaining_seconds": 410400
+        },
+        "seven_day_fable": {
+          "utilization": 10.5,
+          "utilization_unknown": false,
+          "resets_at": "2026-11-29T00:00:00Z",
+          "remaining_seconds": 410400
+        },
+        "credentials": {
+          "access_token": "secret-batch-access-101",
+          "refresh_token": "secret-batch-refresh-101"
+        },
+        "raw_headers": {
+          "Authorization": "Bearer sk-batch-header-secret"
+        }
+      },
+      "102": {
+        "updated_at": "2026-11-24T05:55:00Z",
+        "thirty_day": {
+          "utilization": 0,
+          "utilization_unknown": true,
+          "resets_at": "2026-12-20T00:00:00Z",
+          "remaining_seconds": 2224800
+        },
+        "gemini_shared_daily": {
+          "utilization": 55.0,
+          "utilization_unknown": false,
+          "resets_at": "2026-11-25T00:00:00Z",
+          "remaining_seconds": 65100
+        },
+        "gemini_pro_daily": {
+          "utilization": 33.3,
+          "utilization_unknown": false,
+          "resets_at": "2026-11-25T00:00:00Z",
+          "remaining_seconds": 65100
+        },
+        "gemini_flash_daily": {
+          "utilization": 12.1,
+          "utilization_unknown": false,
+          "resets_at": "2026-11-25T00:00:00Z",
+          "remaining_seconds": 65100
+        }
+      }
+    },
+    "errors": {
+      "103": "upstream auth failed Authorization: Bearer sk-live-batch-err-103 via https://ops:superpass@proxy.example.com"
+    }
+  }
+}

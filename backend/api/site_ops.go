@@ -179,7 +179,8 @@ func registerSiteOps(g *gin.RouterGroup, d *Deps) {
 			return
 		}
 		view := strings.TrimSpace(c.Query("view"))
-		if view == "" || view == "status" {
+		switch view {
+		case "", "status":
 			res, err := d.SiteOps.GetAccountsStatus(
 				c.Request.Context(),
 				id,
@@ -191,9 +192,52 @@ func registerSiteOps(g *gin.RouterGroup, d *Deps) {
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"data": res})
+		case "efficiency":
+			res, err := d.SiteOps.GetAccountsEfficiency(c.Request.Context(), id)
+			if err != nil {
+				failSiteOps(c, err)
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"data": res})
+		default:
+			fail(c, http.StatusBadRequest, errors.New("unsupported accounts view"))
+		}
+	})
+
+	sg.GET("/instances/:id/pool-forecast", func(c *gin.Context) {
+		id, ok := parseRequiredUintParam(c, "id")
+		if !ok {
 			return
 		}
-		fail(c, http.StatusBadRequest, errors.New("unsupported accounts view"))
+		res, err := d.SiteOps.GetPoolForecast(c.Request.Context(), id)
+		if err != nil {
+			failSiteOps(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": res})
+	})
+
+	sg.PUT("/instances/:id/accounts/:account_id/cost", func(c *gin.Context) {
+		id, ok := parseRequiredUintParam(c, "id")
+		if !ok {
+			return
+		}
+		accID, err := strconv.ParseInt(strings.TrimSpace(c.Param("account_id")), 10, 64)
+		if err != nil || accID <= 0 {
+			fail(c, http.StatusBadRequest, errors.New("invalid account_id"))
+			return
+		}
+		var in siteops.UpdateAccountCostInput
+		if err := c.ShouldBindJSON(&in); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+		res, err := d.SiteOps.UpdateAccountCost(c.Request.Context(), id, accID, in)
+		if err != nil {
+			failSiteOps(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": res})
 	})
 
 	sg.POST("/instances/:id/report/preview", func(c *gin.Context) {

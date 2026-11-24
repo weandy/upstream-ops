@@ -135,7 +135,13 @@ func (s *SiteOpsStore) DeleteInstance(ctx context.Context, id uint) error {
 		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsAlertDelivery{}).Error; err != nil {
 			return err
 		}
-		return tx.Where("instance_id = ?", id).Delete(&SiteOpsEvent{}).Error
+		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsEvent{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsAccountWindowSample{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("instance_id = ?", id).Delete(&SiteOpsAccountCost{}).Error
 	})
 }
 
@@ -444,6 +450,142 @@ func (s *SiteOpsStore) DeleteEventsBeforeChunked(ctx context.Context, cutoff tim
 
 func (s *SiteOpsStore) DeleteDeliveriesBeforeChunked(ctx context.Context, cutoff time.Time, batchSize, maxRows int, maxDuration time.Duration) (int64, error) {
 	return s.deleteBeforeChunkedByColumn(ctx, &SiteOpsAlertDelivery{}, "created_at", cutoff, batchSize, maxRows, maxDuration)
+}
+
+type windowSampleKey struct {
+	instanceID         uint
+	accountID          int64
+	source             string
+	windowKey          string
+	upstreamObservedAt int64
+}
+
+func (s *SiteOpsStore) UpsertWindowSamples(ctx context.Context, samples []SiteOpsAccountWindowSample) error {
+	if len(samples) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	deduped := make([]SiteOpsAccountWindowSample, 0, len(samples))
+	indexByKey := make(map[windowSampleKey]int, len(samples))
+	for _, sample := range samples {
+		row := sample
+		row.ID = 0
+		row.Source = strings.TrimSpace(row.Source)
+		if row.Source == "" {
+			row.Source = "passive_cache"
+		}
+		row.WindowKey = strings.TrimSpace(row.WindowKey)
+		row.UpstreamObservedAt = row.UpstreamObservedAt.UTC()
+		if row.ObservedAt.IsZero() {
+			row.ObservedAt = now
+		} else {
+			row.ObservedAt = row.ObservedAt.UTC()
+		}
+		if row.ResetsAt != nil {
+			t := row.ResetsAt.UTC()
+			row.ResetsAt = &t
+		}
+		key := windowSampleKey{
+			instanceID:         row.InstanceID,
+			accountID:          row.AccountID,
+			source:             row.Source,
+			windowKey:          row.WindowKey,
+			upstreamObservedAt: row.UpstreamObservedAt.UnixNano(),
+		}
+		if idx, exists := indexByKey[key]; exists {
+			deduped[idx] = row
+			continue
+		}
+		indexByKey[key] = len(deduped)
+		deduped = append(deduped, row)
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{
+				{Name: "instance_id"},
+				{Name: "account_id"},
+				{Name: "source"},
+				{Name: "window_key"},
+				{Name: "upstream_observed_at"},
+			},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"burn_rate_per_hour",
+				"eta_seconds",
+				"predicted_end_util",
+				"margin_hours",
+				"forecast_status",
+				"confidence",
+				"observed_at",
+			}),
+		}).CreateInBatches(&deduped, 100).Error
+	})
+}
+
+func (s *SiteOpsStore) ListWindowSamples(ctx context.Context, instanceID uint, accountID int64, windowKey, source string, since time.Time, limit int) ([]SiteOpsAccountWindowSample, error) {
+	if limit <= 0 {
+		limit = 500
+	} else if limit > 2000 {
+		limit = 2000
+	}
+	query := s.db.WithContext(ctx).Where("instance_id = ? AND account_id = ? AND observed_at >= ?", instanceID, accountID, since.UTC())
+	if windowKey = strings.TrimSpace(windowKey); windowKey != "" {
+		query = query.Where("window_key = ?", windowKey)
+	}
+	if source = strings.TrimSpace(source); source != "" {
+		query = query.Where("source = ?", source)
+	}
+	var rows []SiteOpsAccountWindowSample
+	err := query.Order("observed_at ASC, upstream_observed_at ASC, id ASC").Limit(limit).Find(&rows).Error
+	return rows, err
+}
+
+func (s *SiteOpsStore) ListLatestWindowSamplesByInstance(ctx context.Context, instanceID uint, since time.Time) ([]SiteOpsAccountWindowSample, error) {
+	var rows []SiteOpsAccountWindowSample
+	err := s.db.WithContext(ctx).
+		Where("instance_id = ? AND observed_at >= ?", instanceID, since.UTC()).
+		Order("observed_at ASC, upstream_observed_at ASC, id ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
+func (s *SiteOpsStore) DeleteWindowSamplesBeforeChunked(ctx context.Context, cutoff time.Time, batchSize, maxRows int, maxDuration time.Duration) (int64, error) {
+	return s.deleteBeforeChunkedByColumn(ctx, &SiteOpsAccountWindowSample{}, "observed_at", cutoff, batchSize, maxRows, maxDuration)
+}
+
+func (s *SiteOpsStore) UpsertAccountCost(ctx context.Context, cost *SiteOpsAccountCost) error {
+	if cost == nil {
+		return errors.New("site-ops account cost is nil")
+	}
+	row := *cost
+	row.ID = 0
+	if row.UpdatedAt.IsZero() {
+		row.UpdatedAt = time.Now().UTC()
+	} else {
+		row.UpdatedAt = row.UpdatedAt.UTC()
+	}
+	var stored SiteOpsAccountCost
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "instance_id"}, {Name: "account_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"monthly_cost_usd", "note", "updated_at"}),
+		}).Create(&row).Error; err != nil {
+			return err
+		}
+		return tx.Where("instance_id = ? AND account_id = ?", row.InstanceID, row.AccountID).Take(&stored).Error
+	})
+	if err == nil {
+		*cost = stored
+	}
+	return err
+}
+
+func (s *SiteOpsStore) ListAccountCosts(ctx context.Context, instanceID uint) ([]SiteOpsAccountCost, error) {
+	var rows []SiteOpsAccountCost
+	err := s.db.WithContext(ctx).
+		Where("instance_id = ?", instanceID).
+		Order("account_id ASC").
+		Find(&rows).Error
+	return rows, err
 }
 
 func (s *SiteOpsStore) deleteBeforeChunkedByColumn(ctx context.Context, model any, column string, cutoff time.Time, batchSize, maxRows int, maxDuration time.Duration) (int64, error) {

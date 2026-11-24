@@ -39,6 +39,7 @@ type DailyReportInput struct {
 	Upstream24hTTFTP95MS     *int
 	Upstream24hDurationP95MS *int
 	IncludeMaskedSummary     bool
+	PoolForecast             *PoolForecastResponse
 }
 
 // YesterdayWindowUTC8 精确计算昨日 UTC+8 的自然日窗口 [00:00:00, 24:00:00) 及其 UTC 边界。
@@ -223,7 +224,7 @@ func BuildDailyReport(in DailyReportInput) DailyReportPreview {
 		instName = fmt.Sprintf("instance#%d", in.Instance.ID)
 	}
 	subject := fmt.Sprintf("[站点运维日报] %s · %s", instName, dateLabel)
-	body := formatDailyReportBody(instName, dateLabel, metrics, firing)
+	body := formatDailyReportBody(instName, dateLabel, metrics, firing, in.PoolForecast)
 
 	return DailyReportPreview{
 		InstanceID:   in.Instance.ID,
@@ -246,7 +247,7 @@ func parseSnapshotFieldQuality(raw string) FieldQualityMap {
 	return out
 }
 
-func formatDailyReportBody(instName, dateLabel string, m DailyReportMetrics, firing []storage.SiteOpsEvent) string {
+func formatDailyReportBody(instName, dateLabel string, m DailyReportMetrics, firing []storage.SiteOpsEvent, pf *PoolForecastResponse) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "站点运维日报：%s（%s，UTC+8 00:00–24:00）\n", instName, dateLabel)
 	fmt.Fprintf(&b, "- 采样可达：%d / %d\n", m.ReachableSampleCount, m.SampleCount)
@@ -266,7 +267,14 @@ func formatDailyReportBody(instName, dateLabel string, m DailyReportMetrics, fir
 	if m.DurationP95MS24h != nil {
 		durStr = fmt.Sprintf("%dms", *m.DurationP95MS24h)
 	}
-	fmt.Fprintf(&b, "- 昨日 24h 延迟 P95：TTFT %s / 总耗时 %s（%s）\n", ttftStr, durStr, m.Latency24hNote)
+	latencyReason := m.Latency24hNote
+	switch latencyReason {
+	case dailyLatencyMissing:
+		latencyReason = "未采集上游 24h 延迟分位统计，不以 1h P95 平均冒充"
+	case dailyLatencyPartial:
+		latencyReason = "未采集到的上游 24h 延迟分位统计不以 1h P95 平均冒充"
+	}
+	fmt.Fprintf(&b, "- 昨日 24h 延迟 P95：TTFT %s / 总耗时 %s（%s）\n", ttftStr, durStr, latencyReason)
 
 	if m.PeakConcUsed != nil {
 		if m.PeakConcMax != nil && *m.PeakConcMax > 0 {
@@ -312,5 +320,36 @@ func formatDailyReportBody(instName, dateLabel string, m DailyReportMetrics, fir
 			fmt.Fprintf(&b, "  • 其余 %d 条未恢复告警已省略\n", len(firing)-limit)
 		}
 	}
+
+	if pf != nil && pf.ProvenCount > 0 {
+		if len(firing) == 0 {
+			b.WriteByte('\n')
+		}
+		var riskGroups []string
+		for _, g := range pf.Groups {
+			if !g.CannotSustainRisk {
+				continue
+			}
+			label := sanitizeReportText(g.GroupName, 64)
+			if label == "" {
+				label = fmt.Sprintf("group:%d", g.GroupID)
+			}
+			riskGroups = append(riskGroups, label)
+		}
+		fmt.Fprintf(&b, "- 号池周期预测风险（被动证实 %d 号）：已耗尽 %d、高危提前耗尽(will_exhaust_high) %d、临界提前耗尽(will_exhaust) %d",
+			pf.ProvenCount, pf.ExhaustedCount, pf.WillExhaustHighCount, pf.WillExhaustCount)
+		if len(riskGroups) > 0 {
+			display := riskGroups
+			suffix := ""
+			if len(display) > 8 {
+				display = display[:8]
+				suffix = fmt.Sprintf(" 等 %d 个高危分组", len(riskGroups))
+			}
+			fmt.Fprintf(&b, "；高危分组：%s%s", strings.Join(display, "、"), suffix)
+		} else {
+			b.WriteString("；高危分组：无")
+		}
+	}
+
 	return strings.TrimSpace(b.String())
 }
