@@ -391,3 +391,44 @@ func TestMailTestBatchRateLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMailFinishPreparationZeroRecipientsAndListExcludesTest(t *testing.T) {
+	f := newMailFixture(t)
+	testParams := f.p
+	testParams.Mode = "test"
+	testParams.RequestID = "test-excluded"
+	tb, err := f.CreateMailBatch(f.ctx, testParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.CancelMailBatch(f.ctx, testParams.Scope, tb.Batch.ID, testParams.Now); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.ListMailBatches(f.ctx, MailListParams{Scope: testParams.Scope, Limit: 20})
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("expected test batch excluded from ListMailBatches, got %+v err=%v", rows, err)
+	}
+
+	b, err := f.CreateMailBatch(f.ctx, f.p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := MailWorkKey{Scope: f.p.Scope, BatchID: b.Batch.ID, Owner: "prep-zero", Now: f.p.Now}
+	if _, err := f.LeaseMailBatch(f.ctx, w.Owner, w.Now, w.Now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.FinishMailPreparation(f.ctx, w, MailPrepareCounts{Pages: 1, Scanned: 5, Excluded: 2, Suppressed: 3}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.GetMailBatch(f.ctx, f.p.Scope, b.Batch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "completed" || got.ActiveSlot != nil || got.FinishedAt == nil || got.SuppressedCount != 3 || got.ExcludedCount != 2 || got.RecipientCount != 0 {
+		t.Fatalf("unexpected zero-recipient batch state: %+v", got)
+	}
+	rows, err = f.ListMailBatches(f.ctx, MailListParams{Scope: f.p.Scope, Limit: 20})
+	if err != nil || len(rows) != 1 || rows[0].ID != b.Batch.ID {
+		t.Fatalf("expected only non-test batch in ListMailBatches, got %+v err=%v", rows, err)
+	}
+}

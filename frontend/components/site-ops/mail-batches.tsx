@@ -56,6 +56,7 @@ function BatchDetail({ api, scope, id, visible, onSelect, onChanged }: Props & {
   const [batch, setBatch] = useState<MailBatchView>()
   const [page, setPage] = useState<{ cursor: string; status: string; data: MailCursorPage<MailItemView> }>()
   const [error, setError] = useState("")
+  const [notice, setNotice] = useState("")
   const last = useRef<MailBatchView | undefined>(undefined)
   const retryInput = useRef<RetryMailBatchInput | null>(null)
   const action = useMailAction()
@@ -105,13 +106,32 @@ function BatchDetail({ api, scope, id, visible, onSelect, onChanged }: Props & {
   function retryFailed() {
     if (!batch?.can_retry_failed || activeMailBatch(batch.status)) return
     if (!window.confirm("新建补发批次？仅补发确定失败项，排除结果未知（uncertain）的邮件。")) return
+    setNotice("")
     void action.run(async s => {
       if (!retryInput.current) {
         const smtp = await api.smtp(s)
         retryInput.current = { ...scope, request_id: mailRequestId(), smtp_revision: smtp.revision }
       }
-      return api.retryFailed(id, retryInput.current, s)
-    }, child => { onSelect(child.id); onChanged() })
+      try {
+        return await api.retryFailed(id, retryInput.current, s)
+      } catch (err) {
+        const { status } = mailErrorDetails(err)
+        if (status && status >= 400 && status < 500 && status !== 429) retryInput.current = null
+        throw err
+      }
+    }, child => { retryInput.current = null; onSelect(child.id); onChanged() })
+  }
+  function suppressItem(item: MailItemView) {
+    if (!window.confirm(`将 ${item.email_masked} 加入本站退订名单？后续群发将自动排除该地址。`)) return
+    setNotice("")
+    void action.run(s => api.addSuppressions({
+      ...scope,
+      item_id: item.id,
+      reason: item.hard_bounce_hint ? "hard_bounce" : "admin_added",
+    }, s), result => {
+      setNotice(result.added > 0 ? `已将 ${item.email_masked} 加入本站退订名单。` : `${item.email_masked} 已在本站退订名单中。`)
+      onChanged()
+    })
   }
   const items = page?.cursor === cursor && page.status === status ? page.data : undefined
   return <Card><CardContent className="space-y-4 pt-4 text-sm">
@@ -119,6 +139,7 @@ function BatchDetail({ api, scope, id, visible, onSelect, onChanged }: Props & {
       <h3 className="font-semibold">发送批次 #{id}</h3>{batch && <Badge variant="secondary">{batchStates[batch.status]}</Badge>}
       <Button size="sm" variant="ghost" onClick={() => setIteration(n => n + 1)}>刷新</Button></div>
     {(error || action.error) && <p role="alert">{action.error || error}</p>}
+    {notice && <p role="status">{notice}</p>}
     {batch ? <>
       <p>{batch.template_name} · 已扫描 {batch.pages} 页 / {batch.scanned} 人 · 收件人 {batch.recipient_count} · 排除 {batch.excluded_count} · 重复 {batch.duplicate_count}</p>
       <p>已发送 {batch.sent_count} · 确定失败 {batch.failed_count} · 结果未知 {batch.uncertain_count} · 已取消 {batch.cancelled_count} · 退订 {batch.suppressed_count}</p>
@@ -134,10 +155,13 @@ function BatchDetail({ api, scope, id, visible, onSelect, onChanged }: Props & {
     <label className="flex items-center gap-2">收件明细<select className={selectClass} value={status} onChange={e => {
       setStatus(e.target.value as typeof status); setHistory([""])
     }}><option value="">全部状态</option>{Object.entries(itemStates).map(([v, name]) => <option key={v} value={v}>{name}</option>)}</select></label>
-    <Table><TableHeader><TableRow>{["客户", "邮箱", "状态", "阶段 / SMTP", "响应码", "错误码", "退信提示"].map(name => <TableHead key={name}>{name}</TableHead>)}</TableRow></TableHeader>
+    <Table><TableHeader><TableRow>{["客户", "邮箱", "状态", "阶段 / SMTP", "响应码", "错误码", "退信提示", "操作"].map(name => <TableHead key={name}>{name}</TableHead>)}</TableRow></TableHeader>
       <TableBody>{items?.items?.map(item => <TableRow key={item.id}><TableCell>#{item.user_id}</TableCell><TableCell>{item.email_masked}</TableCell>
         <TableCell>{itemStates[item.status]}</TableCell><TableCell>{item.phase || "—"} / {item.smtp_stage || "—"}</TableCell>
         <TableCell>{item.smtp_code || "—"}</TableCell><TableCell>{item.error_code || "—"}</TableCell><TableCell>{item.hard_bounce_hint ? "疑似硬退信" : "—"}</TableCell>
+        <TableCell>{item.user_id > 0 && (item.hard_bounce_hint || item.status === "failed")
+          ? <Button size="sm" variant="outline" disabled={action.busy} onClick={() => suppressItem(item)}>加入退订</Button>
+          : "—"}</TableCell>
       </TableRow>)}</TableBody></Table>
     {items && !items.items?.length && <p>当前状态下暂无收件明细。</p>}
     <CursorControls history={history} next={items?.next_cursor} onChange={setHistory} />

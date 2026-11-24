@@ -100,7 +100,32 @@ export function MailPanel({ instance, draft, onConsume, onDirty, onActiveBatch }
         <Button key={id} size="sm" aria-pressed={view === id} variant={view === id ? "default" : "secondary"} onClick={() => changeView(id)}><Icon />{label}</Button>)}</nav>
     </CardContent></Card>
     {overview.error && <p role="alert" className="text-sm">{overview.error} <Button size="sm" variant="outline" onClick={overview.reload}>刷新概览</Button></p>}
-    {view === "compose" && <MailCompose api={api} scope={scope} seed={seed} smtpReady={data.smtp_ready} onDirty={markDirty} onCreated={created} />}
+    {view === null && <Card><CardContent className="space-y-4 pt-4 text-sm">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-md border p-3 space-y-1">
+          <p className="text-xs text-muted-foreground">发信通道（SMTP）</p>
+          <p className="font-medium">{data.smtp_ready ? `已就绪 · ${data.smtp_from_masked}` : "尚未配置"}</p>
+          <Button size="sm" variant="outline" onClick={() => setDialog("smtp")}>{data.smtp_ready ? "查看或测试 SMTP" : "去配置 SMTP"}</Button>
+        </div>
+        <div className="rounded-md border p-3 space-y-1">
+          <p className="text-xs text-muted-foreground">本站邮件模板</p>
+          <p className="font-medium tabular-nums">{data.template_count} 套可用模板</p>
+          <Button size="sm" variant="outline" onClick={() => changeView("templates")}>管理模板与安全预览</Button>
+        </div>
+        <div className="rounded-md border p-3 space-y-1">
+          <p className="text-xs text-muted-foreground">本站退订名单</p>
+          <p className="font-medium tabular-nums">{data.suppression_count} 个已排除地址</p>
+          <Button size="sm" variant="outline" onClick={() => setDialog("suppressions")}>管理退订名单</Button>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" onClick={() => changeView("compose")}>发起新群发</Button>
+        <Button size="sm" variant="outline" onClick={() => changeView("batches", data.active_batch?.id ?? null)}>
+          {data.active_batch ? `查看活跃批次 #${data.active_batch.id}` : "查看历史发送批次"}
+        </Button>
+      </div>
+    </CardContent></Card>}
+    {view === "compose" && <MailCompose key={seed?.nonce ?? "manual"} api={api} scope={scope} seed={seed} smtpReady={data.smtp_ready} onDirty={markDirty} onCreated={created} />}
     {view === "batches" && <MailBatches api={api} scope={scope} batchId={batchId} onSelect={setBatchId} visible={!dialog} onChanged={overview.reload} />}
     {view === "templates" && <MailTemplates api={api} scope={scope} sources={data.copyable_sources ?? []} onDirty={markDirty} onChanged={overview.reload} />}
     {dialog === "smtp" && <MailSMTPDialog api={api} scope={scope} sources={data.copyable_sources ?? []} onDirty={markDialogDirty} onClose={() => setDialog(null)} onChanged={overview.reload} />}

@@ -98,10 +98,16 @@ func (m *MailSite) Overview(mode MailSecurityMode) (out MailOverview, err error)
 		}
 		source, e := m.s.MailSite(m.ctx, inst.ID)
 		if e != nil {
+			if errors.Is(e, ErrInstanceNotFound) || errors.Is(e, ErrMailResourceNotFound) || errors.Is(e, ErrMailGenerationMismatch) {
+				continue
+			}
 			return out, e
 		}
 		row, e := source.SMTP()
 		if e != nil {
+			if errors.Is(e, ErrInstanceNotFound) || errors.Is(e, ErrMailResourceNotFound) || errors.Is(e, ErrMailGenerationMismatch) {
+				continue
+			}
 			return out, e
 		}
 		out.CopyableSources = append(out.CopyableSources, MailCopySource{InstanceID: inst.ID, Name: inst.Name, Generation: source.key.Generation, CredGen: source.key.CredGen, SMTPRevision: row.Revision})
@@ -260,6 +266,13 @@ func (m *MailSite) CopySMTP(in MailCopyInput) (out MailSMTPView, err error) {
 	id, pw, err := src.smtpSecrets(r)
 	if err != nil {
 		return
+	}
+	if r.UnsubscribeURL != "" {
+		dest, de := url.Parse(r.UnsubscribeURL)
+		base, be := url.Parse(m.inst.BaseURL)
+		if de != nil || (dest.Scheme == "https" && (be != nil || !strings.EqualFold(dest.Host, base.Host))) {
+			r.UnsubscribeURL = ""
+		}
 	}
 	r.Revision = in.ExpectedRevision + 1
 	if err = m.sealSMTP(&r, id, pw); err != nil {

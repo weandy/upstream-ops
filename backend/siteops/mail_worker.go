@@ -54,16 +54,16 @@ func (s *Service) interruptMailBatch(id, batch uint) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mailWorker != nil {
-		s.mailWorker.interrupt(id, batch)
+		s.mailWorker.interrupt(id, batch, false)
 	}
 }
-func (w *mailWorker) interrupt(id, batch uint) {
+func (w *mailWorker) interrupt(id, batch uint, force bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for j := range w.jobs {
 		if (id == 0 || j.batch.InstanceID == id) && (batch == 0 || j.batch.ID == batch) {
 			j.cancel()
-			if batch == 0 {
+			if force {
 				j.force()
 			}
 		}
@@ -78,7 +78,7 @@ func (w *mailWorker) Stop(grace time.Duration) {
 	case <-w.done:
 		return
 	case <-timer.C:
-		w.interrupt(0, 0)
+		w.interrupt(0, 0, true)
 		<-w.done
 	}
 }

@@ -27,14 +27,31 @@ func mailCacheHeaders(c *gin.Context) {
 	c.Next()
 }
 
-type mailAuthResponseWriter struct{ gin.ResponseWriter }
+type mailAuthResponseWriter struct {
+	gin.ResponseWriter
+	wrote401 bool
+}
+
+const mailAuthRequired401Body = `{"code":"SITE_OPS_MAIL_AUTH_REQUIRED","error":"需要管理员身份验证"}`
 
 func (w *mailAuthResponseWriter) Write(body []byte) (int, error) {
-	if w.Status() == 401 {
-		_, err := w.ResponseWriter.Write([]byte(`{"code":"SITE_OPS_MAIL_AUTH_REQUIRED","error":"需要管理员身份验证"}`))
+	if w.Status() == http.StatusUnauthorized {
+		if w.wrote401 {
+			return len(body), nil
+		}
+		w.wrote401 = true
+		_, err := w.ResponseWriter.Write([]byte(mailAuthRequired401Body))
 		return len(body), err
 	}
 	return w.ResponseWriter.Write(body)
+}
+
+func (w *mailAuthResponseWriter) WriteString(s string) (int, error) {
+	if w.Status() == http.StatusUnauthorized {
+		_, err := w.Write([]byte(s))
+		return len(s), err
+	}
+	return w.ResponseWriter.WriteString(s)
 }
 
 func mailFail(c *gin.Context, e error) {

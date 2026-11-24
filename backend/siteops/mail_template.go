@@ -205,10 +205,11 @@ type MailMessageHeaders struct {
 }
 
 func BuildMailMIME(h MailMessageHeaders, m RenderedMailTemplate) ([]byte, error) {
-	from, err := NormalizeBareEmail(h.FromEmail)
+	bareFrom, err := NormalizeBareEmail(h.FromEmail)
 	if err != nil {
 		return nil, err
 	}
+	from := bareFrom
 	to, err := NormalizeBareEmail(h.To)
 	if err != nil {
 		return nil, err
@@ -217,7 +218,7 @@ func BuildMailMIME(h MailMessageHeaders, m RenderedMailTemplate) ([]byte, error)
 		return nil, ErrMailTemplateInvalid
 	}
 	if h.FromName != "" {
-		from = mailEncodedWords(h.FromName) + " <" + from + ">"
+		from = mailEncodedWords(h.FromName) + " <" + bareFrom + ">"
 	}
 	if h.Date.IsZero() {
 		h.Date = time.Now()
@@ -228,7 +229,7 @@ func BuildMailMIME(h MailMessageHeaders, m RenderedMailTemplate) ([]byte, error)
 	}
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
-	fmt.Fprintf(&b, "Date: %s\r\nMessage-ID: <%s@%s>\r\nFrom: %s\r\nTo: %s\r\nSubject: %s\r\n", h.Date.Format(time.RFC1123Z), hex.EncodeToString(id[:]), strings.Split(h.FromEmail, "@")[1], from, to, mailEncodedWords(m.Subject))
+	fmt.Fprintf(&b, "Date: %s\r\nMessage-ID: <%s@%s>\r\nFrom: %s\r\nTo: %s\r\nSubject: %s\r\n", h.Date.Format(time.RFC1123Z), hex.EncodeToString(id[:]), strings.Split(bareFrom, "@")[1], from, to, mailEncodedWords(m.Subject))
 	if h.ReplyTo != "" {
 		reply, err := NormalizeBareEmail(h.ReplyTo)
 		if err != nil {

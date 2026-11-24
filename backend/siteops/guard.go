@@ -333,7 +333,7 @@ func (g *OutboundGuard) ValidateSMTPHostPort(host string, port int) error {
 		}
 		return ErrMailSMTPConfigBlocked
 	}
-	if !validMailHostname(host) || !strings.Contains(host, ".") && len(p.cidrs) == 0 && !(p.allowLoopback && isLocalhostName(host)) {
+	if !validMailHostname(host) || (isLocalhostName(host) && !p.allowLoopback) || (!strings.Contains(host, ".") && len(p.cidrs) == 0 && !(p.allowLoopback && isLocalhostName(host))) {
 		return ErrMailSMTPConfigBlocked
 	}
 	return nil

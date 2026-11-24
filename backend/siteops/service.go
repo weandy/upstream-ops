@@ -164,7 +164,7 @@ func (s *Service) ApplyRuntimeConfig(authActive bool, siteCfg config.SiteOpsConf
 	s.invalidateAnalytics(0, "policy")
 	s.cfg, s.auth = siteCfg, authActive
 	if s.mailWorker != nil {
-		s.mailWorker.interrupt(0, 0)
+		s.mailWorker.interrupt(0, 0, false)
 	}
 }
 
@@ -266,7 +266,7 @@ func (s *Service) UpdateInstance(ctx context.Context, id uint, input UpdateInsta
 		return nil, err
 	}
 	if s.mailWorker != nil {
-		s.mailWorker.interrupt(id, 0)
+		s.mailWorker.interrupt(id, 0, false)
 	}
 	reason := "update"
 	if previous.BaseURL != inst.BaseURL || previous.CredGen != inst.CredGen {
@@ -420,7 +420,7 @@ func (s *Service) DeleteInstance(ctx context.Context, id uint) error {
 		return err
 	}
 	if s.mailWorker != nil {
-		s.mailWorker.interrupt(id, 0)
+		s.mailWorker.interrupt(id, 0, false)
 	}
 	return nil
 }

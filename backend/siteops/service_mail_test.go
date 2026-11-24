@@ -138,3 +138,60 @@ func TestMailSMTPTestWaitReturnsPending(t *testing.T) {
 		t.Fatal(b)
 	}
 }
+
+func TestMailCopySMTPClearsCrossSiteUnsubscribeAndGuardBlocksSubLocalhost(t *testing.T) {
+	guard := NewOutboundGuard(false, nil, nil)
+	if err := guard.ValidateSMTPHostPort("sub.localhost", 465); !errors.Is(err, ErrMailSMTPConfigBlocked) {
+		t.Fatalf("expected sub.localhost blocked when allowLoopback=false, got %v", err)
+	}
+	h := newMailHarness(t)
+	// Source has HTTPS unsubscribe URL on source host; target has different host.
+	_, err := h.SaveSMTP(SaveMailSMTPInput{
+		MailScopeInput: h.scope, ExpectedRevision: 1, Host: "smtp.example.com", Port: 465,
+		TLSMode: MailTLSModeImplicit, AuthMode: MailAuthModePlain,
+		UnsubscribeURL: "mailto:unsub@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := h.s.CreateInstance(h.ctx, CreateInstanceInput{Name: "Target", APIKey: "fixture", BaseURL: "https://target.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := h.s.MailSite(h.ctx, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, err := tm.CopySMTP(MailCopyInput{
+		MailScopeInput: MailScopeInput{target.Generation, target.CredGen},
+		SourceInstanceID: h.inst.ID, SourceGeneration: h.scope.Generation, SourceCredGen: h.scope.CredGen, SourceRevision: 2,
+	})
+	if err != nil || copied.UnsubscribeURL != "mailto:unsub@example.com" {
+		t.Fatalf("expected mailto preserved on copy, got %+v err=%v", copied, err)
+	}
+	httpsSrc, err := h.s.CreateInstance(h.ctx, CreateInstanceInput{Name: "HTTPSSource", APIKey: "fixture", BaseURL: "https://source.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm, err := h.s.MailSite(h.ctx, httpsSrc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sm.SaveSMTP(SaveMailSMTPInput{
+		MailScopeInput: MailScopeInput{httpsSrc.Generation, httpsSrc.CredGen},
+		Host: "smtp.example.com", Port: 465, TLSMode: MailTLSModeImplicit, AuthMode: MailAuthModePlain,
+		Username: ptr("u"), Password: ptr("p"), FromEmail: ptr("from@source.example.com"),
+		UnsubscribeURL: "https://source.example.com/unsub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied2, err := tm.CopySMTP(MailCopyInput{
+		MailScopeInput: MailScopeInput{target.Generation, target.CredGen},
+		ExpectedRevision: copied.Revision,
+		SourceInstanceID: httpsSrc.ID, SourceGeneration: httpsSrc.Generation, SourceCredGen: httpsSrc.CredGen, SourceRevision: 1,
+	})
+	if err != nil || copied2.UnsubscribeURL != "" {
+		t.Fatalf("expected cross-host https unsubscribe cleared on copy, got %+v err=%v", copied2, err)
+	}
+}

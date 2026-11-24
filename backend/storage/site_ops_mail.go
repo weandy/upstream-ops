@@ -352,7 +352,7 @@ func (s *SiteOpsStore) GetMailBatch(ctx context.Context, k MailScopeKey, id uint
 
 func (s *SiteOpsStore) ListMailBatches(ctx context.Context, p MailListParams) (rows []SiteOpsMailBatch, err error) {
 	err = s.mailScopeTx(ctx, p.Scope, func(tx *gorm.DB) error {
-		q := mailScopeRows(tx, p.Scope).Where("status <> ?", mailDeleting)
+		q := mailScopeRows(tx, p.Scope).Where("status <> ? AND mode <> ?", mailDeleting, "test")
 		if p.Status != "" {
 			q = q.Where("status = ?", p.Status)
 		}
@@ -816,11 +816,12 @@ func (s *SiteOpsStore) FinishMailPreparation(ctx context.Context, w MailWorkKey,
 		if err := mailItems(tx, b).Count(&n).Error; err != nil {
 			return err
 		}
-		fields := map[string]any{"pages": c.Pages, "scanned": c.Scanned, "excluded_count": c.Excluded, "duplicate_count": c.Duplicate, "suppressed_count": b.SuppressedCount + c.Suppressed, "recipient_count": n, "status": "queued", "next_work_at": w.Now.UTC(), "owner": "", "lease_until": nil}
+		fields := map[string]any{"pages": c.Pages, "scanned": c.Scanned, "excluded_count": c.Excluded, "duplicate_count": c.Duplicate, "recipient_count": n, "status": "queued", "next_work_at": w.Now.UTC(), "owner": "", "lease_until": nil}
 		if err := tx.Model(b).Updates(fields).Error; err != nil {
 			return err
 		}
-		_, err := recountMail(tx, b, w.Now.UTC(), 0)
+		b.Status = "queued"
+		_, err := recountMail(tx, b, w.Now.UTC(), c.Suppressed)
 		return err
 	})
 }

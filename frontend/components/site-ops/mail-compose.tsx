@@ -52,7 +52,11 @@ export function MailCompose({ api, scope, seed, smtpReady, onDirty, onCreated }:
   }
   function prepareConfirmation() {
     if (invalid || !selected) return
-    void action.run(s => api.smtp(s), smtp => setConfirmation({
+    void action.run(async s => {
+      const smtp = await api.smtp(s)
+      if (!smtp.revision) throw Object.assign(new Error("MAIL_SMTP_NOT_READY"), { status: 409, body: { code: "MAIL_SMTP_NOT_READY" } })
+      return smtp
+    }, smtp => setConfirmation({
       ...scope, request_id: mailRequestId(), smtp_revision: smtp.revision, template_id: selected.id,
       template_revision: selected.revision, audience,
     }))
