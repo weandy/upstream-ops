@@ -54,14 +54,39 @@ export function GroupsMatrixPanel({ data }: { data: SiteOpsGroupsResponse }) {
               <TableHead><span className="inline-flex items-center gap-1">配置并发容量 <MetricNote label="配置并发容量口径">{capacityNote}</MetricNote></span></TableHead>
               <TableHead>并发使用 / 等待</TableHead>
               <TableHead>负载</TableHead>
-              <TableHead>单点风险</TableHead>
+              <TableHead>会话容量</TableHead>
+              <TableHead>RPM 容量</TableHead>
+              <TableHead>单点 / 号池风险</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {groups.length === 0 && <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground">暂无分组容量记录。</TableCell></TableRow>}
+            {groups.length === 0 && <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground">暂无分组容量记录。</TableCell></TableRow>}
             {groups.map((group) => {
               const rowQuality = quality === "trusted" ? group.trust_state || "unavailable" : quality
               const { load_percent: load } = group
+              const hasSessionsCap =
+                rowQuality === "trusted" &&
+                group.sessions_max != null &&
+                Number.isFinite(group.sessions_max) &&
+                group.sessions_max > 0
+              const hasSessionsUsed =
+                group.sessions_used != null && Number.isFinite(group.sessions_used)
+              const sessionsPct =
+                hasSessionsCap && hasSessionsUsed
+                  ? Math.min(100, Math.max(0, (group.sessions_used! / group.sessions_max!) * 100))
+                  : null
+              const hasRpmCap =
+                rowQuality === "trusted" &&
+                group.rpm_max != null &&
+                Number.isFinite(group.rpm_max) &&
+                group.rpm_max > 0
+              const hasRpmUsed =
+                group.rpm_used != null && Number.isFinite(group.rpm_used)
+              const rpmPct =
+                hasRpmCap && hasRpmUsed
+                  ? Math.min(100, Math.max(0, (group.rpm_used! / group.rpm_max!) * 100))
+                  : null
+              const exhaustRiskCount = group.pool_exhaust_risk_count ?? 0
               return (
                 <TableRow key={group.group_id}>
                   <TableCell className="font-medium">{group.group_name}</TableCell>
@@ -83,10 +108,58 @@ export function GroupsMatrixPanel({ data }: { data: SiteOpsGroupsResponse }) {
                     </div>
                   </TableCell>
                   <TableCell>
-                    {group.single_point_risk ? (
-                      rowQuality === "trusted"
-                        ? <Badge variant="destructive">可用号 ≤ 1</Badge>
-                        : <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-300">单点风险待核实</Badge>
+                    {hasSessionsCap ? (
+                      <div className="min-w-24 space-y-1 text-xs tabular-nums">
+                        <span>
+                          会话 {hasSessionsUsed ? group.sessions_used : "—"} / {group.sessions_max}
+                        </span>
+                        {sessionsPct !== null && (
+                          <Progress
+                            className="h-1.5"
+                            aria-label={`${group.group_name} 会话容量`}
+                            value={sessionsPct}
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {hasRpmCap ? (
+                      <div className="min-w-24 space-y-1 text-xs tabular-nums">
+                        <span>
+                          RPM {hasRpmUsed ? group.rpm_used : "—"} / {group.rpm_max}
+                        </span>
+                        {rpmPct !== null && (
+                          <Progress
+                            className="h-1.5"
+                            aria-label={`${group.group_name} RPM 容量`}
+                            value={rpmPct}
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {group.single_point_risk || exhaustRiskCount > 0 ? (
+                      <div className="flex flex-wrap items-center gap-1">
+                        {group.single_point_risk && (
+                          rowQuality === "trusted"
+                            ? <Badge variant="destructive">可用号 ≤ 1</Badge>
+                            : <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-300">单点风险待核实</Badge>
+                        )}
+                        {exhaustRiskCount > 0 && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                          >
+                            预测高危 {exhaustRiskCount} 号
+                          </Badge>
+                        )}
+                      </div>
                     ) : <span className="text-muted-foreground">—</span>}
                   </TableCell>
                 </TableRow>
