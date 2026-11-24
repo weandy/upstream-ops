@@ -93,12 +93,13 @@ func registerNotifications(g *gin.RouterGroup, d *Deps) {
 }
 
 type notifyChannelInput struct {
-	Name          string                          `json:"name" binding:"required"`
-	Type          storage.NotificationChannelType `json:"type" binding:"required"`
-	Config        string                          `json:"config"` // JSON string；编辑时可留空保留原值
-	Subscriptions string                          `json:"subscriptions"`
-	Enabled       bool                            `json:"enabled"`
-	ProxyEnabled  bool                            `json:"proxy_enabled"`
+	Name                 string                          `json:"name" binding:"required"`
+	Type                 storage.NotificationChannelType `json:"type" binding:"required"`
+	Config               string                          `json:"config"` // JSON string；编辑时可留空保留原值
+	Subscriptions        string                          `json:"subscriptions"`
+	SiteOpsSubscriptions string                          `json:"site_ops_subscriptions"`
+	Enabled              bool                            `json:"enabled"`
+	ProxyEnabled         bool                            `json:"proxy_enabled"`
 }
 
 // normalizeSubscriptions 把输入的订阅 JSON 字符串规整为 "[]" 或合法订阅规则数组。
@@ -133,18 +134,24 @@ func createNotifyChannel(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
+	siteOpsSubs, err := notify.NormalizeSiteOpsSubscription(in.SiteOpsSubscriptions)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
 	cipherCfg, err := d.Cipher.Encrypt(in.Config)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}
 	ch := &storage.NotificationChannel{
-		Name:          in.Name,
-		Type:          in.Type,
-		ConfigCipher:  cipherCfg,
-		Subscriptions: subs,
-		Enabled:       in.Enabled,
-		ProxyEnabled:  in.ProxyEnabled,
+		Name:                 in.Name,
+		Type:                 in.Type,
+		ConfigCipher:         cipherCfg,
+		Subscriptions:        subs,
+		SiteOpsSubscriptions: siteOpsSubs,
+		Enabled:              in.Enabled,
+		ProxyEnabled:         in.ProxyEnabled,
 	}
 	if err := d.Notifies.CreateChannel(ch); err != nil {
 		fail(c, http.StatusInternalServerError, err)
@@ -174,11 +181,17 @@ func updateNotifyChannel(c *gin.Context, d *Deps) {
 		fail(c, http.StatusBadRequest, err)
 		return
 	}
+	siteOpsSubs, err := notify.NormalizeSiteOpsSubscription(in.SiteOpsSubscriptions)
+	if err != nil {
+		fail(c, http.StatusBadRequest, err)
+		return
+	}
 	ch.Name = in.Name
 	ch.Type = in.Type
 	ch.Enabled = in.Enabled
 	ch.ProxyEnabled = in.ProxyEnabled
 	ch.Subscriptions = subs
+	ch.SiteOpsSubscriptions = siteOpsSubs
 	if in.Config != "" {
 		cipherCfg, err := d.Cipher.Encrypt(in.Config)
 		if err != nil {

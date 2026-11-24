@@ -94,6 +94,51 @@ func (d *Dispatcher) Send(ctx context.Context, ch *storage.NotificationChannel, 
 	return err
 }
 
+// ListEnabledChannels 列出全部启用的通知渠道（供 siteops 专用直投按显式订阅筛选）。
+func (d *Dispatcher) ListEnabledChannels() ([]storage.NotificationChannel, error) {
+	if d == nil || d.repo == nil {
+		return nil, errors.New("notification repository is not configured")
+	}
+	return d.repo.ListEnabledChannels()
+}
+
+// SendDirect 向单个已启用通知渠道直接发送一条消息（供 siteops 告警/日报专用）。
+// 不走 fanout、不写 notification_logs 与 notification_cooldowns，也不做阻塞重试。
+func (d *Dispatcher) SendDirect(ctx context.Context, channelID uint, subject, body string) error {
+	if d == nil || d.repo == nil {
+		return errors.New("notification repository is not configured")
+	}
+	if d.cipher == nil {
+		return errors.New("notification cipher is not configured")
+	}
+	ch, err := d.repo.FindChannel(channelID)
+	if err != nil {
+		return fmt.Errorf("find notification channel %d: %w", channelID, err)
+	}
+	if !ch.Enabled {
+		return fmt.Errorf("notification channel %d (%s) is disabled", ch.ID, ch.Name)
+	}
+	msg := d.withNotificationPrefix(Message{
+		Subject: subject,
+		Body:    body,
+	})
+	cfgJSON, err := d.cipher.Decrypt(ch.ConfigCipher)
+	if err != nil {
+		return fmt.Errorf("decrypt %s: %w", ch.Name, err)
+	}
+	n, err := Build(ch, cfgJSON)
+	if err != nil {
+		return fmt.Errorf("build %s: %w", ch.Name, err)
+	}
+	if err := d.applyProxy(ch, n); err != nil {
+		return fmt.Errorf("proxy %s: %w", ch.Name, err)
+	}
+	if err := n.Send(ctx, msg); err != nil {
+		return fmt.Errorf("send via %s: %w", ch.Name, err)
+	}
+	return nil
+}
+
 // Dispatch 按事件类型广播到所有启用的通知渠道，返回累计错误（部分失败也会写日志）。
 //
 // 订阅过滤：渠道配置 Subscriptions 非空时，必须有任意一条订阅命中 msg 才发送；

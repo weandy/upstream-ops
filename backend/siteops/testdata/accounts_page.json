@@ -1,0 +1,54 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "id": 101,
+        "name": "claude-main-01",
+        "platform": "anthropic",
+        "type": "oauth",
+        "status": "ACTIVE",
+        "schedulable": true,
+        "concurrency": 8,
+        "priority": 10,
+        "group_ids": [10, 11],
+        "expires_at": "2027-01-01T00:00:00Z",
+        "rate_limit_reset_at": null,
+        "overload_until": null,
+        "temp_unschedulable_until": null,
+        "error_message": "",
+        "credentials": {
+          "access_token": "secret-access-token-101",
+          "refresh_token": "secret-refresh-token-101",
+          "api_key": "sk-ant-secret-101"
+        },
+        "proxy": {
+          "url": "http://proxyuser:proxypass@10.0.0.2:8080",
+          "password": "proxypass-should-not-leak"
+        }
+      },
+      {
+        "id": 102,
+        "name": "codex-pool-02",
+        "platform": "openai",
+        "type": "apikey",
+        "status": "ERROR",
+        "schedulable": false,
+        "concurrency": 4,
+        "priority": 20,
+        "group_ids": [20],
+        "rate_limit_reset_at": "2026-11-24T06:00:00Z",
+        "overload_until": "2026-11-24T05:30:00Z",
+        "temp_unschedulable_until": "2026-11-24T05:45:00Z",
+        "error_message": "upstream 401 rejected x-api-key: sk-live-secret-20260101 via https://user:secretpass@proxy.example.com",
+        "credentials": {
+          "api_key": "sk-live-secret-20260101"
+        }
+      }
+    ],
+    "total": 2,
+    "page": 1,
+    "page_size": 100
+  }
+}
