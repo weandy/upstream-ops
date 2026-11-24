@@ -17,6 +17,7 @@ import { OverviewPanel } from "@/components/site-ops/overview-panel"
 import { PoolForecastPanel } from "@/components/site-ops/pool-forecast-panel"
 import { TrendsPanel } from "@/components/site-ops/trends-panel"
 import { useRefreshTick } from "@/lib/refresh-context"
+import { countAbnormalAccounts } from "@/lib/site-ops-analytics"
 import {
   deleteSiteOpsInstance,
   fetchSiteOpsAccountsEfficiency,
@@ -147,21 +148,10 @@ export default function SiteOpsPage() {
     (currentForecast?.data?.will_exhaust_high_count ?? 0) +
     (currentForecast?.data?.exhausted_count ?? 0)
 
-  const abnormalAccountsCount = (() => {
-    if (currentAccounts?.data) {
-      if (currentAccounts.data.trust_state !== "trusted") return 0
-      return (currentAccounts.data.items ?? []).filter(
-        (item) => item.has_error || item.rate_limited || item.overloaded || !item.ops_available,
-      ).length
-    }
-    const latest = currentDetails?.overview?.latest
-    if (!latest || latest.field_quality?.account_availability !== "trusted") return 0
-    return (
-      (latest.accounts_error ?? 0) +
-      (latest.accounts_rate_limited ?? 0) +
-      (latest.accounts_overloaded ?? 0)
-    )
-  })()
+  const abnormalAccountsCount = countAbnormalAccounts(
+    currentAccounts?.data,
+    currentDetails?.overview?.latest,
+  )
 
   const firingEventsCount = currentEvents?.data?.firing_count ?? 0
 
