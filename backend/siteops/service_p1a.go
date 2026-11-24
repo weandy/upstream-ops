@@ -156,11 +156,13 @@ func (s *Service) PreviewDailyReport(ctx context.Context, id uint) (*DailyReport
 		}
 	}
 	cfg := ParseAlertConfig(inst.AlertConfigJSON)
+	poolForecast, _ := s.poller.LatestPoolForecast(id)
 	preview := BuildDailyReport(DailyReportInput{
 		Instance:             *inst,
 		Now:                  now,
 		Snapshots:            snapshots,
 		ActiveEvents:         activeEvents,
+		PoolForecast:         poolForecast,
 		IncludeMaskedSummary: cfg.IncludeMaskedSummary,
 	})
 	return &preview, nil

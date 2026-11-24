@@ -151,7 +151,30 @@ func TestSiteOpsEndToEndCRUDProbeRefreshOverviewGroups(t *testing.T) {
 		case "/api/v1/admin/system/version":
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(verJSON)
+		case "/api/v1/admin/groups/capacity-summary":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(loadSiteOpsFixture(t, "groups_capacity_summary.json"))
+		case "/api/v1/admin/accounts":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(loadSiteOpsFixture(t, "accounts_page.json"))
+		case "/api/v1/admin/accounts/usage/batch":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(loadSiteOpsFixture(t, "accounts_usage_batch.json"))
+		case "/api/v1/admin/ops/alert-events":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(loadSiteOpsFixture(t, "ops_alert_events.json"))
+		case "/api/v1/admin/ops/ingress-rejections/health":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(loadSiteOpsFixture(t, "ops_ingress_health.json"))
+		case "/api/v1/admin/ops/auth-cache-invalidation/health":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(loadSiteOpsFixture(t, "ops_auth_cache_health.json"))
 		default:
+			if bytes.HasPrefix([]byte(r.URL.Path), []byte("/api/v1/admin/accounts/")) && bytes.HasSuffix([]byte(r.URL.Path), []byte("/stats")) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(loadSiteOpsFixture(t, "account_stats.json"))
+				return
+			}
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
@@ -198,22 +221,35 @@ func TestSiteOpsEndToEndCRUDProbeRefreshOverviewGroups(t *testing.T) {
 		t.Fatalf("expected sanitized hint and active status, got %+v", createResp.Data)
 	}
 
-	// 3. Probe + Refresh + Overview + Trends + Groups + Wave 2 (Events / Accounts / Report Preview & Send).
+	// 3. Probe + Refresh + Overview + Trends + Groups + Wave 2 + Wave 3 (Pool Forecast / Efficiency / Account Cost).
 	for _, tc := range []struct {
 		method string
 		path   string
+		body   string
 	}{
-		{http.MethodPost, "/api/site-ops/instances/1/probe"},
-		{http.MethodPost, "/api/site-ops/instances/1/refresh"},
-		{http.MethodGet, "/api/site-ops/instances/1/overview"},
-		{http.MethodGet, "/api/site-ops/instances/1/trends?range=6h"},
-		{http.MethodGet, "/api/site-ops/instances/1/groups"},
-		{http.MethodGet, "/api/site-ops/instances/1/events"},
-		{http.MethodGet, "/api/site-ops/instances/1/accounts?view=status"},
-		{http.MethodPost, "/api/site-ops/instances/1/report/preview"},
-		{http.MethodPost, "/api/site-ops/instances/1/report/send"},
+		{http.MethodPost, "/api/site-ops/instances/1/probe", ""},
+		{http.MethodPost, "/api/site-ops/instances/1/refresh", ""},
+		{http.MethodGet, "/api/site-ops/instances/1/overview", ""},
+		{http.MethodGet, "/api/site-ops/instances/1/trends?range=6h", ""},
+		{http.MethodGet, "/api/site-ops/instances/1/groups", ""},
+		{http.MethodGet, "/api/site-ops/instances/1/events", ""},
+		{http.MethodGet, "/api/site-ops/instances/1/accounts?view=status", ""},
+		{http.MethodPost, "/api/site-ops/instances/1/report/preview", ""},
+		{http.MethodPost, "/api/site-ops/instances/1/report/send", ""},
+		{http.MethodGet, "/api/site-ops/instances/1/pool-forecast", ""},
+		{http.MethodPut, "/api/site-ops/instances/1/accounts/101/cost", `{"monthly_cost_usd":20,"note":"Pro 月租"}`},
+		{http.MethodGet, "/api/site-ops/instances/1/accounts?view=efficiency", ""},
 	} {
-		req := httptest.NewRequest(tc.method, tc.path, nil)
+		var bodyReader *bytes.Buffer
+		if tc.body != "" {
+			bodyReader = bytes.NewBufferString(tc.body)
+		} else {
+			bodyReader = bytes.NewBuffer(nil)
+		}
+		req := httptest.NewRequest(tc.method, tc.path, bodyReader)
+		if tc.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {

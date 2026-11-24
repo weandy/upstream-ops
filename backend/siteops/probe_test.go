@@ -57,6 +57,8 @@ func TestProbeFallbackForbiddenAndRecovery(t *testing.T) {
 			io.WriteString(w, `{"code":0,"data":{"outbox":{"running":true}}}`)
 		case "/api/v1/admin/accounts":
 			io.WriteString(w, `{"code":0,"data":{"items":[],"total":0,"page":1,"page_size":100}}`)
+		case "/api/v1/admin/groups/capacity-summary":
+			io.WriteString(w, `{"code":0,"data":[]}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -91,6 +93,7 @@ func TestProbeFallbackForbiddenAndRecovery(t *testing.T) {
 		healthPath, snapshotPath, overviewPath, concurrencyPath, availabilityPath, groupsPath, versionPath,
 		"/api/v1/admin/ops/alert-events", "/api/v1/admin/ops/ingress-rejections/health",
 		"/api/v1/admin/ops/auth-cache-invalidation/health", "/api/v1/admin/accounts",
+		"/api/v1/admin/groups/capacity-summary",
 	}
 	if !slices.Equal(firstRequests, wantInitial) {
 		t.Fatalf("initial probe order = %v", firstRequests)
@@ -118,6 +121,7 @@ func TestProbeFallbackForbiddenAndRecovery(t *testing.T) {
 		overviewPath, healthPath, snapshotPath, concurrencyPath, availabilityPath, groupsPath, versionPath,
 		"/api/v1/admin/ops/alert-events", "/api/v1/admin/ops/ingress-rejections/health",
 		"/api/v1/admin/ops/auth-cache-invalidation/health", "/api/v1/admin/accounts",
+		"/api/v1/admin/groups/capacity-summary",
 	}
 	if !slices.Equal(secondRequests, wantSecond) {
 		t.Fatalf("poll and reprobe order = %v", secondRequests)

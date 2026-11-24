@@ -21,6 +21,7 @@ import (
 type ServiceDeps struct {
 	Store          Store
 	EventStore     EventStore
+	P1BStore       P1BStore
 	Notifier       DirectNotifier
 	Cipher         *crypto.Cipher
 	Validator      OutboundValidator
@@ -36,12 +37,13 @@ type ServiceDeps struct {
 }
 
 type Service struct {
-	deps   ServiceDeps
-	poller *Poller
-	mu     sync.Mutex
-	cfg    config.SiteOpsConfig
-	auth   bool
-	active bool
+	deps      ServiceDeps
+	poller    *Poller
+	mu        sync.Mutex
+	cfg       config.SiteOpsConfig
+	auth      bool
+	active    bool
+	statsCache map[uint]cachedAccountStats
 }
 
 func NewService(deps ServiceDeps) *Service {
@@ -50,16 +52,21 @@ func NewService(deps ServiceDeps) *Service {
 			deps.EventStore = es
 		}
 	}
+	if deps.P1BStore == nil && deps.Store != nil {
+		if ps, ok := deps.Store.(P1BStore); ok {
+			deps.P1BStore = ps
+		}
+	}
 	cfg := copySiteOpsConfig(deps.InitialConfig)
 	poller := NewPoller(PollerDeps{
-		Store: deps.Store, EventStore: deps.EventStore, Notifier: deps.Notifier, Cipher: deps.Cipher, Validator: deps.Validator, Client: deps.Client, Prober: deps.Prober,
+		Store: deps.Store, EventStore: deps.EventStore, P1BStore: deps.P1BStore, Notifier: deps.Notifier, Cipher: deps.Cipher, Validator: deps.Validator, Client: deps.Client, Prober: deps.Prober,
 		Log: deps.Log, InitialConfig: cfg, Now: deps.Now, Jitter: deps.Jitter, SanitizeError: deps.SanitizeError,
 	})
 	if deps.Validator != nil {
 		deps.Validator.UpdatePolicy(cfg.AllowLoopback, cfg.AllowedOrigins, cfg.AllowedCIDRs)
 	}
 	poller.SetPollingAllowed(IsPollingAllowed(deps.AuthActive, cfg))
-	return &Service{deps: deps, poller: poller, cfg: cfg, auth: deps.AuthActive}
+	return &Service{deps: deps, poller: poller, cfg: cfg, auth: deps.AuthActive, statsCache: make(map[uint]cachedAccountStats)}
 }
 
 // SetNotifier 注入专用直投通知器（零广播、不碰旧 fanout 与 notification_cooldowns）。
@@ -207,6 +214,9 @@ func (s *Service) UpdateInstance(ctx context.Context, id uint, input UpdateInsta
 		return nil, err
 	}
 	s.poller.ReconcileInstance(inst)
+	if credentialTargetChanged(*previous, inst) {
+		s.invalidateStatsCacheLocked(id)
+	}
 	updated, err := s.deps.Store.GetInstance(ctx, id)
 	if err != nil {
 		return nil, err
@@ -341,6 +351,7 @@ func (s *Service) DeleteInstance(ctx context.Context, id uint) error {
 		return err
 	}
 	s.poller.RemoveInstance(id)
+	s.invalidateStatsCacheLocked(id)
 	if err := s.deps.Store.DeleteInstance(ctx, id); err != nil {
 		if !errors.Is(err, ErrInstanceNotFound) {
 			s.poller.ReconcileInstance(*inst)
@@ -485,7 +496,9 @@ func (s *Service) GetGroups(ctx context.Context, id uint) (*GroupsResponse, erro
 			AccountsOpsAvailable: row.AccountsOpsAvailable, AccountsRateLimited: row.AccountsRateLimited,
 			AccountsOverloaded: row.AccountsOverloaded, AccountsError: row.AccountsError,
 			SinglePointRisk: row.AccountsTotal > 0 && row.AccountsOpsAvailable <= 1,
-			ConcUsed:        row.ConcUsed, ConcMax: row.ConcMax, ConcWaiting: row.ConcWaiting, LoadPercent: loadPercent(row.ConcUsed, row.ConcMax)}
+			ConcUsed:        row.ConcUsed, ConcMax: row.ConcMax, ConcWaiting: row.ConcWaiting, LoadPercent: loadPercent(row.ConcUsed, row.ConcMax),
+			SessionsUsed: row.SessionsUsed, SessionsMax: row.SessionsMax, RPMUsed: row.RPMUsed, RPMMax: row.RPMMax,
+			PoolExhaustRiskCount: row.PoolExhaustRiskCount}
 		switch item.TrustState {
 		case QualityUnverifiedZero:
 			item.TrustReason = "归档中的实时计数未证实"
@@ -558,7 +571,9 @@ func archiveGroups(id uint, groups []GroupCapacityItem) []storage.SiteOpsGroupSn
 			Platform: group.Platform, ObservedAt: group.ObservedAt, TrustState: string(group.TrustState),
 			AccountsTotal: group.AccountsTotal, AccountsOpsAvailable: group.AccountsOpsAvailable, AccountsRateLimited: group.AccountsRateLimited,
 			AccountsOverloaded: group.AccountsOverloaded, AccountsError: group.AccountsError,
-			ConcUsed: group.ConcUsed, ConcMax: group.ConcMax, ConcWaiting: group.ConcWaiting})
+			ConcUsed: group.ConcUsed, ConcMax: group.ConcMax, ConcWaiting: group.ConcWaiting,
+			SessionsUsed: group.SessionsUsed, SessionsMax: group.SessionsMax, RPMUsed: group.RPMUsed, RPMMax: group.RPMMax,
+			PoolExhaustRiskCount: group.PoolExhaustRiskCount})
 	}
 	return rows
 }
@@ -583,6 +598,8 @@ func cloneGroupsView(response GroupsResponse) *GroupsResponse {
 		group := &response.Groups[i]
 		group.ConcUsed, group.ConcMax = cloneSiteOpsValue(group.ConcUsed), cloneSiteOpsValue(group.ConcMax)
 		group.ConcWaiting, group.LoadPercent = cloneSiteOpsValue(group.ConcWaiting), cloneSiteOpsValue(group.LoadPercent)
+		group.SessionsUsed, group.SessionsMax = cloneSiteOpsValue(group.SessionsUsed), cloneSiteOpsValue(group.SessionsMax)
+		group.RPMUsed, group.RPMMax = cloneSiteOpsValue(group.RPMUsed), cloneSiteOpsValue(group.RPMMax)
 	}
 	response.PlatformBreakdown = slices.Clone(response.PlatformBreakdown)
 	for i := range response.PlatformBreakdown {

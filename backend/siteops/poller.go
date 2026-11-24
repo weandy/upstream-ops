@@ -19,8 +19,10 @@ const (
 	capabilityRetryWindow   = 6 * time.Hour
 	liveGroupsTTL           = 60 * time.Second
 	liveAccountsTTL         = 10 * time.Minute
+	liveForecastTTL         = 15 * time.Minute
 	metadataRefreshPeriod   = 5 * time.Minute
 	l2RefreshPeriod         = 5 * time.Minute
+	l2LargePoolPeriod       = 10 * time.Minute
 	l3AccountsRefreshPeriod = 30 * time.Minute
 	deliveryRetryTick       = 30 * time.Second
 	dailyReportCheckTick    = time.Minute
@@ -29,6 +31,7 @@ const (
 type PollerDeps struct {
 	Store         Store
 	EventStore    EventStore
+	P1BStore      P1BStore
 	Notifier      DirectNotifier
 	Cipher        *crypto.Cipher
 	Validator     OutboundValidator
@@ -47,19 +50,23 @@ type Poller struct {
 	mu        sync.Mutex
 	wg        sync.WaitGroup
 
-	cfg       config.SiteOpsConfig
-	running   bool
-	allowed   bool
-	bgCancel  context.CancelFunc
-	instances map[uint]storage.SiteOpsInstance
-	workers   map[uint]*instanceWorker
-	tails     map[uint]chan struct{}
-	security  map[uint]pollSecurity
-	live      map[uint]liveGroupSample
-	accounts  map[uint]liveAccountsSample
-	evaluator *EventEvaluator
-	alerter   *AlertDispatcher
-	dailySent map[uint]string
+	cfg          config.SiteOpsConfig
+	running      bool
+	allowed      bool
+	bgCancel     context.CancelFunc
+	instances    map[uint]storage.SiteOpsInstance
+	workers      map[uint]*instanceWorker
+	tails        map[uint]chan struct{}
+	security     map[uint]pollSecurity
+	live         map[uint]liveGroupSample
+	accounts     map[uint]liveAccountsSample
+	accountsDir  map[uint][]SanitizedAccountSummary
+	groupMeta    map[uint][]SanitizedGroupInfo
+	forecasts    map[uint]livePoolForecastSample
+	usageWindows map[uint]map[int64][]SanitizedUsageWindow
+	evaluator    *EventEvaluator
+	alerter      *AlertDispatcher
+	dailySent    map[uint]string
 }
 
 type liveGroupSample struct {
@@ -69,6 +76,11 @@ type liveGroupSample struct {
 
 type liveAccountsSample struct {
 	response AccountsStatusResponse
+	cachedAt time.Time
+}
+
+type livePoolForecastSample struct {
+	response PoolForecastResponse
 	cachedAt time.Time
 }
 
@@ -108,19 +120,29 @@ type instanceWorker struct {
 	last          *storage.SiteOpsSnapshot
 	trusted       *storage.SiteOpsSnapshot
 	trustedGroups bool
-	lastArchive     time.Time
-	groupMetadata   []SanitizedGroupInfo
-	lastL2At        time.Time
-	lastAccountsAt  time.Time
-	authCacheHealth *SanitizedAuthCacheHealth
-	ingressHealth   *SanitizedIngressRejectHealth
-	accountsDir     []SanitizedAccountSummary
+	lastArchive        time.Time
+	groupMetadata      []SanitizedGroupInfo
+	lastL2At           time.Time
+	lastAccountsAt     time.Time
+	lastGroupCapAt     time.Time
+	lastPassiveUsageAt time.Time
+	authCacheHealth    *SanitizedAuthCacheHealth
+	ingressHealth      *SanitizedIngressRejectHealth
+	accountsDir        []SanitizedAccountSummary
+	groupCapSummary    map[int64]SanitizedGroupCapacitySummary
+	latestUsageWindows map[int64][]SanitizedUsageWindow
+	latestForecast     *PoolForecastResponse
 }
 
 func NewPoller(deps PollerDeps) *Poller {
 	if deps.EventStore == nil && deps.Store != nil {
 		if es, ok := deps.Store.(EventStore); ok {
 			deps.EventStore = es
+		}
+	}
+	if deps.P1BStore == nil && deps.Store != nil {
+		if ps, ok := deps.Store.(P1BStore); ok {
+			deps.P1BStore = ps
 		}
 	}
 	if deps.Now == nil {
@@ -148,6 +170,8 @@ func NewPoller(deps PollerDeps) *Poller {
 		instances: make(map[uint]storage.SiteOpsInstance), workers: make(map[uint]*instanceWorker),
 		tails: make(map[uint]chan struct{}), security: make(map[uint]pollSecurity),
 		live: make(map[uint]liveGroupSample), accounts: make(map[uint]liveAccountsSample),
+		accountsDir: make(map[uint][]SanitizedAccountSummary), groupMeta: make(map[uint][]SanitizedGroupInfo),
+		forecasts: make(map[uint]livePoolForecastSample), usageWindows: make(map[uint]map[int64][]SanitizedUsageWindow),
 		evaluator: evaluator, alerter: alerter, dailySent: make(map[uint]string),
 	}
 }
@@ -310,6 +334,10 @@ func (p *Poller) stopWorkerLocked(id uint) {
 	}
 	delete(p.live, id)
 	delete(p.accounts, id)
+	delete(p.accountsDir, id)
+	delete(p.groupMeta, id)
+	delete(p.forecasts, id)
+	delete(p.usageWindows, id)
 	if p.deps.Client != nil {
 		p.deps.Client.ResetInstanceState(id)
 	}
@@ -757,6 +785,7 @@ func (w *instanceWorker) collect(commitCtx, batch context.Context, archiveInterv
 		return r.persist(commitCtx, nil, nil, nil, nil, nil)
 	}
 	r.patch.LastObservedAt, r.patch.LastVerifiedAt, r.patch.LastHealthScore = &snap.ObservedAt, &snap.VerifiedAt, &snap.HealthScore
+	w.enrichGroupsP1B(out.Groups)
 	live := groupsView(w.instance.ID, &snap.ObservedAt, out.FieldQuality[DomainGroupCapacity], out.Detail.ConcTrustReason, out.Detail.PlatformBreakdown, out.Groups)
 	var liveAccounts *AccountsStatusResponse
 	if in.Availability != nil || in.Concurrency != nil || len(w.accountsDir) > 0 {
@@ -899,6 +928,22 @@ func (r *collectionRound) collectAdmin(ctx context.Context, target TargetEndpoin
 			}
 		}
 	}
+	if p1b, ok := client.(P1BClient); ok && !r.haltAdmin && ctx.Err() == nil {
+		if w.lastGroupCapAt.IsZero() || r.now.Sub(w.lastGroupCapAt) >= l2RefreshPeriod {
+			capList, _ := roundFetch(r, ctx, EndpointGroupsCapacitySummary, "", make(FieldQualityMap), func() ([]SanitizedGroupCapacitySummary, UpstreamFetchMeta, error) {
+				return p1b.FetchGroupCapacitySummary(ctx, target)
+			})
+			if capList != nil {
+				capMap := make(map[int64]SanitizedGroupCapacitySummary, len(capList))
+				for _, item := range capList {
+					capMap[item.GroupID] = item
+				}
+				w.groupCapSummary = capMap
+				w.lastGroupCapAt = r.now
+			}
+		}
+		w.collectPassivePoolForecast(ctx, r, p1b, target, in, quality)
+	}
 	return meta
 }
 
@@ -976,6 +1021,20 @@ func (r *collectionRound) persist(ctx context.Context, snap *storage.SiteOpsSnap
 	if liveAccounts != nil {
 		p.accounts[id] = liveAccountsSample{response: *liveAccounts, cachedAt: p.now()}
 	}
+	if len(w.accountsDir) > 0 {
+		p.accountsDir[id] = cloneAccountsDir(w.accountsDir)
+	}
+	if len(w.groupMetadata) > 0 {
+		gm := make([]SanitizedGroupInfo, len(w.groupMetadata))
+		copy(gm, w.groupMetadata)
+		p.groupMeta[id] = gm
+	}
+	if w.latestForecast != nil {
+		p.forecasts[id] = livePoolForecastSample{response: *clonePoolForecastResponse(*w.latestForecast), cachedAt: p.now()}
+	}
+	if len(w.latestUsageWindows) > 0 {
+		p.usageWindows[id] = cloneUsageWindowsMap(w.latestUsageWindows)
+	}
 	return nil
 }
 
@@ -1024,7 +1083,8 @@ func (w *instanceWorker) probe(commitCtx, batch context.Context) (*ProbeReport, 
 	for endpoint, cap := range report.Capabilities {
 		switch endpoint {
 		case EndpointHealth, EndpointOpsSnapshotV2, EndpointOpsOverview, EndpointOpsConcurrency, EndpointOpsAccountAvail,
-			EndpointGroupsAll, EndpointSystemVersion, EndpointOpsAlertEvents, EndpointOpsIngressHealth, EndpointOpsAuthCacheHealth, EndpointAccounts:
+			EndpointGroupsAll, EndpointSystemVersion, EndpointOpsAlertEvents, EndpointOpsIngressHealth, EndpointOpsAuthCacheHealth,
+			EndpointAccounts, EndpointGroupsCapacitySummary:
 		default:
 			continue
 		}
@@ -1203,6 +1263,7 @@ func (w *instanceWorker) evaluateAfterCollect(
 		Groups:             groups,
 		Accounts:           accounts,
 		AuthCacheHealth:    w.authCacheHealth,
+		PoolForecast:       w.latestForecast,
 		Auth401Consecutive: r.security.unauthorized,
 		Auth401CredGen:     w.instance.CredGen,
 		AuthVerified:       r.authenticated,
@@ -1305,11 +1366,13 @@ func (p *Poller) checkScheduledDailyReports(ctx context.Context) {
 			continue
 		}
 		cfg := ParseAlertConfig(inst.AlertConfigJSON)
+		poolForecast, _ := p.LatestPoolForecast(inst.ID)
 		preview := BuildDailyReport(DailyReportInput{
 			Instance:             inst,
 			Now:                  now,
 			Snapshots:            snapshots,
 			ActiveEvents:         active,
+			PoolForecast:         poolForecast,
 			IncludeMaskedSummary: cfg.IncludeMaskedSummary,
 		})
 		_, _, err = alerter.DispatchDailyReport(runCtx, inst, preview)
@@ -1322,4 +1385,194 @@ func (p *Poller) checkScheduledDailyReports(ctx context.Context) {
 		p.dailySent[inst.ID] = dateLabel
 		p.mu.Unlock()
 	}
+}
+
+func (w *instanceWorker) enrichGroupsP1B(groups []GroupCapacityItem) {
+	if len(groups) == 0 {
+		return
+	}
+	riskByGroup := make(map[int64]int)
+	if w.latestForecast != nil {
+		for _, g := range w.latestForecast.Groups {
+			riskByGroup[g.GroupID] = g.ExhaustedCount + g.WillExhaustHighCount
+		}
+	}
+	for i := range groups {
+		g := &groups[i]
+		if capSummary, ok := w.groupCapSummary[g.GroupID]; ok {
+			if capSummary.SessionsMax > 0 || capSummary.SessionsUsed > 0 {
+				su, sm := capSummary.SessionsUsed, capSummary.SessionsMax
+				g.SessionsUsed, g.SessionsMax = &su, &sm
+			}
+			if capSummary.RPMMax > 0 || capSummary.RPMUsed > 0 {
+				ru, rm := capSummary.RPMUsed, capSummary.RPMMax
+				g.RPMUsed, g.RPMMax = &ru, &rm
+			}
+		}
+		if risk, ok := riskByGroup[g.GroupID]; ok {
+			g.PoolExhaustRiskCount = risk
+		}
+	}
+}
+
+func (w *instanceWorker) collectPassivePoolForecast(
+	ctx context.Context,
+	r *collectionRound,
+	p1b P1BClient,
+	target TargetEndpoint,
+	in *AnalyzeInput,
+	quality FieldQualityMap,
+) {
+	if len(w.accountsDir) == 0 {
+		return
+	}
+	passiveIDs := make([]int64, 0, len(w.accountsDir))
+	metaByID := make(map[int64]SanitizedAccountSummary, len(w.accountsDir))
+	for _, acc := range w.accountsDir {
+		metaByID[acc.AccountID] = acc
+		if support, _ := EvaluatePassiveSupport(acc.Platform, acc.Type); support == PassiveSupportProven {
+			passiveIDs = append(passiveIDs, acc.AccountID)
+		}
+	}
+
+	// 大池（>100 被动订阅号）自动将 L2 被动拉取周期放宽至 10m（Design §2.4）。
+	interval := l2RefreshPeriod
+	if len(passiveIDs) > 100 {
+		interval = l2LargePoolPeriod
+	}
+	if !w.lastPassiveUsageAt.IsZero() && r.now.Sub(w.lastPassiveUsageAt) < interval {
+		return
+	}
+
+	windowViews := make(map[int64][]WindowForecastView)
+	rawWindows := make(map[int64][]SanitizedUsageWindow)
+
+	if len(passiveIDs) > 0 {
+		batchRes, _ := roundFetch(r, ctx, EndpointAccountsUsageBatch, DomainPoolForecast, quality, func() (*SanitizedBatchUsageResult, UpstreamFetchMeta, error) {
+			return p1b.FetchAccountsUsageBatch(ctx, target, passiveIDs)
+		})
+		if batchRes == nil {
+			return
+		}
+		var historyByKey map[windowHistKey][]storage.SiteOpsAccountWindowSample
+		if w.poller.deps.P1BStore != nil {
+			if rows, err := w.poller.deps.P1BStore.ListLatestWindowSamplesByInstance(ctx, w.instance.ID, r.now.Add(-7*24*time.Hour)); err == nil {
+				historyByKey = make(map[windowHistKey][]storage.SiteOpsAccountWindowSample)
+				for _, row := range rows {
+					hk := windowHistKey{accountID: row.AccountID, windowKey: row.WindowKey, source: row.Source}
+					historyByKey[hk] = append(historyByKey[hk], row)
+				}
+			}
+		}
+		var newSamples []storage.SiteOpsAccountWindowSample
+		for accID, usage := range batchRes.Usage {
+			meta, ok := metaByID[accID]
+			if !ok {
+				continue
+			}
+			source := usage.Source
+			if source == "" {
+				source = "passive_cache"
+			}
+			upAt := r.now
+			if usage.UpdatedAt != nil && !usage.UpdatedAt.IsZero() {
+				upAt = usage.UpdatedAt.UTC()
+			}
+			rawWindows[accID] = append(rawWindows[accID], usage.Windows...)
+			accRateLimited := false
+			if in.Availability != nil {
+				if av, exists := in.Availability.Accounts[accID]; exists {
+					accRateLimited = av.RateLimited
+				}
+			}
+			for _, win := range usage.Windows {
+				hk := windowHistKey{accountID: accID, windowKey: win.WindowKey, source: source}
+				var hist []storage.SiteOpsAccountWindowSample
+				if historyByKey != nil {
+					hist = historyByKey[hk]
+				}
+				view, sample := EvaluateWindowForecast(WindowForecastInput{
+					InstanceID:         w.instance.ID,
+					AccountID:          accID,
+					AccountName:        meta.Name,
+					Platform:           meta.Platform,
+					AccountType:        meta.Type,
+					Source:             source,
+					Window:             win,
+					UpstreamObservedAt: upAt,
+					ObservedAt:         r.now,
+					WindowExhausted:    accRateLimited && win.Utilization >= 100,
+					History:            hist,
+				})
+				windowViews[accID] = append(windowViews[accID], view)
+				if sample != nil {
+					newSamples = append(newSamples, *sample)
+				}
+			}
+		}
+		if len(newSamples) > 0 && w.poller.deps.P1BStore != nil {
+			if err := w.poller.deps.P1BStore.UpsertWindowSamples(ctx, newSamples); err != nil {
+				w.poller.deps.Log.Warn("站点运维窗口样本落库失败", "instance_id", w.instance.ID, "err", err)
+			}
+		}
+		quality[DomainPoolForecast] = QualityTrusted
+	} else {
+		// 站点当前无被动证实账号：零 usage/batch 请求，但仍产出透明的被动准入矩阵视图。
+		quality[DomainPoolForecast] = QualityTrusted
+	}
+
+	ts := r.now
+	resp := BuildPoolForecast(w.instance.ID, &ts, quality[DomainPoolForecast], w.accountsDir, w.groupMetadata, windowViews)
+	w.latestForecast = &resp
+	w.latestUsageWindows = rawWindows
+	w.lastPassiveUsageAt = r.now
+}
+
+type windowHistKey struct {
+	accountID int64
+	windowKey string
+	source    string
+}
+
+func (p *Poller) LatestPoolForecast(instanceID uint) (*PoolForecastResponse, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	sample, found := p.forecasts[instanceID]
+	if !found || p.now().Sub(sample.cachedAt) > liveForecastTTL {
+		return nil, false
+	}
+	return clonePoolForecastResponse(sample.response), true
+}
+
+func (p *Poller) LatestAccountsDirectory(instanceID uint) []SanitizedAccountSummary {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return cloneAccountsDir(p.accountsDir[instanceID])
+}
+
+func (p *Poller) CacheAccountsDirectory(instanceID uint, dir []SanitizedAccountSummary) {
+	if len(dir) == 0 {
+		return
+	}
+	p.mu.Lock()
+	p.accountsDir[instanceID] = cloneAccountsDir(dir)
+	p.mu.Unlock()
+}
+
+func (p *Poller) LatestGroupMetadata(instanceID uint) []SanitizedGroupInfo {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	src := p.groupMeta[instanceID]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]SanitizedGroupInfo, len(src))
+	copy(out, src)
+	return out
+}
+
+func (p *Poller) LatestUsageWindows(instanceID uint) map[int64][]SanitizedUsageWindow {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return cloneUsageWindowsMap(p.usageWindows[instanceID])
 }
