@@ -26,7 +26,7 @@ const (
 	DefaultRefreshSec    = 15
 	MaxRefreshSec        = 3600
 	DefaultHistoryLimit  = 48
-	DefaultPelicanLimit  = 12
+	DefaultPelicanLimit  = 48
 )
 
 var (

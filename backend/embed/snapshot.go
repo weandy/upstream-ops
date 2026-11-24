@@ -156,6 +156,15 @@ type PelicanGalleryItem struct {
 	ObservedAt      time.Time
 }
 
+// PelicanDayGroup 按本地自然日分组的 Pelican 画廊分区。
+type PelicanDayGroup struct {
+	Date       string // YYYY-MM-DD（本地时区，与页面展示时间一致）
+	Label      string // 如「今天」「昨天」或 YYYY-MM-DD
+	ShortLabel string // 顶部快速跳转标签：如「今天」「昨天」或 MM-DD
+	Weekday    string // 如「周二」
+	Items      []PelicanGalleryItem
+}
+
 // PelicanGalleryView Pelican 画廊页数据模型。
 type PelicanGalleryView struct {
 	Site        SitePublicMeta
@@ -165,6 +174,7 @@ type PelicanGalleryView struct {
 	ModelName   string
 	GeneratedAt time.Time
 	Items       []PelicanGalleryItem
+	DayGroups   []PelicanDayGroup
 }
 
 // BuildSiteSnapshot 为指定嵌入站点聚合只读公开快照（使用批量查询消除 N+1 读放大）。
@@ -465,15 +475,58 @@ func (s *Service) BuildPelicanGallery(site *SiteDTO, targetSlug string, limit in
 		modelName = items[0].ModelName
 	}
 
+	now := s.nowUTC()
 	return &PelicanGalleryView{
 		Site:        sitePublicMeta(site),
 		TargetName:  target.Name,
 		TargetSlug:  target.Slug,
 		Family:      target.Family,
 		ModelName:   modelName,
-		GeneratedAt: s.nowUTC(),
+		GeneratedAt: now,
 		Items:       items,
+		DayGroups:   groupPelicanItemsByDay(items, now),
 	}, nil
+}
+
+var weekdayCN = [...]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
+
+func groupPelicanItemsByDay(items []PelicanGalleryItem, now time.Time) []PelicanDayGroup {
+	if len(items) == 0 {
+		return []PelicanDayGroup{}
+	}
+	nowLocal := now.Local()
+	todayKey := nowLocal.Format("2006-01-02")
+	yesterdayKey := nowLocal.AddDate(0, 0, -1).Format("2006-01-02")
+
+	groups := make([]PelicanDayGroup, 0, 7)
+	indexByDate := make(map[string]int, 7)
+	for _, item := range items {
+		localTime := item.ObservedAt.Local()
+		dateKey := localTime.Format("2006-01-02")
+		if idx, ok := indexByDate[dateKey]; ok {
+			groups[idx].Items = append(groups[idx].Items, item)
+			continue
+		}
+		label := dateKey
+		shortLabel := localTime.Format("01-02")
+		switch dateKey {
+		case todayKey:
+			label = "今天"
+			shortLabel = "今天"
+		case yesterdayKey:
+			label = "昨天"
+			shortLabel = "昨天"
+		}
+		indexByDate[dateKey] = len(groups)
+		groups = append(groups, PelicanDayGroup{
+			Date:       dateKey,
+			Label:      label,
+			ShortLabel: shortLabel,
+			Weekday:    weekdayCN[localTime.Weekday()],
+			Items:      []PelicanGalleryItem{item},
+		})
+	}
+	return groups
 }
 
 // ResolvePelicanArtifact 校验访问边界并返回单张 Pelican HTML/SVG 文档。

@@ -276,3 +276,93 @@ func TestSnapshotAndArtifactAccessBoundary(t *testing.T) {
 		t.Fatalf("expected ErrArtifactNotFound for private target artifact, got %v", err)
 	}
 }
+
+func TestBuildPelicanGalleryGroupsByDayAndSkipsReusedOrFailed(t *testing.T) {
+	svc, intel := openTestEmbedEnv(t)
+	nowLocal := time.Date(2026, 11, 24, 18, 0, 0, 0, time.Local)
+	svc.NowFunc = func() time.Time { return nowLocal.UTC() }
+
+	target, err := intel.CreateTarget(intelligence.TargetInput{
+		Name:         "codex-gallery",
+		Slug:         "codex-gallery",
+		Family:       storage.ProbeFamilyCodex,
+		SourceKind:   storage.ProbeSourceDirect,
+		BaseURL:      "https://api.example.com",
+		APIKey:       "sk-test-123456",
+		Protocol:     storage.ProbeProtocolOpenAIChat,
+		Enabled:      true,
+		EmbedVisible: true,
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if _, err := intel.SaveTargetDetectors(target.ID, []intelligence.DetectorConfigInput{
+		{DetectorKey: intelligence.DetectorKeyPelican, Enabled: true, ModelName: "gpt-5.3-codex", IntervalSeconds: 3600, EmbedVisible: true},
+	}); err != nil {
+		t.Fatalf("save detectors: %v", err)
+	}
+
+	site, err := svc.CreateSite(SiteInput{
+		Slug:               "gallery-site",
+		Title:              "画廊测试",
+		Enabled:            true,
+		ShowIdentityColumn: true,
+	})
+	if err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+
+	appendRun := func(ts time.Time, status string, reusedFrom *uint) *storage.ProbeIntelligenceRun {
+		r := &storage.ProbeIntelligenceRun{
+			TargetID:        target.ID,
+			DetectorKey:     intelligence.DetectorKeyPelican,
+			ModelName:       "gpt-5.3-codex",
+			Status:          status,
+			Summary:         "已生成画面",
+			LatencyMS:       2100,
+			ArtifactSVG:     "<!doctype html><html><body><svg></svg></body></html>",
+			ReusedFromRunID: reusedFrom,
+			ObservedAt:      ts.UTC(),
+		}
+		if err := intel.Runs.Append(r); err != nil {
+			t.Fatalf("append run: %v", err)
+		}
+		return r
+	}
+
+	todayLate := appendRun(nowLocal.Add(-1*time.Hour), storage.IntelligenceStatusNormal, nil)
+	todayEarly := appendRun(nowLocal.Add(-5*time.Hour), storage.IntelligenceStatusNormal, nil)
+	_ = appendRun(nowLocal.Add(-30*time.Minute), storage.IntelligenceStatusError, nil)
+	_ = appendRun(nowLocal.Add(-10*time.Minute), storage.IntelligenceStatusNormal, &todayLate.ID)
+	yesterdayRun := appendRun(nowLocal.AddDate(0, 0, -1).Add(-2*time.Hour), storage.IntelligenceStatusNormal, nil)
+	olderDay := nowLocal.AddDate(0, 0, -3)
+	olderRun := appendRun(olderDay, storage.IntelligenceStatusNormal, nil)
+
+	view, err := svc.BuildPelicanGallery(site, "codex-gallery", 0)
+	if err != nil {
+		t.Fatalf("BuildPelicanGallery: %v", err)
+	}
+	if len(view.Items) != 4 {
+		t.Fatalf("expected 4 valid pelican items (skipping error & reused), got %d", len(view.Items))
+	}
+	if len(view.DayGroups) != 3 {
+		t.Fatalf("expected 3 day groups, got %d: %+v", len(view.DayGroups), view.DayGroups)
+	}
+
+	if view.DayGroups[0].Label != "今天" || view.DayGroups[0].ShortLabel != "今天" || len(view.DayGroups[0].Items) != 2 {
+		t.Fatalf("unexpected today group: %+v", view.DayGroups[0])
+	}
+	if view.DayGroups[0].Items[0].RunUUID != todayLate.RunUUID || view.DayGroups[0].Items[1].RunUUID != todayEarly.RunUUID {
+		t.Fatalf("expected newest-first order within today group")
+	}
+
+	if view.DayGroups[1].Label != "昨天" || view.DayGroups[1].ShortLabel != "昨天" || len(view.DayGroups[1].Items) != 1 || view.DayGroups[1].Items[0].RunUUID != yesterdayRun.RunUUID {
+		t.Fatalf("unexpected yesterday group: %+v", view.DayGroups[1])
+	}
+
+	wantOlderDate := olderDay.Format("2006-01-02")
+	wantOlderShort := olderDay.Format("01-02")
+	if view.DayGroups[2].Date != wantOlderDate || view.DayGroups[2].Label != wantOlderDate || view.DayGroups[2].ShortLabel != wantOlderShort || len(view.DayGroups[2].Items) != 1 || view.DayGroups[2].Items[0].RunUUID != olderRun.RunUUID {
+		t.Fatalf("unexpected older group: %+v", view.DayGroups[2])
+	}
+}

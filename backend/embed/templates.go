@@ -70,6 +70,12 @@ var embedFuncMap = template.FuncMap{
 		}
 		return t.Local().Format("01-02 15:04")
 	},
+	"fmtClock": func(t time.Time) string {
+		if t.IsZero() {
+			return "--:--"
+		}
+		return t.Local().Format("15:04")
+	},
 	"fmtTimeFull": func(t time.Time) string {
 		if t.IsZero() {
 			return "--"
@@ -822,32 +828,186 @@ pre.answer-box {
   border-radius: 999px;
   background: var(--ok);
 }
-.gallery {
+.gallery-stage {
+  position: relative;
+}
+.col-radio {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+  margin: 0;
+}
+.gallery-toolbar {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-hover);
+}
+.day-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.day-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+.day-pill:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.day-pill-count {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  color: var(--ink-muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.col-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 3px 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  font-size: 11px;
+  color: var(--ink-muted);
+  margin-left: auto;
+}
+.col-switch-label {
+  margin-right: 4px;
+  font-weight: 600;
+}
+.col-switch label {
+  cursor: pointer;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 650;
+  color: var(--ink-muted);
+  user-select: none;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+.col-switch label:hover {
+  color: var(--ink);
+}
+#cols-2:checked ~ .gallery-toolbar label[for="cols-2"],
+#cols-3:checked ~ .gallery-toolbar label[for="cols-3"],
+#cols-4:checked ~ .gallery-toolbar label[for="cols-4"] {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.day-groups {
+  display: flex;
+  flex-direction: column;
+}
+details.day-group {
+  border-top: 1px solid var(--border);
+  scroll-margin-top: 12px;
+}
+details.day-group > summary.day-header {
+  list-style: none;
+  cursor: pointer;
+  padding: 13px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--surface);
+  transition: background 0.12s ease;
+}
+details.day-group > summary.day-header::-webkit-details-marker {
+  display: none;
+}
+details.day-group > summary.day-header:hover {
+  background: var(--surface-hover);
+}
+.day-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.day-chevron {
+  width: 0;
+  height: 0;
+  border-left: 5px solid var(--ink-muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+details.day-group[open] > summary.day-header .day-chevron {
+  transform: rotate(90deg);
+}
+.day-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.day-sub {
+  font-size: 11.5px;
+  color: var(--ink-muted);
+}
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  padding: 16px;
+  padding: 4px 18px 20px;
+}
+#cols-2:checked ~ .day-groups .gallery-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+#cols-3:checked ~ .day-groups .gallery-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+#cols-4:checked ~ .day-groups .gallery-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .gallery-card {
-  flex: 0 0 340px;
-  scroll-snap-align: start;
+  min-width: 0;
   background: var(--surface-alt);
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+.gallery-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
 }
 .gallery-frame {
   width: 100%;
-  height: 255px;
+  aspect-ratio: 4 / 3;
+  height: auto;
   border: 0;
-  background: #f4f7f4;
+  background: var(--surface-alt);
   display: block;
 }
 .gallery-meta {
-  padding: 10px 13px;
+  padding: 9px 12px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -855,6 +1015,27 @@ pre.answer-box {
   font-size: 11px;
   color: var(--ink-muted);
   border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.gallery-meta-left {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gallery-meta-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.gallery-open {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.gallery-open:hover {
+  text-decoration: underline;
 }
 
 /* 中屏平板自适应 */
@@ -867,6 +1048,18 @@ pre.answer-box {
   table.perf-table th:last-child,
   table.perf-table td:last-child { padding-right: 14px; }
   .unit { display: none; }
+  .gallery-toolbar,
+  details.day-group > summary.day-header {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .gallery-grid {
+    gap: 12px;
+    padding: 4px 14px 16px;
+  }
+  #cols-4:checked ~ .day-groups .gallery-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 /* 手机端 / 窄侧边栏 iframe：零横向滚动，自动切换为紧凑双列/三列卡片 */
@@ -954,7 +1147,19 @@ pre.answer-box {
     grid-template-columns: 28px minmax(110px, 1fr) 76px 48px;
     gap: 6px;
   }
-  .gallery-card { flex: 0 0 285px; }
+  #cols-3:checked ~ .day-groups .gallery-grid,
+  #cols-4:checked ~ .day-groups .gallery-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .col-switch { display: none; }
+  .gallery-grid,
+  #cols-2:checked ~ .day-groups .gallery-grid,
+  #cols-3:checked ~ .day-groups .gallery-grid,
+  #cols-4:checked ~ .day-groups .gallery-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 `
 
@@ -1279,24 +1484,68 @@ const tplPelican = `<!doctype html>
       <div class="meta-bar">
         <span class="fam-tag {{ familyClass .Family }}">{{ familyLabel .Family }}</span>
         {{- if .ModelName }}<span class="pill num">{{ .ModelName }}</span>{{- end }}
-        <span class="pill num">共 {{ len .Items }} 幅</span>
+        <span class="pill num">共 {{ len .Items }} 幅{{- if gt (len .DayGroups) 0 }} · {{ len .DayGroups }} 天{{- end }}</span>
       </div>
     </header>
 
     <main>
-      {{- if eq (len .Items) 0 }}
+      {{- if eq (len .DayGroups) 0 }}
       <div class="empty">暂无已生成的画鹈鹕 SVG 画面。</div>
       {{- else }}
-      <div class="gallery">
-        {{- range .Items }}
-        <article class="gallery-card">
-          <iframe class="gallery-frame" sandbox="" loading="lazy" title="Pelican SVG {{ .RunUUID }}" src="/embed/pelican/{{ queryEscape .RunUUID }}?site={{ queryEscape $.Site.Slug }}"></iframe>
-          <div class="gallery-meta">
-            <span class="num">{{ .ModelName }} · {{ fmtMS .LatencyMS }}</span>
-            <span class="num">{{ fmtTimeShort .ObservedAt }}</span>
+      <div class="gallery-stage">
+        <input class="col-radio" type="radio" name="pelican-cols" id="cols-2">
+        <input class="col-radio" type="radio" name="pelican-cols" id="cols-3" checked>
+        <input class="col-radio" type="radio" name="pelican-cols" id="cols-4">
+
+        <div class="gallery-toolbar">
+          <nav class="day-nav" aria-label="按天跳转">
+            {{- range .DayGroups }}
+            <a class="day-pill" href="#day-{{ .Date }}">
+              <span>{{ .ShortLabel }}</span>
+              <span class="day-pill-count num">{{ len .Items }}</span>
+            </a>
+            {{- end }}
+          </nav>
+          <div class="col-switch" aria-label="每行排列列数">
+            <span class="col-switch-label">每行</span>
+            <label for="cols-2" title="每行 2 幅">2</label>
+            <label for="cols-3" title="每行 3 幅">3</label>
+            <label for="cols-4" title="每行 4 幅">4</label>
           </div>
-        </article>
-        {{- end }}
+        </div>
+
+        <div class="day-groups">
+          {{- range .DayGroups }}
+          <details class="day-group" id="day-{{ .Date }}" open>
+            <summary class="day-header">
+              <div class="day-heading">
+                <span class="day-chevron" aria-hidden="true"></span>
+                <span class="day-label{{ if eq .Label .Date }} num{{ end }}">{{ .Label }}</span>
+                {{- if ne .Label .Date }}
+                <span class="day-sub num">{{ .Date }} · {{ .Weekday }}</span>
+                {{- else }}
+                <span class="day-sub">{{ .Weekday }}</span>
+                {{- end }}
+              </div>
+              <span class="pill num">{{ len .Items }} 幅</span>
+            </summary>
+            <div class="gallery-grid">
+              {{- range .Items }}
+              <article class="gallery-card">
+                <iframe class="gallery-frame" sandbox="" loading="lazy" referrerpolicy="no-referrer" title="Pelican SVG {{ .RunUUID }}" src="/embed/pelican/{{ queryEscape .RunUUID }}?site={{ queryEscape $.Site.Slug }}"></iframe>
+                <div class="gallery-meta">
+                  <span class="gallery-meta-left num" title="{{ .ModelName }} · {{ fmtMS .LatencyMS }}">{{ .ModelName }} · {{ fmtMS .LatencyMS }}</span>
+                  <span class="gallery-meta-right">
+                    <span class="num" title="{{ fmtTimeFull .ObservedAt }}">{{ fmtClock .ObservedAt }}</span>
+                    <a class="gallery-open" href="/embed/pelican/{{ queryEscape .RunUUID }}?site={{ queryEscape $.Site.Slug }}" target="_blank" rel="noopener noreferrer" title="新窗口查看大图">大图 &#8599;</a>
+                  </span>
+                </div>
+              </article>
+              {{- end }}
+            </div>
+          </details>
+          {{- end }}
+        </div>
       </div>
       {{- end }}
     </main>
