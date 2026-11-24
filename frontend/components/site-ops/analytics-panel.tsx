@@ -221,7 +221,11 @@ function ReadState({
   ) : null
 }
 
-type Props = { instance: SiteOpsInstanceView; onAuthRequired: () => void }
+type Props = {
+  instance: SiteOpsInstanceView
+  onAuthRequired: () => void
+  onComposeMail?: (userIds: number[], sourceLabel: string) => void
+}
 
 export function AnalyticsPanel(props: Props) {
   const [scopeError, setScopeError] = useState("")
@@ -241,6 +245,7 @@ export function AnalyticsPanel(props: Props) {
 function AnalyticsSession({
   instance,
   onAuthRequired,
+  onComposeMail,
   onScopeError,
 }: Props & { onScopeError: (message: string) => void }) {
   const { id, generation } = instance
@@ -536,6 +541,7 @@ function AnalyticsSession({
           {u?.data && (
             <AnalyticsUsersTable
               data={u.data}
+              onComposeMail={onComposeMail}
               disabled={backingOff}
               onPage={(page) => readUsers({ ...userQuery, page })}
               onTop={(top_n) => readUsers({ ...userQuery, top_n })}
