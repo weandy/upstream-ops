@@ -1,0 +1,346 @@
+package siteops
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+)
+
+var (
+	urlCredentials    = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s/<>"']+@`)
+	secretHeader      = regexp.MustCompile(`(?i)\b(?:set[-_]cookie|cookie|(?:proxy[-_])?authorization)["']?[ \t]*[:=][ \t]*[^\r\n]*`)
+	secretField       = regexp.MustCompile(`(?i)\b(?:x[-_]api[-_]key|api[-_]key|password|passwd|(?:access[-_]|refresh[-_]|id[-_])?token|client[-_]secret)["']?[ \t]*[:=][ \t]*(?:(?:Bearer|Basic)[ \t]+)?(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;<>"'\]}]+)`)
+	bearerToken       = regexp.MustCompile(`(?i)\bBearer\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;<>"'\]}]+)`)
+	credentialToken   = regexp.MustCompile(`(?i)\b(?:sk-|adm_|admin-)[a-z0-9._~+/=-]+`)
+	keyHintChars      = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	errInvalidPayload = errors.New("invalid site-ops upstream response")
+)
+
+func SanitizeErrorText(raw string, maxRunes int) string {
+	if maxRunes <= 0 {
+		maxRunes = 200
+	}
+	raw = urlCredentials.ReplaceAllString(raw, "${1}[redacted]@")
+	for _, pattern := range []*regexp.Regexp{secretHeader, secretField, bearerToken, credentialToken} {
+		raw = pattern.ReplaceAllString(raw, "[redacted]")
+	}
+	text := strings.Join(strings.Fields(raw), " ")
+	for i := range text {
+		if maxRunes == 0 {
+			return text[:i]
+		}
+		maxRunes--
+	}
+	return text
+}
+
+func MaskAPIKeyHint(rawKey string) string {
+	key := strings.TrimSpace(rawKey)
+	prefixLen := 4
+	for _, prefix := range []string{"adm_sc_", "adm_", "admin-", "sk-"} {
+		if strings.HasPrefix(key, prefix) {
+			prefixLen = len(prefix) + 2
+			break
+		}
+	}
+	if len(key) < prefixLen+6 || !keyHintChars.MatchString(key) {
+		return "***"
+	}
+	return key[:prefixLen] + "..." + key[len(key)-2:]
+}
+
+type upstreamEnvelope struct {
+	Code   *int            `json:"code"`
+	Reason string          `json:"reason"`
+	Data   json.RawMessage `json:"data"`
+}
+
+func DetectOpsDisabled(httpStatus int, body []byte) (bool, string) {
+	if httpStatus != http.StatusNotFound && httpStatus != http.StatusOK {
+		return false, ""
+	}
+	var envelope upstreamEnvelope
+	if json.Unmarshal(body, &envelope) != nil {
+		return false, ""
+	}
+	if httpStatus == http.StatusNotFound {
+		var data upstreamEnvelope
+		_ = json.Unmarshal(envelope.Data, &data)
+		if strings.EqualFold(envelope.Reason, "OPS_DISABLED") || strings.EqualFold(data.Reason, "OPS_DISABLED") {
+			return true, "OPS_DISABLED"
+		}
+		return false, ""
+	}
+	if envelope.Code != nil && *envelope.Code != 0 {
+		return false, ""
+	}
+	if len(envelope.Data) > 0 {
+		body = envelope.Data
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(body, &object) == nil && object != nil &&
+		(len(object) == 0 || bytes.Equal(bytes.TrimSpace(object["enabled"]), []byte("false"))) {
+		return true, "OPS_DISABLED"
+	}
+	return false, ""
+}
+
+func decodeProjection(body []byte, dst any) error {
+	body = bytes.TrimSpace(body)
+	if len(body) > 0 && body[0] == '{' {
+		var envelope upstreamEnvelope
+		if json.Unmarshal(body, &envelope) != nil || (envelope.Code != nil && *envelope.Code != 0) {
+			return errInvalidPayload
+		}
+		if len(envelope.Data) > 0 {
+			body = bytes.TrimSpace(envelope.Data)
+		}
+	}
+	if len(body) == 0 || bytes.Equal(body, []byte("null")) || json.Unmarshal(body, dst) != nil {
+		return errInvalidPayload
+	}
+	return nil
+}
+
+type overviewMetrics struct {
+	CollectedAt        *time.Time `json:"collected_at"`
+	CPUPercent         *float64   `json:"cpu_percent"`
+	MemoryPercent      *float64   `json:"memory_percent"`
+	MemoryUsedMB       *int64     `json:"memory_used_mb"`
+	DBOK               *bool      `json:"db_ok"`
+	DBConnActive       *int       `json:"db_conn_active"`
+	DBConnWaiting      *int       `json:"db_conn_waiting"`
+	DBMaxOpenConns     *int       `json:"db_max_open_conns"`
+	RedisOK            *bool      `json:"redis_ok"`
+	RedisConnTotal     *int       `json:"redis_conn_total"`
+	RedisConnIdle      *int       `json:"redis_conn_idle"`
+	RedisPoolSize      *int       `json:"redis_pool_size"`
+	GoroutineCount     *int       `json:"goroutine_count"`
+	QueueDepth         *int       `json:"queue_depth"`
+	AccountSwitchCount *int64     `json:"account_switch_count"`
+}
+
+type overviewWire struct {
+	SanitizedOpsOverview
+	SLA                   *float64 `json:"sla"`
+	ErrorRate             *float64 `json:"error_rate"`
+	UpstreamErrorRate     *float64 `json:"upstream_error_rate"`
+	RequestCountTotal     *int64   `json:"request_count_total"`
+	ErrorCountTotal       *int64   `json:"error_count_total"`
+	Upstream429Count      *int64   `json:"upstream_429_count"`
+	Upstream529Count      *int64   `json:"upstream_529_count"`
+	UpstreamErrExcl429529 *int64   `json:"upstream_error_count_excl_429_529"`
+	QPS                   struct {
+		Current *float64 `json:"current"`
+		Peak    *float64 `json:"peak"`
+	} `json:"qps"`
+	TPS struct {
+		Current *float64 `json:"current"`
+	} `json:"tps"`
+	TTFT struct {
+		P50MS *int `json:"p50_ms"`
+		P95MS *int `json:"p95_ms"`
+	} `json:"ttft"`
+	Duration struct {
+		P95MS *int `json:"p95_ms"`
+	} `json:"duration"`
+	OutputTPS struct {
+		P50 *float64 `json:"p50"`
+	} `json:"output_tps"`
+	SystemMetrics overviewMetrics `json:"system_metrics"`
+	JobHeartbeats []struct {
+		JobName       string     `json:"job_name"`
+		Status        string     `json:"status"`
+		LastSuccessAt *time.Time `json:"last_success_at"`
+		LastRunAt     *time.Time `json:"last_run_at"`
+		LastError     string     `json:"last_error"`
+	} `json:"job_heartbeats"`
+}
+
+func preferValue[T any](preferred, fallback *T) *T {
+	if preferred != nil {
+		return preferred
+	}
+	return fallback
+}
+
+func ParseOpsOverview(body []byte) (*SanitizedOpsOverview, error) {
+	var wire struct {
+		overviewWire
+		Overview *overviewWire `json:"overview"`
+	}
+	if err := decodeProjection(body, &wire); err != nil {
+		return nil, err
+	}
+	raw := &wire.overviewWire
+	if wire.Overview != nil {
+		raw = wire.Overview
+	}
+	out := raw.SanitizedOpsOverview
+	m := raw.SystemMetrics
+	out.SystemMetricsAt = preferValue(m.CollectedAt, out.SystemMetricsAt)
+	out.CPUPercent = preferValue(m.CPUPercent, out.CPUPercent)
+	out.MemPercent = preferValue(m.MemoryPercent, out.MemPercent)
+	out.MemUsedMB = preferValue(m.MemoryUsedMB, out.MemUsedMB)
+	out.DBOK = preferValue(m.DBOK, out.DBOK)
+	out.DBConnActive = preferValue(m.DBConnActive, out.DBConnActive)
+	out.DBConnWaiting = preferValue(m.DBConnWaiting, out.DBConnWaiting)
+	out.DBMaxOpenConns = preferValue(m.DBMaxOpenConns, out.DBMaxOpenConns)
+	out.RedisOK = preferValue(m.RedisOK, out.RedisOK)
+	out.RedisConnTotal = preferValue(m.RedisConnTotal, out.RedisConnTotal)
+	out.RedisConnIdle = preferValue(m.RedisConnIdle, out.RedisConnIdle)
+	out.RedisPoolSize = preferValue(m.RedisPoolSize, out.RedisPoolSize)
+	out.GoroutineCount = preferValue(m.GoroutineCount, out.GoroutineCount)
+	out.QueueDepth = preferValue(m.QueueDepth, out.QueueDepth)
+	out.AccountSwitchCount1m = preferValue(m.AccountSwitchCount, out.AccountSwitchCount1m)
+	out.SLAPercent1h = preferValue(raw.SLA, out.SLAPercent1h)
+	out.ErrorRatePercent1h = preferValue(raw.ErrorRate, out.ErrorRatePercent1h)
+	out.UpstreamErrorRatePct1h = preferValue(raw.UpstreamErrorRate, out.UpstreamErrorRatePct1h)
+	out.ReqTotal1h = preferValue(raw.RequestCountTotal, out.ReqTotal1h)
+	out.ErrTotal1h = preferValue(raw.ErrorCountTotal, out.ErrTotal1h)
+	out.Upstream4291h = preferValue(raw.Upstream429Count, out.Upstream4291h)
+	out.Upstream5291h = preferValue(raw.Upstream529Count, out.Upstream5291h)
+	out.UpstreamErrExcl4295291h = preferValue(raw.UpstreamErrExcl429529, out.UpstreamErrExcl4295291h)
+	out.QPSCurrent = preferValue(raw.QPS.Current, out.QPSCurrent)
+	out.QPSPeak = preferValue(raw.QPS.Peak, out.QPSPeak)
+	out.TPSCurrent = preferValue(raw.TPS.Current, out.TPSCurrent)
+	out.TTFTP50MS = preferValue(raw.TTFT.P50MS, out.TTFTP50MS)
+	out.TTFTP95MS = preferValue(raw.TTFT.P95MS, out.TTFTP95MS)
+	out.DurationP95MS = preferValue(raw.Duration.P95MS, out.DurationP95MS)
+	out.OutputTPSP50 = preferValue(raw.OutputTPS.P50, out.OutputTPSP50)
+	for _, heartbeat := range raw.JobHeartbeats {
+		out.JobHeartbeats = append(out.JobHeartbeats, SanitizedJobHeartbeat{
+			JobName: SanitizeErrorText(heartbeat.JobName, 200), Status: SanitizeErrorText(heartbeat.Status, 200),
+			LastSuccessAt: heartbeat.LastSuccessAt, LastRunAt: heartbeat.LastRunAt,
+			HasError: strings.TrimSpace(heartbeat.LastError) != "", ErrorSummary: SanitizeErrorText(heartbeat.LastError, 0),
+		})
+	}
+	return &out, nil
+}
+
+type realtimeWire[A, G any] struct {
+	Enabled   *bool       `json:"enabled"`
+	Timestamp *time.Time  `json:"timestamp"`
+	Account   map[int64]A `json:"account"`
+	Accounts  map[int64]A `json:"accounts"`
+	Group     map[int64]G `json:"group"`
+	Groups    map[int64]G `json:"groups"`
+}
+
+func (w *realtimeWire[A, G]) normalize() {
+	if w.Accounts == nil {
+		w.Accounts = w.Account
+	}
+	if w.Accounts == nil {
+		w.Accounts = make(map[int64]A)
+	}
+	if w.Groups == nil {
+		w.Groups = w.Group
+	}
+	if w.Groups == nil {
+		w.Groups = make(map[int64]G)
+	}
+}
+
+func ParseConcurrency(body []byte) (*SanitizedConcurrencyPayload, error) {
+	var wire realtimeWire[SanitizedAccountConcurrency, SanitizedGroupConcurrency]
+	if err := decodeProjection(body, &wire); err != nil {
+		return nil, err
+	}
+	wire.normalize()
+	for id, account := range wire.Accounts {
+		if account.AccountID == 0 {
+			account.AccountID = id
+		}
+		account.Platform = SanitizeErrorText(account.Platform, 200)
+		wire.Accounts[id] = account
+	}
+	for id, group := range wire.Groups {
+		if group.GroupID == 0 {
+			group.GroupID = id
+		}
+		group.GroupName = SanitizeErrorText(group.GroupName, 200)
+		group.Platform = SanitizeErrorText(group.Platform, 200)
+		wire.Groups[id] = group
+	}
+	return &SanitizedConcurrencyPayload{
+		Enabled: wire.Enabled, Timestamp: wire.Timestamp, Accounts: wire.Accounts, Groups: wire.Groups,
+		RawEmpty: len(wire.Accounts) == 0 && len(wire.Groups) == 0,
+	}, nil
+}
+
+type accountAvailabilityWire struct {
+	AccountID     int64  `json:"account_id"`
+	Platform      string `json:"platform"`
+	Available     bool   `json:"available"`
+	RateLimited   bool   `json:"rate_limited"`
+	Overloaded    bool   `json:"overloaded"`
+	IsAvailable   *bool  `json:"is_available"`
+	IsRateLimited *bool  `json:"is_rate_limited"`
+	IsOverloaded  *bool  `json:"is_overloaded"`
+	HasError      bool   `json:"has_error"`
+	ErrorMessage  string `json:"error_message"`
+}
+
+func ParseAccountAvailability(body []byte) (*SanitizedAvailabilityPayload, error) {
+	var wire realtimeWire[accountAvailabilityWire, SanitizedGroupAvailability]
+	if err := decodeProjection(body, &wire); err != nil {
+		return nil, err
+	}
+	wire.normalize()
+	accounts := make(map[int64]SanitizedAccountAvailability, len(wire.Accounts))
+	for id, account := range wire.Accounts {
+		if account.AccountID == 0 {
+			account.AccountID = id
+		}
+		accounts[id] = SanitizedAccountAvailability{
+			AccountID: account.AccountID, Platform: SanitizeErrorText(account.Platform, 200),
+			Available:    *preferValue(account.IsAvailable, &account.Available),
+			RateLimited:  *preferValue(account.IsRateLimited, &account.RateLimited),
+			Overloaded:   *preferValue(account.IsOverloaded, &account.Overloaded),
+			HasError:     account.HasError || strings.TrimSpace(account.ErrorMessage) != "",
+			ErrorSummary: SanitizeErrorText(account.ErrorMessage, 0),
+		}
+	}
+	for id, group := range wire.Groups {
+		if group.GroupID == 0 {
+			group.GroupID = id
+		}
+		group.GroupName = SanitizeErrorText(group.GroupName, 200)
+		group.Platform = SanitizeErrorText(group.Platform, 200)
+		wire.Groups[id] = group
+	}
+	return &SanitizedAvailabilityPayload{
+		Enabled: wire.Enabled, Timestamp: wire.Timestamp, Accounts: accounts, Groups: wire.Groups,
+		RawEmpty: len(accounts) == 0 && len(wire.Groups) == 0,
+	}, nil
+}
+
+func ParseGroupsAll(body []byte) ([]SanitizedGroupInfo, error) {
+	var groups []SanitizedGroupInfo
+	if err := decodeProjection(body, &groups); err != nil {
+		return nil, err
+	}
+	for i := range groups {
+		groups[i].Name = SanitizeErrorText(groups[i].Name, 200)
+		groups[i].Platform = SanitizeErrorText(groups[i].Platform, 200)
+		groups[i].Status = SanitizeErrorText(groups[i].Status, 200)
+	}
+	return groups, nil
+}
+
+func ParseSystemVersion(body []byte) (*SanitizedVersionInfo, error) {
+	var out SanitizedVersionInfo
+	if err := decodeProjection(body, &out); err != nil {
+		return nil, err
+	}
+	out.Version = SanitizeErrorText(out.Version, 200)
+	if out.Version == "" {
+		return nil, errInvalidPayload
+	}
+	return &out, nil
+}
