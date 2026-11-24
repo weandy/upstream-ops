@@ -211,7 +211,11 @@ func fetchAnalytics[T any](c *Client, ctx context.Context, inst TargetEndpoint, 
 	if body != nil {
 		method = http.MethodPost
 	}
-	return fetchSpec(c, ctx, inst, requestSpec{endpoint: ep, method: method, path: adminPath + path, body: body, parserTag: ep, policy: cachePolicyAnalyticsLRU}, parse)
+	spec := requestSpec{endpoint: ep, method: method, path: adminPath + path, body: body, parserTag: ep, policy: cachePolicyAnalyticsLRU, lowPriority: true}
+	if private, _ := ctx.Value(mailPrivateRequestKey{}).(bool); private {
+		spec.policy, spec.bypassFlight = cachePolicyNoCache, true
+	}
+	return fetchSpec(c, ctx, inst, spec, parse)
 }
 func pageParams(page, size int) url.Values {
 	return url.Values{"page": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(size)}}

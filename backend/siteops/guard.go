@@ -304,3 +304,65 @@ func (g *OutboundGuard) DialContext(ctx context.Context, network, addr string) (
 	}
 	return nil, err
 }
+
+func validMailHostname(host string) bool {
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (g *OutboundGuard) ValidateSMTPHostPort(host string, port int) error {
+	if port < 1 || port > 65535 {
+		return ErrMailSMTPConfigBlocked
+	}
+	p := g.currentPolicy()
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if ip.Zone() == "" && p.allowsDialIP(ip, ip.Unmap().IsLoopback(), false) {
+			return nil
+		}
+		return ErrMailSMTPConfigBlocked
+	}
+	if !validMailHostname(host) || !strings.Contains(host, ".") && len(p.cidrs) == 0 && !(p.allowLoopback && isLocalhostName(host)) {
+		return ErrMailSMTPConfigBlocked
+	}
+	return nil
+}
+
+func (g *OutboundGuard) DialSMTPContext(ctx context.Context, host string, port int) (net.Conn, error) {
+	if err := g.ValidateSMTPHostPort(host, port); err != nil {
+		return nil, err
+	}
+	ip, err := netip.ParseAddr(host)
+	addresses := []netip.Addr{ip}
+	local := ip.IsValid() && ip.Unmap().IsLoopback() || isLocalhostName(host)
+	if err != nil {
+		addresses, err = g.lookupIP(ctx, "ip", host)
+		if err != nil {
+			return nil, ErrMailSMTPUnavailable
+		}
+	}
+	p := g.currentPolicy()
+	var last error = ErrMailSMTPConfigBlocked
+	for _, candidate := range addresses {
+		if candidate.Zone() != "" || !p.allowsDialIP(candidate, local, false) {
+			continue
+		}
+		conn, err := g.dial.DialContext(ctx, "tcp", net.JoinHostPort(candidate.Unmap().String(), strconv.Itoa(port)))
+		if err == nil {
+			return conn, nil
+		}
+		last = ErrMailSMTPUnavailable
+	}
+	return nil, last
+}

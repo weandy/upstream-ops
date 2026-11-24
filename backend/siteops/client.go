@@ -86,12 +86,14 @@ type requestSpec struct {
 	endpoint, method, path, parserTag string
 	body                              []byte
 	policy                            cachePolicy
+	lowPriority, bypassFlight         bool
 }
 type flightKey struct {
 	method, parserTag string
 	bodyHash          [sha256.Size]byte
 	policy            cachePolicy
 	policyEpoch       uint64
+	lowPriority       bool
 	endpointKey
 	targetIdentity
 }
@@ -114,6 +116,11 @@ type requestFlight struct {
 	cancel  context.CancelFunc
 	waiters int
 	result  fetchResult
+}
+
+type privateRequest struct {
+	instanceID uint
+	cancel     context.CancelFunc
 }
 
 type requestSlots struct {
@@ -140,6 +147,7 @@ type Client struct {
 	guard                 OutboundValidator
 	log                   *slog.Logger
 	flights               map[flightKey]*requestFlight
+	privateRequests       map[*privateRequest]struct{}
 	cache                 map[endpointKey]observation
 	budgets               map[uint]*auditWindow
 	slots                 map[uint]*requestSlots
@@ -171,6 +179,7 @@ func (c *Client) UpdateRuntimeConfig(siteCfg config.SiteOpsConfig, proxyCfg conf
 	defer c.mu.Unlock()
 	c.runtime = clientRuntime{siteCfg.WithDefaults(), proxyCfg, upstreamCfg.WithDefaults().UserAgent}
 	c.policyEpoch++
+	c.cancelPrivateLocked(0)
 	clear(c.p2Caps)
 	c.analytics.invalidate(0, ErrGenerationMismatch)
 	c.guard.UpdatePolicy(siteCfg.AllowLoopback, siteCfg.AllowedOrigins, siteCfg.AllowedCIDRs)
@@ -184,6 +193,7 @@ func (c *Client) UpdateRuntimeConfig(siteCfg config.SiteOpsConfig, proxyCfg conf
 func (c *Client) ResetInstanceState(instanceID uint) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.cancelPrivateLocked(instanceID)
 	delete(c.p2Caps, instanceID)
 	c.analytics.invalidate(instanceID, ErrGenerationMismatch)
 	for key := range c.cache {
@@ -195,6 +205,15 @@ func (c *Client) ResetInstanceState(instanceID uint) {
 		if key.instanceID == instanceID {
 			flight.cancel()
 			delete(c.flights, key)
+		}
+	}
+}
+
+func (c *Client) cancelPrivateLocked(id uint) {
+	for r := range c.privateRequests {
+		if id == 0 || r.instanceID == id {
+			r.cancel()
+			delete(c.privateRequests, r)
 		}
 	}
 }
@@ -318,6 +337,9 @@ func (c *Client) acquire(ctx context.Context, instanceID uint, wait time.Duratio
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if p2 && c.runtime.site.PerInstanceMaxConcurrency == 1 {
+		return ErrBudgetExceeded
+	}
 	slots := c.slots[instanceID]
 	if slots == nil {
 		slots = &requestSlots{}
@@ -430,6 +452,28 @@ func (c *Client) fetchShared(ctx context.Context, inst TargetEndpoint, spec requ
 		}
 	}
 	key := flightKey{endpointKey: endpointKey{inst.InstanceID, spec.endpoint, spec.path}, targetIdentity: targetIdentity{baseURL, inst.Generation, inst.CredGen, inst.ProxyEnabled, sha256.Sum256([]byte(inst.APIKey))}, method: spec.method, parserTag: spec.parserTag, policy: spec.policy, bodyHash: sha256.Sum256(spec.body), policyEpoch: c.policyEpoch}
+	key.lowPriority = spec.lowPriority
+	if spec.bypassFlight {
+		runtime := c.runtime
+		privateCtx, cancel := context.WithCancel(ctx)
+		request := &privateRequest{instanceID: inst.InstanceID, cancel: cancel}
+		if c.privateRequests == nil {
+			c.privateRequests = make(map[*privateRequest]struct{})
+		}
+		c.privateRequests[request] = struct{}{}
+		c.mu.Unlock()
+		defer func() { cancel(); c.mu.Lock(); delete(c.privateRequests, request); c.mu.Unlock() }()
+		start := time.Now()
+		result := c.execute(privateCtx, runtime, key, inst, observation{}, spec.body, project)
+		result.meta.ETag = ""
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if _, active := c.privateRequests[request]; !active {
+			return failedFetch(meta, ErrGenerationMismatch)
+		}
+		c.recordAdminLocked(inst, key, start, &result)
+		return result
+	}
 	flight := c.flights[key]
 	if flight == nil {
 		runtime := c.runtime
@@ -547,10 +591,10 @@ func failedFetch(meta UpstreamFetchMeta, err error) fetchResult {
 
 func (c *Client) execute(ctx context.Context, runtime clientRuntime, key flightKey, inst TargetEndpoint, cached observation, body []byte, project projection) fetchResult {
 	meta := UpstreamFetchMeta{Endpoint: key.endpoint}
-	if err := c.acquire(ctx, inst.InstanceID, time.Duration(runtime.site.QueueWaitTimeoutSeconds)*time.Second, key.policy == cachePolicyAnalyticsLRU); err != nil {
+	if err := c.acquire(ctx, inst.InstanceID, time.Duration(runtime.site.QueueWaitTimeoutSeconds)*time.Second, key.lowPriority); err != nil {
 		return failedFetch(meta, err)
 	}
-	defer c.release(inst.InstanceID, key.policy == cachePolicyAnalyticsLRU)
+	defer c.release(inst.InstanceID, key.lowPriority)
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(runtime.site.RequestTimeoutSeconds)*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, key.method, key.baseURL+key.path, bytes.NewReader(body))
@@ -581,7 +625,7 @@ func (c *Client) execute(ctx context.Context, runtime clientRuntime, key flightK
 	defer transport.CloseIdleConnections()
 	var charge func()
 	if project != nil {
-		markSent, release, err := c.reserveAudit(inst, ctx, key.policy == cachePolicyAnalyticsLRU)
+		markSent, release, err := c.reserveAudit(inst, ctx, key.lowPriority)
 		if err != nil {
 			var bo *backoffError
 			if errors.As(err, &bo) {
@@ -618,7 +662,7 @@ func (c *Client) execute(ctx context.Context, runtime clientRuntime, key flightK
 		return fetchResult{meta: meta}
 	}
 	limit := runtime.site.MaxResponseBytes
-	if key.policy == cachePolicyAnalyticsLRU {
+	if key.lowPriority {
 		limit = min(limit, 8<<20)
 	}
 	return readAdminResponse(ctx, resp, meta, cached, project, inst.APIKey, limit, start)
