@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -128,7 +129,13 @@ func (s *SiteOpsStore) DeleteInstance(ctx context.Context, id uint) error {
 		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsSnapshot{}).Error; err != nil {
 			return err
 		}
-		return tx.Where("instance_id = ?", id).Delete(&SiteOpsGroupSnapshot{}).Error
+		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsGroupSnapshot{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsAlertDelivery{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("instance_id = ?", id).Delete(&SiteOpsEvent{}).Error
 	})
 }
 
@@ -254,14 +261,192 @@ func (s *SiteOpsStore) GetLatestGroupSnapshots(ctx context.Context, id uint) ([]
 }
 
 func (s *SiteOpsStore) DeleteSnapshotsBeforeChunked(ctx context.Context, cutoff time.Time, batchSize, maxRows int, maxDuration time.Duration) (int64, error) {
-	return s.deleteBeforeChunked(ctx, &SiteOpsSnapshot{}, cutoff, batchSize, maxRows, maxDuration)
+	return s.deleteBeforeChunkedByColumn(ctx, &SiteOpsSnapshot{}, "observed_at", cutoff, batchSize, maxRows, maxDuration)
 }
 
 func (s *SiteOpsStore) DeleteGroupSnapshotsBeforeChunked(ctx context.Context, cutoff time.Time, batchSize, maxRows int, maxDuration time.Duration) (int64, error) {
-	return s.deleteBeforeChunked(ctx, &SiteOpsGroupSnapshot{}, cutoff, batchSize, maxRows, maxDuration)
+	return s.deleteBeforeChunkedByColumn(ctx, &SiteOpsGroupSnapshot{}, "observed_at", cutoff, batchSize, maxRows, maxDuration)
 }
 
-func (s *SiteOpsStore) deleteBeforeChunked(ctx context.Context, model any, cutoff time.Time, batchSize, maxRows int, maxDuration time.Duration) (int64, error) {
+func (s *SiteOpsStore) ListActiveEvents(ctx context.Context, instanceID uint) ([]SiteOpsEvent, error) {
+	var events []SiteOpsEvent
+	err := s.db.WithContext(ctx).
+		Where("instance_id = ? AND state = ?", instanceID, "firing").
+		Order("fired_at DESC, id DESC").
+		Find(&events).Error
+	return events, err
+}
+
+func (s *SiteOpsStore) UpsertEvent(ctx context.Context, evt *SiteOpsEvent) error {
+	if evt == nil {
+		return errors.New("site-ops event is nil")
+	}
+	row := *evt
+	if !row.FiredAt.IsZero() {
+		row.FiredAt = row.FiredAt.UTC()
+	}
+	if row.ResolvedAt != nil {
+		resolved := row.ResolvedAt.UTC()
+		row.ResolvedAt = &resolved
+	}
+	if row.ID == 0 {
+		if !row.CreatedAt.IsZero() {
+			row.CreatedAt = row.CreatedAt.UTC()
+		}
+		if !row.UpdatedAt.IsZero() {
+			row.UpdatedAt = row.UpdatedAt.UTC()
+		}
+		if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+			return err
+		}
+		*evt = row
+		return nil
+	}
+	now := time.Now().UTC()
+	row.UpdatedAt = now
+	err := s.db.WithContext(ctx).Model(&SiteOpsEvent{}).
+		Where("id = ?", row.ID).
+		Select("instance_id", "severity", "rule_key", "resource_key", "required_domains_json", "state", "consecutive_hits", "title", "summary", "detail_json", "fired_at", "resolved_at", "updated_at").
+		Updates(&row).Error
+	if err == nil {
+		evt.FiredAt = row.FiredAt
+		evt.ResolvedAt = row.ResolvedAt
+		evt.UpdatedAt = row.UpdatedAt
+	}
+	return err
+}
+
+func (s *SiteOpsStore) ListEvents(ctx context.Context, instanceID uint, state, severity string, limit int) ([]SiteOpsEvent, error) {
+	if limit <= 0 {
+		limit = 100
+	} else if limit > 500 {
+		limit = 500
+	}
+	query := s.db.WithContext(ctx).Where("instance_id = ?", instanceID)
+	if state = strings.TrimSpace(state); state != "" {
+		query = query.Where("state = ?", state)
+	}
+	if severity = strings.TrimSpace(severity); severity != "" {
+		query = query.Where("severity = ?", severity)
+	}
+	var events []SiteOpsEvent
+	err := query.Order("fired_at DESC, id DESC").Limit(limit).Find(&events).Error
+	return events, err
+}
+
+func normalizeDeliveryTimes(d *SiteOpsAlertDelivery) SiteOpsAlertDelivery {
+	row := *d
+	if row.CooldownUntil != nil {
+		t := row.CooldownUntil.UTC()
+		row.CooldownUntil = &t
+	}
+	if row.NextRetryAt != nil {
+		t := row.NextRetryAt.UTC()
+		row.NextRetryAt = &t
+	}
+	if row.SentAt != nil {
+		t := row.SentAt.UTC()
+		row.SentAt = &t
+	}
+	if !row.CreatedAt.IsZero() {
+		row.CreatedAt = row.CreatedAt.UTC()
+	}
+	if !row.UpdatedAt.IsZero() {
+		row.UpdatedAt = row.UpdatedAt.UTC()
+	}
+	return row
+}
+
+func (s *SiteOpsStore) CreateDelivery(ctx context.Context, d *SiteOpsAlertDelivery) error {
+	if d == nil {
+		return errors.New("site-ops alert delivery is nil")
+	}
+	row := normalizeDeliveryTimes(d)
+	if err := s.db.WithContext(ctx).Create(&row).Error; err != nil {
+		return err
+	}
+	*d = row
+	return nil
+}
+
+func (s *SiteOpsStore) HasActiveCooldown(ctx context.Context, instanceID, notifyChannelID uint, cooldownKey string, now time.Time) (bool, error) {
+	cooldownKey = strings.TrimSpace(cooldownKey)
+	if cooldownKey == "" {
+		return false, nil
+	}
+	var count int64
+	err := s.db.WithContext(ctx).Model(&SiteOpsAlertDelivery{}).
+		Where("instance_id = ? AND notify_channel_id = ? AND cooldown_key = ? AND cooldown_until IS NOT NULL AND cooldown_until > ? AND status IN ?",
+			instanceID, notifyChannelID, cooldownKey, now.UTC(), []string{"pending", "sent", "failed"}).
+		Limit(1).
+		Count(&count).Error
+	return count > 0, err
+}
+
+func (s *SiteOpsStore) ListDeliveriesByEventIDs(ctx context.Context, eventIDs []uint) (map[uint][]SiteOpsAlertDelivery, error) {
+	out := make(map[uint][]SiteOpsAlertDelivery, len(eventIDs))
+	if len(eventIDs) == 0 {
+		return out, nil
+	}
+	for start := 0; start < len(eventIDs); start += 500 {
+		var rows []SiteOpsAlertDelivery
+		err := s.db.WithContext(ctx).
+			Where("event_id IN ?", eventIDs[start:min(start+500, len(eventIDs))]).
+			Order("id ASC").
+			Find(&rows).Error
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			out[row.EventID] = append(out[row.EventID], row)
+		}
+	}
+	return out, nil
+}
+
+func (s *SiteOpsStore) ListDueDeliveries(ctx context.Context, now time.Time, limit int) ([]SiteOpsAlertDelivery, error) {
+	if limit <= 0 {
+		limit = 100
+	} else if limit > 500 {
+		limit = 500
+	}
+	var rows []SiteOpsAlertDelivery
+	err := s.db.WithContext(ctx).
+		Where("status IN ? AND next_retry_at IS NOT NULL AND next_retry_at <= ?", []string{"pending", "failed"}, now.UTC()).
+		Order("next_retry_at ASC, id ASC").
+		Limit(limit).
+		Find(&rows).Error
+	return rows, err
+}
+
+func (s *SiteOpsStore) UpdateDelivery(ctx context.Context, d *SiteOpsAlertDelivery) error {
+	if d == nil || d.ID == 0 {
+		return errors.New("site-ops alert delivery id is required")
+	}
+	row := normalizeDeliveryTimes(d)
+	row.UpdatedAt = time.Now().UTC()
+	err := s.db.WithContext(ctx).Model(&SiteOpsAlertDelivery{}).
+		Where("id = ?", row.ID).
+		Select("status", "attempts", "next_retry_at", "last_error", "sent_at", "cooldown_until", "updated_at").
+		Updates(&row).Error
+	if err == nil {
+		d.CooldownUntil = row.CooldownUntil
+		d.NextRetryAt = row.NextRetryAt
+		d.SentAt = row.SentAt
+		d.UpdatedAt = row.UpdatedAt
+	}
+	return err
+}
+
+func (s *SiteOpsStore) DeleteEventsBeforeChunked(ctx context.Context, cutoff time.Time, batchSize, maxRows int, maxDuration time.Duration) (int64, error) {
+	return s.deleteBeforeChunkedByColumn(ctx, &SiteOpsEvent{}, "created_at", cutoff, batchSize, maxRows, maxDuration)
+}
+
+func (s *SiteOpsStore) DeleteDeliveriesBeforeChunked(ctx context.Context, cutoff time.Time, batchSize, maxRows int, maxDuration time.Duration) (int64, error) {
+	return s.deleteBeforeChunkedByColumn(ctx, &SiteOpsAlertDelivery{}, "created_at", cutoff, batchSize, maxRows, maxDuration)
+}
+
+func (s *SiteOpsStore) deleteBeforeChunkedByColumn(ctx context.Context, model any, column string, cutoff time.Time, batchSize, maxRows int, maxDuration time.Duration) (int64, error) {
 	if batchSize <= 0 || batchSize > 500 {
 		batchSize = 500
 	}
@@ -279,7 +464,7 @@ func (s *SiteOpsStore) deleteBeforeChunked(ctx context.Context, model any, cutof
 		var ids []uint
 		var deleted int64
 		err := batchDB.Transaction(func(tx *gorm.DB) error {
-			err := tx.Model(model).Where("observed_at < ?", cutoff.UTC()).Order("observed_at ASC").
+			err := tx.Model(model).Where(column+" < ?", cutoff.UTC()).Order(column + " ASC").
 				Limit(min(batchSize, maxRows-int(total))).Pluck("id", &ids).Error
 			if err != nil || len(ids) == 0 {
 				return err

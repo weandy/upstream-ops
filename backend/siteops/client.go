@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -26,14 +27,20 @@ import (
 )
 
 const (
-	adminPath        = "/api/v1/admin"
-	healthPath       = "/health"
-	snapshotPath     = adminPath + "/ops/dashboard/snapshot-v2"
-	overviewPath     = adminPath + "/ops/dashboard/overview"
-	concurrencyPath  = adminPath + "/ops/concurrency"
-	availabilityPath = adminPath + "/ops/account-availability"
-	groupsPath       = adminPath + "/groups/all"
-	versionPath      = adminPath + "/system/version"
+	adminPath          = "/api/v1/admin"
+	healthPath         = "/health"
+	snapshotPath       = adminPath + "/ops/dashboard/snapshot-v2"
+	overviewPath       = adminPath + "/ops/dashboard/overview"
+	concurrencyPath    = adminPath + "/ops/concurrency"
+	availabilityPath   = adminPath + "/ops/account-availability"
+	groupsPath         = adminPath + "/groups/all"
+	versionPath        = adminPath + "/system/version"
+	alertEventsPath    = adminPath + "/ops/alert-events?limit=50"
+	ingressHealthPath  = adminPath + "/ops/ingress-rejections/health"
+	authCachePath      = adminPath + "/ops/auth-cache-invalidation/health"
+	accountsPathPrefix = adminPath + "/accounts"
+	accountsPageSize   = 100
+	accountsMaxPages   = 10
 )
 
 var (
@@ -115,7 +122,10 @@ type Client struct {
 	changed chan struct{}
 }
 
-var _ UpstreamClient = (*Client)(nil)
+var (
+	_ UpstreamClient = (*Client)(nil)
+	_ P1AClient      = (*Client)(nil)
+)
 
 func NewClient(siteCfg config.SiteOpsConfig, proxyCfg config.ProxyConfig, upstreamCfg config.UpstreamConfig, guard OutboundValidator, log *slog.Logger) *Client {
 	if guard == nil {
@@ -758,4 +768,67 @@ func (c *Client) FetchGroupsAll(ctx context.Context, inst TargetEndpoint) ([]San
 
 func (c *Client) FetchSystemVersion(ctx context.Context, inst TargetEndpoint) (*SanitizedVersionInfo, UpstreamFetchMeta, error) {
 	return fetch(c, ctx, inst, EndpointSystemVersion, versionPath, ParseSystemVersion)
+}
+
+func (c *Client) FetchOpsAlertEvents(ctx context.Context, inst TargetEndpoint) ([]SanitizedOpsAlertEvent, UpstreamFetchMeta, error) {
+	return fetch(c, ctx, inst, EndpointOpsAlertEvents, alertEventsPath, ParseOpsAlertEvents)
+}
+
+func (c *Client) FetchIngressRejectHealth(ctx context.Context, inst TargetEndpoint) (*SanitizedIngressRejectHealth, UpstreamFetchMeta, error) {
+	return fetch(c, ctx, inst, EndpointOpsIngressHealth, ingressHealthPath, ParseIngressRejectHealth)
+}
+
+func (c *Client) FetchAuthCacheHealth(ctx context.Context, inst TargetEndpoint) (*SanitizedAuthCacheHealth, UpstreamFetchMeta, error) {
+	return fetch(c, ctx, inst, EndpointOpsAuthCacheHealth, authCachePath, ParseAuthCacheHealth)
+}
+
+func (c *Client) FetchAccountsDirectory(ctx context.Context, inst TargetEndpoint) ([]SanitizedAccountSummary, UpstreamFetchMeta, error) {
+	c.mu.Lock()
+	timeout := time.Duration(c.runtime.site.BatchTimeoutSeconds) * time.Second
+	c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	all := make([]SanitizedAccountSummary, 0)
+	var aggregateMeta UpstreamFetchMeta
+	aggregateMeta.Endpoint = EndpointAccounts
+	allNotModified := true
+	var totalLatency int64
+
+	for page := 1; page <= accountsMaxPages; page++ {
+		path := fmt.Sprintf("%s?page=%d&page_size=%d", accountsPathPrefix, page, accountsPageSize)
+		pageData, meta, err := fetch(c, ctx, inst, EndpointAccounts, path, ParseAccountsPage)
+		totalLatency += meta.LatencyMS
+		if err != nil {
+			meta.LatencyMS = totalLatency
+			return nil, meta, err
+		}
+		if !meta.NotModified {
+			allNotModified = false
+		}
+		aggregateMeta.HTTPStatus = meta.HTTPStatus
+		if meta.ObservedAt.After(aggregateMeta.ObservedAt) {
+			aggregateMeta.ObservedAt = meta.ObservedAt
+		}
+		if meta.VerifiedAt.After(aggregateMeta.VerifiedAt) {
+			aggregateMeta.VerifiedAt = meta.VerifiedAt
+		}
+		if pageData == nil || len(pageData.Items) == 0 {
+			break
+		}
+		all = append(all, pageData.Items...)
+		pageLimit := accountsPageSize
+		if pageData.PageSize > 0 {
+			pageLimit = pageData.PageSize
+		}
+		if len(pageData.Items) < pageLimit {
+			break
+		}
+		if pageData.Total > 0 && int64(len(all)) >= pageData.Total {
+			break
+		}
+	}
+	aggregateMeta.LatencyMS = totalLatency
+	aggregateMeta.NotModified = allNotModified
+	return all, aggregateMeta, nil
 }
