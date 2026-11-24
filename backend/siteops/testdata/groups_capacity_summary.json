@@ -1,0 +1,30 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "groups": [
+      {
+        "group_id": 10,
+        "concurrency_used": 14,
+        "concurrency_max": 32,
+        "sessions_used": 9,
+        "sessions_max": 40,
+        "rpm_used": 128,
+        "rpm_max": 600,
+        "secret_note": "sk-group-cap-secret-10",
+        "credentials": {
+          "api_key": "adm_secret_cap_key"
+        }
+      },
+      {
+        "group_id": 20,
+        "concurrency_used": 3,
+        "concurrency_max": 16,
+        "sessions_used": 2,
+        "sessions_max": 20,
+        "rpm_used": 22,
+        "rpm_max": 300
+      }
+    ]
+  }
+}
