@@ -30,6 +30,7 @@ type SiteOpsInstance struct {
 	BackoffUntil        *time.Time `json:"backoff_until,omitempty"`
 	LastErrorCode       string     `gorm:"size:64;not null;default:''" json:"last_error_code"`
 	LastErrorSummary    string     `gorm:"size:256;not null;default:''" json:"last_error_summary"`
+	AlertConfigJSON     string     `gorm:"type:text;not null;default:''" json:"alert_config_json,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
 	UpdatedAt           time.Time  `json:"updated_at"`
 }
@@ -115,3 +116,49 @@ type SiteOpsGroupSnapshot struct {
 }
 
 func (SiteOpsGroupSnapshot) TableName() string { return "site_ops_group_snapshots" }
+
+// SiteOpsEvent 站点运维状态跃迁事件流（P1-A，默认保留 30 天）。
+// 仅管理规则状态机（firing/resolved、连续命中次数与同域证据），不耦合具体通知渠道投递状态。
+type SiteOpsEvent struct {
+	ID                  uint       `gorm:"primaryKey" json:"id"`
+	InstanceID          uint       `gorm:"not null;index:idx_site_ops_evt_inst_created,priority:1;index:idx_site_ops_evt_active,priority:1" json:"instance_id"`
+	Severity            string     `gorm:"size:16;not null;default:'warning'" json:"severity"`
+	RuleKey             string     `gorm:"size:64;not null;index:idx_site_ops_evt_active,priority:2" json:"rule_key"`
+	ResourceKey         string     `gorm:"size:128;not null;default:'site';index:idx_site_ops_evt_active,priority:3" json:"resource_key"`
+	RequiredDomainsJSON string     `gorm:"type:text;not null;default:'[]'" json:"required_domains_json"`
+	State               string     `gorm:"size:16;not null;default:'firing';index:idx_site_ops_evt_active,priority:4" json:"state"`
+	ConsecutiveHits     int        `gorm:"not null;default:1" json:"consecutive_hits"`
+	Title               string     `gorm:"size:256;not null;default:''" json:"title"`
+	Summary             string     `gorm:"size:512;not null;default:''" json:"summary"`
+	DetailJSON          string     `gorm:"type:text;not null;default:'{}'" json:"detail_json,omitempty"`
+	FiredAt             time.Time  `gorm:"not null" json:"fired_at"`
+	ResolvedAt          *time.Time `json:"resolved_at,omitempty"`
+	CreatedAt           time.Time  `gorm:"index:idx_site_ops_evt_inst_created,priority:2;index:idx_site_ops_evt_created" json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+func (SiteOpsEvent) TableName() string { return "site_ops_events" }
+
+// SiteOpsAlertDelivery 独立冷却占位与按目的地投递状态表（P1-A，默认保留 30 天）。
+// 与旧 notification_cooldowns / notification_logs 完全隔离，避免 Channels.Delete(id) 串扰，
+// 同时支持部分渠道失败后的独立退避重试与重启续发。
+type SiteOpsAlertDelivery struct {
+	ID              uint       `gorm:"primaryKey" json:"id"`
+	EventID         uint       `gorm:"not null;index:idx_site_ops_deliv_event" json:"event_id"`
+	InstanceID      uint       `gorm:"not null;index:idx_site_ops_deliv_cooldown,priority:1" json:"instance_id"`
+	NotifyChannelID uint       `gorm:"not null;index:idx_site_ops_deliv_cooldown,priority:2" json:"notify_channel_id"`
+	DeliveryKind    string     `gorm:"size:24;not null;default:'alert'" json:"delivery_kind"`
+	CooldownKey     string     `gorm:"size:128;not null;default:'';index:idx_site_ops_deliv_cooldown,priority:3" json:"cooldown_key"`
+	CooldownUntil   *time.Time `gorm:"index:idx_site_ops_deliv_cooldown,priority:4" json:"cooldown_until,omitempty"`
+	Status          string     `gorm:"size:24;not null;default:'pending';index:idx_site_ops_deliv_retry,priority:1" json:"status"`
+	Attempts        int        `gorm:"not null;default:0" json:"attempts"`
+	NextRetryAt     *time.Time `gorm:"index:idx_site_ops_deliv_retry,priority:2" json:"next_retry_at,omitempty"`
+	Subject         string     `gorm:"size:256;not null;default:''" json:"subject"`
+	Body            string     `gorm:"type:text;not null;default:''" json:"body"`
+	LastError       string     `gorm:"size:256;not null;default:''" json:"last_error,omitempty"`
+	SentAt          *time.Time `json:"sent_at,omitempty"`
+	CreatedAt       time.Time  `gorm:"index:idx_site_ops_deliv_created" json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+func (SiteOpsAlertDelivery) TableName() string { return "site_ops_alert_deliveries" }
