@@ -1,0 +1,49 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "summary": {
+      "days": 30,
+      "actual_days_used": 18,
+      "total_requests": 4210,
+      "total_tokens": 58200000,
+      "total_cost": 186.5,
+      "total_standard_cost": 265.0,
+      "total_user_cost": 318.0,
+      "today": {
+        "date": "2026-11-24",
+        "requests": 215,
+        "tokens": 2900000,
+        "cost": 9.25,
+        "user_cost": 16.4
+      }
+    },
+    "history": [
+      {
+        "date": "2026-11-23",
+        "requests": 310,
+        "tokens": 4100000,
+        "cost": 19.8,
+        "actual_cost": 13.9,
+        "user_cost": 23.5
+      },
+      {
+        "date": "2026-11-24",
+        "requests": 215,
+        "tokens": 2900000,
+        "cost": 13.75,
+        "actual_cost": 9.25,
+        "user_cost": 16.4
+      }
+    ],
+    "models": [
+      {
+        "model": "claude-sonnet-4-5",
+        "api_key": "sk-stats-should-not-leak"
+      }
+    ],
+    "credentials": {
+      "refresh_token": "stats-refresh-secret-token"
+    }
+  }
+}

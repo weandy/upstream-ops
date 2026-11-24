@@ -723,3 +723,307 @@ func ParseAccountsPage(raw []byte) (*AccountsPagePayload, error) {
 		PageSize: pageSize,
 	}, nil
 }
+
+func sanitizeFloat(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
+}
+
+type groupCapacitySummaryWire struct {
+	GroupID         int64 `json:"group_id"`
+	ID              int64 `json:"id"`
+	ConcurrencyUsed int64 `json:"concurrency_used"`
+	ConcurrencyMax  int64 `json:"concurrency_max"`
+	SessionsUsed    int64 `json:"sessions_used"`
+	SessionsMax     int64 `json:"sessions_max"`
+	RPMUsed         int64 `json:"rpm_used"`
+	RPMMax          int64 `json:"rpm_max"`
+}
+
+func ParseGroupCapacitySummary(raw []byte) ([]SanitizedGroupCapacitySummary, error) {
+	payload, err := decodeEnvelopeData(raw)
+	if err != nil {
+		return nil, err
+	}
+	var wireItems []groupCapacitySummaryWire
+	switch payload[0] {
+	case '[':
+		if err := json.Unmarshal(payload, &wireItems); err != nil {
+			return nil, errInvalidPayload
+		}
+	case '{':
+		var wrapped struct {
+			Groups []groupCapacitySummaryWire `json:"groups"`
+			Items  []groupCapacitySummaryWire `json:"items"`
+		}
+		if err := json.Unmarshal(payload, &wrapped); err != nil {
+			return nil, errInvalidPayload
+		}
+		if wrapped.Groups != nil {
+			wireItems = wrapped.Groups
+		} else {
+			wireItems = wrapped.Items
+		}
+	default:
+		return nil, errInvalidPayload
+	}
+	out := make([]SanitizedGroupCapacitySummary, 0, len(wireItems))
+	for _, item := range wireItems {
+		groupID := item.GroupID
+		if groupID == 0 {
+			groupID = item.ID
+		}
+		out = append(out, SanitizedGroupCapacitySummary{
+			GroupID:         groupID,
+			ConcurrencyUsed: item.ConcurrencyUsed,
+			ConcurrencyMax:  item.ConcurrencyMax,
+			SessionsUsed:    item.SessionsUsed,
+			SessionsMax:     item.SessionsMax,
+			RPMUsed:         item.RPMUsed,
+			RPMMax:          item.RPMMax,
+		})
+	}
+	return out, nil
+}
+
+type windowStatsWire struct {
+	Requests     int64   `json:"requests"`
+	Tokens       int64   `json:"tokens"`
+	Cost         float64 `json:"cost"`
+	StandardCost float64 `json:"standard_cost"`
+	UserCost     float64 `json:"user_cost"`
+}
+
+type usageProgressWire struct {
+	Utilization        float64          `json:"utilization"`
+	UtilizationUnknown bool             `json:"utilization_unknown"`
+	ResetsAt           *time.Time       `json:"resets_at"`
+	RemainingSeconds   int64            `json:"remaining_seconds"`
+	WindowStats        *windowStatsWire `json:"window_stats"`
+}
+
+type accountUsageWire struct {
+	Source            string             `json:"source"`
+	UpdatedAt         *time.Time         `json:"updated_at"`
+	FiveHour          *usageProgressWire `json:"five_hour"`
+	SevenDay          *usageProgressWire `json:"seven_day"`
+	SevenDaySonnet    *usageProgressWire `json:"seven_day_sonnet"`
+	SevenDayFable     *usageProgressWire `json:"seven_day_fable"`
+	ThirtyDay         *usageProgressWire `json:"thirty_day"`
+	GeminiSharedDaily *usageProgressWire `json:"gemini_shared_daily"`
+	GeminiProDaily    *usageProgressWire `json:"gemini_pro_daily"`
+	GeminiFlashDaily  *usageProgressWire `json:"gemini_flash_daily"`
+}
+
+func projectAccountUsage(accountID int64, wire accountUsageWire) SanitizedAccountUsage {
+	source := strings.ToLower(SanitizeErrorText(wire.Source, 32))
+	if source == "" {
+		source = "passive"
+	}
+	var updatedAt *time.Time
+	if wire.UpdatedAt != nil {
+		t := wire.UpdatedAt.UTC()
+		updatedAt = &t
+	}
+	slots := []struct {
+		key  string
+		prog *usageProgressWire
+	}{
+		{"five_hour", wire.FiveHour},
+		{"seven_day", wire.SevenDay},
+		{"seven_day_sonnet", wire.SevenDaySonnet},
+		{"seven_day_fable", wire.SevenDayFable},
+		{"thirty_day", wire.ThirtyDay},
+		{"gemini_shared_daily", wire.GeminiSharedDaily},
+		{"gemini_pro_daily", wire.GeminiProDaily},
+		{"gemini_flash_daily", wire.GeminiFlashDaily},
+	}
+	windows := make([]SanitizedUsageWindow, 0, len(slots))
+	for _, slot := range slots {
+		if slot.prog == nil {
+			continue
+		}
+		var resetsAt *time.Time
+		if slot.prog.ResetsAt != nil {
+			t := slot.prog.ResetsAt.UTC()
+			resetsAt = &t
+		}
+		var stats *SanitizedWindowStats
+		if slot.prog.WindowStats != nil {
+			stats = &SanitizedWindowStats{
+				Requests:     slot.prog.WindowStats.Requests,
+				Tokens:       slot.prog.WindowStats.Tokens,
+				Cost:         sanitizeFloat(slot.prog.WindowStats.Cost),
+				StandardCost: sanitizeFloat(slot.prog.WindowStats.StandardCost),
+				UserCost:     sanitizeFloat(slot.prog.WindowStats.UserCost),
+			}
+		}
+		windows = append(windows, SanitizedUsageWindow{
+			WindowKey:          slot.key,
+			WindowDurationSec:  WindowDurationForKey(slot.key),
+			Utilization:        sanitizeFloat(slot.prog.Utilization),
+			UtilizationUnknown: slot.prog.UtilizationUnknown,
+			ResetsAt:           resetsAt,
+			RemainingSeconds:   slot.prog.RemainingSeconds,
+			WindowStats:        stats,
+		})
+	}
+	return SanitizedAccountUsage{
+		AccountID: accountID,
+		Source:    source,
+		UpdatedAt: updatedAt,
+		Windows:   windows,
+	}
+}
+
+func ParseAccountUsage(accountID int64, raw []byte) (*SanitizedAccountUsage, error) {
+	payload, err := decodeEnvelopeData(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload[0] != '{' {
+		return nil, errInvalidPayload
+	}
+	var wire accountUsageWire
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		return nil, errInvalidPayload
+	}
+	projected := projectAccountUsage(accountID, wire)
+	return &projected, nil
+}
+
+func ParseBatchUsageResult(raw []byte) (*SanitizedBatchUsageResult, error) {
+	payload, err := decodeEnvelopeData(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload[0] != '{' {
+		return nil, errInvalidPayload
+	}
+	var wire struct {
+		Usage  map[string]accountUsageWire `json:"usage"`
+		Errors map[string]string           `json:"errors"`
+	}
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		return nil, errInvalidPayload
+	}
+	out := &SanitizedBatchUsageResult{
+		Usage: make(map[int64]SanitizedAccountUsage, len(wire.Usage)),
+	}
+	for rawID, usage := range wire.Usage {
+		id, err := strconv.ParseInt(strings.TrimSpace(rawID), 10, 64)
+		if err != nil || id <= 0 {
+			continue
+		}
+		out.Usage[id] = projectAccountUsage(id, usage)
+	}
+	if len(wire.Errors) > 0 {
+		out.Errors = make(map[int64]string, len(wire.Errors))
+		for rawID, msg := range wire.Errors {
+			id, err := strconv.ParseInt(strings.TrimSpace(rawID), 10, 64)
+			if err != nil || id <= 0 {
+				continue
+			}
+			out.Errors[id] = SanitizeErrorText(msg, 200)
+		}
+		if len(out.Errors) == 0 {
+			out.Errors = nil
+		}
+	}
+	return out, nil
+}
+
+type accountStatsTodayWire struct {
+	Date         string   `json:"date"`
+	Requests     int64    `json:"requests"`
+	Tokens       int64    `json:"tokens"`
+	Cost         float64  `json:"cost"`
+	StandardCost *float64 `json:"standard_cost"`
+	UserCost     float64  `json:"user_cost"`
+}
+
+type accountStatsSummaryWire struct {
+	Days              int                    `json:"days"`
+	ActualDaysUsed    int                    `json:"actual_days_used"`
+	TotalRequests     int64                  `json:"total_requests"`
+	TotalTokens       int64                  `json:"total_tokens"`
+	TotalCost         float64                `json:"total_cost"`
+	TotalStandardCost float64                `json:"total_standard_cost"`
+	TotalUserCost     float64                `json:"total_user_cost"`
+	Today             *accountStatsTodayWire `json:"today"`
+}
+
+type accountStatsHistoryItemWire struct {
+	Date       string  `json:"date"`
+	Requests   int64   `json:"requests"`
+	Tokens     int64   `json:"tokens"`
+	Cost       float64 `json:"cost"`
+	ActualCost float64 `json:"actual_cost"`
+	UserCost   float64 `json:"user_cost"`
+}
+
+func ParseAccountStats(accountID int64, raw []byte) (*SanitizedAccountStats, error) {
+	payload, err := decodeEnvelopeData(raw)
+	if err != nil {
+		return nil, err
+	}
+	if payload[0] != '{' {
+		return nil, errInvalidPayload
+	}
+	var wire struct {
+		Days           int                           `json:"days"`
+		ActualDaysUsed int                           `json:"actual_days_used"`
+		Summary        *accountStatsSummaryWire      `json:"summary"`
+		History        []accountStatsHistoryItemWire `json:"history"`
+		Today          *accountStatsTodayWire        `json:"today"`
+	}
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		return nil, errInvalidPayload
+	}
+	if wire.Summary == nil && len(wire.History) == 0 && wire.Today == nil {
+		return nil, errInvalidPayload
+	}
+	out := &SanitizedAccountStats{
+		AccountID:      accountID,
+		Days:           wire.Days,
+		ActualDaysUsed: wire.ActualDaysUsed,
+	}
+	today := wire.Today
+	if wire.Summary != nil {
+		if wire.Summary.Days > 0 {
+			out.Days = wire.Summary.Days
+		}
+		if wire.Summary.ActualDaysUsed > 0 {
+			out.ActualDaysUsed = wire.Summary.ActualDaysUsed
+		}
+		out.TotalRequests = wire.Summary.TotalRequests
+		out.TotalTokens = wire.Summary.TotalTokens
+		out.TotalCost = sanitizeFloat(wire.Summary.TotalCost)
+		out.TotalStandardCost = sanitizeFloat(wire.Summary.TotalStandardCost)
+		out.TotalUserCost = sanitizeFloat(wire.Summary.TotalUserCost)
+		if wire.Summary.Today != nil {
+			today = wire.Summary.Today
+		}
+	}
+	if today != nil {
+		out.TodayDate = SanitizeErrorText(today.Date, 32)
+		out.TodayRequests = today.Requests
+		out.TodayTokens = today.Tokens
+		out.TodayCost = sanitizeFloat(today.Cost)
+		out.TodayUserCost = sanitizeFloat(today.UserCost)
+		if today.StandardCost != nil {
+			out.TodayStandardCost = sanitizeFloat(*today.StandardCost)
+		} else if out.TodayDate != "" {
+			for _, day := range wire.History {
+				if strings.TrimSpace(day.Date) == out.TodayDate {
+					// Sub2API v0.2.24 history[*].cost 对应官方标价 (standard_cost)，actual_cost 对应账号折算成本。
+					out.TodayStandardCost = sanitizeFloat(day.Cost)
+					break
+				}
+			}
+		}
+	}
+	return out, nil
+}

@@ -33,14 +33,16 @@ const (
 	overviewPath       = adminPath + "/ops/dashboard/overview"
 	concurrencyPath    = adminPath + "/ops/concurrency"
 	availabilityPath   = adminPath + "/ops/account-availability"
-	groupsPath         = adminPath + "/groups/all"
-	versionPath        = adminPath + "/system/version"
-	alertEventsPath    = adminPath + "/ops/alert-events?limit=50"
-	ingressHealthPath  = adminPath + "/ops/ingress-rejections/health"
-	authCachePath      = adminPath + "/ops/auth-cache-invalidation/health"
-	accountsPathPrefix = adminPath + "/accounts"
-	accountsPageSize   = 100
-	accountsMaxPages   = 10
+	groupsPath                = adminPath + "/groups/all"
+	groupsCapacitySummaryPath = adminPath + "/groups/capacity-summary"
+	versionPath               = adminPath + "/system/version"
+	alertEventsPath           = adminPath + "/ops/alert-events?limit=50"
+	ingressHealthPath         = adminPath + "/ops/ingress-rejections/health"
+	authCachePath             = adminPath + "/ops/auth-cache-invalidation/health"
+	accountsPathPrefix        = adminPath + "/accounts"
+	accountsUsageBatchPath    = accountsPathPrefix + "/usage/batch"
+	accountsPageSize          = 100
+	accountsMaxPages          = 10
 )
 
 var (
@@ -110,21 +112,23 @@ type auditWindow struct {
 }
 
 type Client struct {
-	mu      sync.Mutex
-	runtime clientRuntime
-	guard   OutboundValidator
-	log     *slog.Logger
-	flights map[flightKey]*requestFlight
-	cache   map[endpointKey]observation
-	budgets map[uint]*auditWindow
-	slots   map[uint]*requestSlots
-	active  int
-	changed chan struct{}
+	mu          sync.Mutex
+	runtime     clientRuntime
+	guard       OutboundValidator
+	log         *slog.Logger
+	flights     map[flightKey]*requestFlight
+	cache       map[endpointKey]observation
+	budgets     map[uint]*auditWindow
+	slots       map[uint]*requestSlots
+	active      int
+	changed     chan struct{}
+	batchMinGap time.Duration
 }
 
 var (
 	_ UpstreamClient = (*Client)(nil)
 	_ P1AClient      = (*Client)(nil)
+	_ P1BClient      = (*Client)(nil)
 )
 
 func NewClient(siteCfg config.SiteOpsConfig, proxyCfg config.ProxyConfig, upstreamCfg config.UpstreamConfig, guard OutboundValidator, log *slog.Logger) *Client {
@@ -135,6 +139,7 @@ func NewClient(siteCfg config.SiteOpsConfig, proxyCfg config.ProxyConfig, upstre
 		runtime: clientRuntime{siteCfg.WithDefaults(), proxyCfg, upstreamCfg.WithDefaults().UserAgent},
 		guard:   guard, log: log, flights: make(map[flightKey]*requestFlight), cache: make(map[endpointKey]observation),
 		budgets: make(map[uint]*auditWindow), slots: make(map[uint]*requestSlots), changed: make(chan struct{}),
+		batchMinGap: PassiveUsageBatchMinGap,
 	}
 }
 
@@ -831,4 +836,230 @@ func (c *Client) FetchAccountsDirectory(ctx context.Context, inst TargetEndpoint
 	aggregateMeta.LatencyMS = totalLatency
 	aggregateMeta.NotModified = allNotModified
 	return all, aggregateMeta, nil
+}
+
+func postAdminJSON[T any](c *Client, ctx context.Context, inst TargetEndpoint, endpoint, path string, reqBody any, parse func([]byte) (T, error)) (T, UpstreamFetchMeta, error) {
+	var zero T
+	meta := UpstreamFetchMeta{Endpoint: endpoint}
+	if err := ctx.Err(); err != nil {
+		res := failedFetch(meta, err)
+		return zero, res.meta, res.err
+	}
+	c.mu.Lock()
+	runtime := c.runtime
+	baseURL, err := c.guard.ValidateBaseURL(inst.BaseURL)
+	c.mu.Unlock()
+	if err != nil {
+		res := failedFetch(meta, ErrOriginNotAllowed)
+		return zero, res.meta, res.err
+	}
+	if strings.TrimSpace(inst.APIKey) == "" {
+		res := failedFetch(meta, ErrUnauthorized)
+		return zero, res.meta, res.err
+	}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		res := failedFetch(meta, errUpstreamRequest)
+		return zero, res.meta, res.err
+	}
+	if err := c.acquire(ctx, inst.InstanceID, time.Duration(runtime.site.QueueWaitTimeoutSeconds)*time.Second); err != nil {
+		res := failedFetch(meta, err)
+		return zero, res.meta, res.err
+	}
+	defer c.release(inst.InstanceID)
+
+	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(runtime.site.RequestTimeoutSeconds)*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL+path, bytes.NewReader(bodyBytes))
+	if err != nil {
+		res := failedFetch(meta, errUpstreamRequest)
+		return zero, res.meta, res.err
+	}
+	req.Header.Set("User-Agent", runtime.userAgent)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", inst.APIKey)
+
+	start := time.Now()
+	transport, err := c.transport(req, inst.ProxyEnabled, runtime.proxy)
+	if err != nil {
+		res := failedFetch(meta, safeRequestError(reqCtx, err))
+		return zero, res.meta, res.err
+	}
+	defer transport.CloseIdleConnections()
+
+	markSent, releaseBudget, err := c.reserveAudit(inst, reqCtx)
+	if err != nil {
+		res := failedFetch(meta, err)
+		return zero, res.meta, res.err
+	}
+	defer releaseBudget()
+	req = req.WithContext(httptrace.WithClientTrace(reqCtx, &httptrace.ClientTrace{WroteRequest: func(info httptrace.WroteRequestInfo) {
+		if info.Err == nil {
+			markSent()
+		}
+	}}))
+
+	client := http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return ErrRedirectBlocked
+	}}
+	resp, err := client.Do(req)
+	meta.LatencyMS = time.Since(start).Milliseconds()
+	if resp != nil {
+		meta.HTTPStatus = resp.StatusCode
+		markSent()
+	}
+	if err != nil {
+		res := failedFetch(meta, safeRequestError(reqCtx, err))
+		return zero, res.meta, res.err
+	}
+	defer resp.Body.Close()
+
+	project := func(body []byte) ([]byte, error) {
+		value, err := parse(body)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(value)
+	}
+	result := readAdminResponse(reqCtx, resp, meta, observation{}, project, inst.APIKey, runtime.site.MaxResponseBytes, start)
+	if c.log != nil {
+		c.log.Debug("site-ops upstream post request", "instance_id", inst.InstanceID, "endpoint", endpoint,
+			"http_status", result.meta.HTTPStatus, "latency_ms", result.meta.LatencyMS, "error_code", result.meta.ErrorCode)
+	}
+	if result.err != nil {
+		return zero, result.meta, result.err
+	}
+	var value T
+	if err := json.Unmarshal(result.projected, &value); err != nil {
+		res := failedFetch(result.meta, errInvalidPayload)
+		return zero, res.meta, res.err
+	}
+	return value, result.meta, nil
+}
+
+func (c *Client) FetchGroupCapacitySummary(ctx context.Context, inst TargetEndpoint) ([]SanitizedGroupCapacitySummary, UpstreamFetchMeta, error) {
+	return fetch(c, ctx, inst, EndpointGroupsCapacitySummary, groupsCapacitySummaryPath, ParseGroupCapacitySummary)
+}
+
+func (c *Client) FetchAccountPassiveUsage(ctx context.Context, inst TargetEndpoint, accountID int64) (*SanitizedAccountUsage, UpstreamFetchMeta, error) {
+	if accountID <= 0 {
+		res := failedFetch(UpstreamFetchMeta{Endpoint: EndpointAccountsUsagePassive}, ErrInvalidInput)
+		return nil, res.meta, res.err
+	}
+	path := fmt.Sprintf("%s/%d/usage?source=passive", accountsPathPrefix, accountID)
+	return fetch(c, ctx, inst, EndpointAccountsUsagePassive, path, func(raw []byte) (*SanitizedAccountUsage, error) {
+		return ParseAccountUsage(accountID, raw)
+	})
+}
+
+type batchUsageRequest struct {
+	AccountIDs []int64 `json:"account_ids"`
+	Force      bool    `json:"force"`
+}
+
+func (c *Client) FetchAccountsUsageBatch(ctx context.Context, inst TargetEndpoint, passiveAccountIDs []int64) (*SanitizedBatchUsageResult, UpstreamFetchMeta, error) {
+	ids := make([]int64, 0, len(passiveAccountIDs))
+	seen := make(map[int64]struct{}, len(passiveAccountIDs))
+	for _, id := range passiveAccountIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		now := time.Now().UTC()
+		return &SanitizedBatchUsageResult{
+			Usage: make(map[int64]SanitizedAccountUsage),
+		}, UpstreamFetchMeta{
+			Endpoint:   EndpointAccountsUsageBatch,
+			ObservedAt: now,
+			VerifiedAt: now,
+		}, nil
+	}
+
+	c.mu.Lock()
+	batchTimeout := time.Duration(c.runtime.site.BatchTimeoutSeconds) * time.Second
+	gap := c.batchMinGap
+	c.mu.Unlock()
+	if gap < 0 {
+		gap = PassiveUsageBatchMinGap
+	}
+
+	chunks := (len(ids) + PassiveUsageBatchMaxSize - 1) / PassiveUsageBatchMaxSize
+	totalBudget := batchTimeout + time.Duration(max(0, chunks-1))*gap
+	ctx, cancel := context.WithTimeout(ctx, totalBudget)
+	defer cancel()
+
+	combined := &SanitizedBatchUsageResult{
+		Usage: make(map[int64]SanitizedAccountUsage, len(ids)),
+	}
+	aggregateMeta := UpstreamFetchMeta{Endpoint: EndpointAccountsUsageBatch}
+	var totalLatency int64
+
+	for start := 0; start < len(ids); start += PassiveUsageBatchMaxSize {
+		end := min(start+PassiveUsageBatchMaxSize, len(ids))
+		payload := batchUsageRequest{
+			AccountIDs: ids[start:end],
+			Force:      false,
+		}
+		part, meta, err := postAdminJSON(c, ctx, inst, EndpointAccountsUsageBatch, accountsUsageBatchPath, payload, ParseBatchUsageResult)
+		totalLatency += meta.LatencyMS
+		if err != nil {
+			meta.LatencyMS = totalLatency
+			return nil, meta, err
+		}
+		aggregateMeta.HTTPStatus = meta.HTTPStatus
+		if meta.ObservedAt.After(aggregateMeta.ObservedAt) {
+			aggregateMeta.ObservedAt = meta.ObservedAt
+		}
+		if meta.VerifiedAt.After(aggregateMeta.VerifiedAt) {
+			aggregateMeta.VerifiedAt = meta.VerifiedAt
+		}
+		if part != nil {
+			for id, usage := range part.Usage {
+				combined.Usage[id] = usage
+			}
+			if len(part.Errors) > 0 {
+				if combined.Errors == nil {
+					combined.Errors = make(map[int64]string, len(part.Errors))
+				}
+				for id, msg := range part.Errors {
+					combined.Errors[id] = msg
+				}
+			}
+		}
+		if gap > 0 && end < len(ids) {
+			timer := time.NewTimer(gap)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				aggregateMeta.LatencyMS = totalLatency
+				res := failedFetch(aggregateMeta, ctx.Err())
+				return nil, res.meta, res.err
+			}
+		}
+	}
+	aggregateMeta.LatencyMS = totalLatency
+	return combined, aggregateMeta, nil
+}
+
+func (c *Client) FetchAccountStats(ctx context.Context, inst TargetEndpoint, accountID int64, days int) (*SanitizedAccountStats, UpstreamFetchMeta, error) {
+	if accountID <= 0 {
+		res := failedFetch(UpstreamFetchMeta{Endpoint: EndpointAccountsStats}, ErrInvalidInput)
+		return nil, res.meta, res.err
+	}
+	if days <= 0 {
+		days = 30
+	} else if days > 90 {
+		days = 90
+	}
+	path := fmt.Sprintf("%s/%d/stats?days=%d", accountsPathPrefix, accountID, days)
+	return fetch(c, ctx, inst, EndpointAccountsStats, path, func(raw []byte) (*SanitizedAccountStats, error) {
+		return ParseAccountStats(accountID, raw)
+	})
 }
