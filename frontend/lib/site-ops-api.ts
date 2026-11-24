@@ -4,6 +4,20 @@
 import { apiFetch, type ApiError } from "@/lib/api"
 import type {
   SiteOpsAccountCostView,
+  SiteOpsAnalyticsLightsResponse,
+  SiteOpsAnalyticsChannelResponse,
+  SiteOpsAnalyticsUsersResponse,
+  SiteOpsAnalyticsUserDetailResponse,
+  SiteOpsAnalyticsSubscriptionsResponse,
+  SiteOpsAnalyticsSubscriptionDetailResponse,
+  SiteOpsAnalyticsMarketResponse,
+  SiteOpsAnalyticsPricingResponse,
+  SiteOpsAnalyticsConfig,
+  SiteOpsAnalyticsReferencePriceView,
+  SiteOpsAnalyticsPutReferencePriceInput,
+  SiteOpsAnalyticsPriceScope,
+  SiteOpsAnalyticsSubscriptionStatus,
+  SiteOpsAnalyticsRange,
   SiteOpsAccountsEfficiencyResponse,
   SiteOpsAccountsStatusResponse,
   SiteOpsCreateInstanceInput,
@@ -156,4 +170,104 @@ export function updateSiteOpsAccountCost(
       body: JSON.stringify(input),
     },
   )
+}
+
+type AnalyticsOptions = { signal?: AbortSignal }
+type AnalyticsRead = { force?: boolean; cache_only?: boolean }
+
+function analyticsPath(id: number, route: string, params: Record<string, string | number | boolean | undefined> = {}) {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) query.set(key, typeof value === "boolean" ? String(Number(value)) : String(value))
+  }
+  const suffix = query.toString()
+  return `/site-ops/instances/${id}/analytics/${route}${suffix ? "?" + suffix : ""}`
+}
+
+export function fetchSiteOpsAnalyticsLights(
+  id: number,
+  params: { force?: boolean } = {},
+  options: AnalyticsOptions = {},
+) {
+  return apiFetch<SiteOpsAnalyticsLightsResponse>(analyticsPath(id, "lights", params), options)
+}
+
+export function fetchSiteOpsAnalyticsChannel(
+  id: number,
+  params: { force?: boolean } = {},
+  options: AnalyticsOptions = {},
+) {
+  return apiFetch<SiteOpsAnalyticsChannelResponse>(analyticsPath(id, "channel-status", params), options)
+}
+
+export function fetchSiteOpsAnalyticsUsers(
+  id: number,
+  params: AnalyticsRead & { page?: number; top_n?: number } = {},
+  options: AnalyticsOptions = {},
+) {
+  return apiFetch<SiteOpsAnalyticsUsersResponse>(analyticsPath(id, "users", params), options)
+}
+
+export function fetchSiteOpsAnalyticsUserDetail(
+  id: number,
+  userId: number,
+  params: { user_page?: number; key_page?: number; force?: boolean } = {},
+  options: AnalyticsOptions = {},
+) {
+  return apiFetch<SiteOpsAnalyticsUserDetailResponse>(analyticsPath(id, `users/${userId}`, params), options)
+}
+
+export function fetchSiteOpsAnalyticsSubscriptions(
+  id: number,
+  params: AnalyticsRead & { page?: number; status?: SiteOpsAnalyticsSubscriptionStatus; group_id?: number } = {},
+  options: AnalyticsOptions = {},
+) {
+  return apiFetch<SiteOpsAnalyticsSubscriptionsResponse>(analyticsPath(id, "subscriptions", params), options)
+}
+
+export function fetchSiteOpsAnalyticsSubscriptionDetail(
+  id: number,
+  subscriptionId: number,
+  params: AnalyticsRead & { subscription_page?: number } = {},
+  options: AnalyticsOptions = {},
+) {
+  return apiFetch<SiteOpsAnalyticsSubscriptionDetailResponse>(analyticsPath(id, `subscriptions/${subscriptionId}`, params), options)
+}
+
+export function fetchSiteOpsAnalyticsMarket(
+  id: number,
+  params: AnalyticsRead & { range?: SiteOpsAnalyticsRange } = {},
+  options: AnalyticsOptions = {},
+) {
+  return apiFetch<SiteOpsAnalyticsMarketResponse>(analyticsPath(id, "market", params), options)
+}
+
+export function fetchSiteOpsAnalyticsPricing(
+  id: number,
+  options: AnalyticsOptions = {},
+) {
+  return apiFetch<SiteOpsAnalyticsPricingResponse>(analyticsPath(id, "pricing"), options)
+}
+
+export function updateSiteOpsAnalyticsConfig(id: number, input: SiteOpsAnalyticsConfig, options: AnalyticsOptions = {}) {
+  return apiFetch<SiteOpsAnalyticsConfig>(analyticsPath(id, "pricing/config"), {
+    ...options, method: "PUT", body: JSON.stringify(input),
+  })
+}
+
+export function putSiteOpsReferencePrice(
+  id: number, scope: SiteOpsAnalyticsPriceScope, scopeId: number,
+  input: SiteOpsAnalyticsPutReferencePriceInput, options: AnalyticsOptions = {},
+) {
+  return apiFetch<SiteOpsAnalyticsReferencePriceView>(analyticsPath(id, `reference-prices/${scope}/${scopeId}`), {
+    ...options, method: "PUT", body: JSON.stringify(input),
+  })
+}
+
+export function clearSiteOpsReferencePrice(
+  id: number, scope: SiteOpsAnalyticsPriceScope, scopeId: number, generation: number, options: AnalyticsOptions = {},
+) {
+  return apiFetch<{ deleted: boolean }>(analyticsPath(id, `reference-prices/${scope}/${scopeId}`, { generation }), {
+    ...options, method: "DELETE",
+  })
 }

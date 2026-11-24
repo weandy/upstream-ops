@@ -582,3 +582,400 @@ export interface SiteOpsAccountCostView {
   note: string
   updated_at: string
 }
+
+// 运营分析视图与 backend/siteops/types_analytics.go 的 JSON 字段对应。
+export type SiteOpsAnalyticsSafetyLightLevel = "green" | "amber" | "red" | "unknown"
+export type SiteOpsAnalyticsPriceScope = "group" | "subscription"
+export type SiteOpsAnalyticsCurrency = "CNY" | "USD"
+export type SiteOpsAnalyticsRange = "30d" | "7d"
+export type SiteOpsAnalyticsSubscriptionStatus = "active" | "expired" | "all"
+
+export interface SiteOpsAnalyticsConfig {
+  cny_per_usd: number
+  leverage_warn_threshold: number
+  leverage_danger_threshold: number
+}
+
+export interface SiteOpsAnalyticsDateRange {
+  start_date: string
+  end_date: string
+  timezone: string
+}
+
+export interface SiteOpsAnalyticsPage<T> {
+  items: T[] | null
+  page: number
+  page_size: number
+  total: number | null
+  has_more: boolean | null
+  truncated: boolean
+}
+
+export interface SiteOpsAnalyticsDomainMeta {
+  quality: SiteOpsFieldQualityState
+  observed_at: string | null
+  verified_at: string | null
+  expires_at: string | null
+  reason?: string
+}
+
+export interface SiteOpsAnalyticsMeta {
+  instance_id: number
+  generation: number
+  as_of: string
+  from_cache: boolean
+  backoff_until: string | null
+  domains: Record<string, SiteOpsAnalyticsDomainMeta>
+}
+
+export interface SiteOpsAnalyticsRiskControlLampView {
+  level: SiteOpsAnalyticsSafetyLightLevel
+  quality: SiteOpsFieldQualityState
+  reasons: string[] | null
+  observed_at: string | null
+  engine?: string
+  enabled: boolean | null
+  risk_control_enabled: boolean | null
+  mode?: string
+  queue_size: number | null
+  queue_length: number | null
+  queue_usage_percent: number | null
+  enqueued: number | null
+  dropped: number | null
+  processed: number | null
+  errors: number | null
+  pre_block_checked: number | null
+  pre_block_allowed: number | null
+  pre_block_blocked: number | null
+  pre_block_errors: number | null
+  pre_block_avg_latency_ms: number | null
+  pre_block_api_key_available_count: number | null
+  flagged_hash_count: number | null
+}
+
+export interface SiteOpsAnalyticsBackupLampView {
+  level: SiteOpsAnalyticsSafetyLightLevel
+  quality: SiteOpsFieldQualityState
+  reasons: string[] | null
+  observed_at: string | null
+  total_count: number
+  latest_status?: string
+  backup_type?: string
+  size_bytes: number | null
+  started_at: string | null
+  finished_at: string | null
+  expires_at: string | null
+  last_completed_at: string | null
+  age_hours: number | null
+}
+
+export interface SiteOpsAnalyticsLightsResponse extends SiteOpsAnalyticsMeta {
+  risk_control: SiteOpsAnalyticsRiskControlLampView
+  backup: SiteOpsAnalyticsBackupLampView
+  channel_monitor: SiteOpsEndpointCapability
+}
+
+export interface SiteOpsAnalyticsChannelResponse extends SiteOpsAnalyticsMeta {
+  capability: SiteOpsEndpointCapability
+  note: string
+}
+
+export interface SiteOpsAnalyticsCacheMetricsView {
+  input_tokens: number | null
+  output_tokens: number | null
+  cache_creation_tokens: number | null
+  cache_read_tokens: number | null
+  total_tokens: number | null
+  effective_input_tokens: number | null
+  input_mode: string
+  token_quality: SiteOpsFieldQualityState
+  cache_read_hit_pct: number | null
+  cache_write_pct: number | null
+  cache_rw_ratio: number | null
+}
+
+export interface SiteOpsAnalyticsUsageWindowView {
+  start_date: string
+  end_date: string
+  timezone: string
+  observed_at: string | null
+  quality: SiteOpsFieldQualityState
+  requests: number | null
+  standard_usd: number | null
+  actual_usd: number | null
+  account_usd: number | null
+  has_cost_spread: boolean
+  average_duration_ms: number | null
+  cache: SiteOpsAnalyticsCacheMetricsView
+}
+
+export interface SiteOpsAnalyticsOperationalTagView {
+  key: string
+  sub_kind?: string
+  label: string
+  severity: string
+  reason: string
+}
+
+export interface SiteOpsAnalyticsUserRow {
+  user_id: number
+  email_masked: string | null
+  role: string
+  status: string
+  created_at: string | null
+  balance_usd: number | null
+  concurrency_limit: number | null
+  today_actual_usd: number | null
+  recent_aggregate_actual_usd: number | null
+  by_platform: SiteOpsAnalyticsPlatformCostBrief[] | null
+  live_concurrency: SiteOpsAnalyticsUserConcurrencyView | null
+  active_sub_count: number
+  nearest_sub_expires_days: number | null
+  enrichment_state: string
+  all_time: SiteOpsAnalyticsUsageWindowView | null
+  last_7d: SiteOpsAnalyticsUsageWindowView | null
+  tags: SiteOpsAnalyticsOperationalTagView[] | null
+}
+
+export interface SiteOpsAnalyticsUsersSummary {
+  users_seen: number
+  users_coverage: string
+  subs_coverage: string
+  active_today_users: number
+  today_actual_usd: number | null
+  evaluated_users: number
+  budget_deferred_users: number
+  active_subs_seen: number
+  expiring_soon_subs_seen: number
+  queueing_users_seen: number
+  tag_counts: Record<string, number>
+  budget_note?: string
+}
+
+export interface SiteOpsAnalyticsUsersResponse extends SiteOpsAnalyticsMeta {
+  top_n: number
+  summary: SiteOpsAnalyticsUsersSummary
+  users: SiteOpsAnalyticsPage<SiteOpsAnalyticsUserRow>
+}
+
+export interface SiteOpsAnalyticsUserAPIKeyCostView {
+  api_key_id: number
+  group_id: number | null
+  group_name?: string
+  status: string
+  created_at: string | null
+  last_used_at: string | null
+  today_actual_usd: number | null
+  upstream_total_actual_usd: number | null
+  quality: SiteOpsFieldQualityState
+}
+
+export interface SiteOpsAnalyticsUserDetailResponse extends SiteOpsAnalyticsMeta {
+  user: SiteOpsAnalyticsUserRow
+  last_30d: SiteOpsAnalyticsUsageWindowView | null
+  subscriptions: SiteOpsAnalyticsUserSubscriptionBrief[] | null
+  api_keys: SiteOpsAnalyticsPage<SiteOpsAnalyticsUserAPIKeyCostView>
+}
+
+export interface SiteOpsAnalyticsRollingWindowView {
+  limit_usd: number | null
+  used_usd: number | null
+  remaining_usd: number | null
+  percentage: number | null
+  window_start: string | null
+  resets_at: string | null
+  resets_in_seconds: number | null
+  source: string
+  quality: SiteOpsFieldQualityState
+}
+
+export interface SiteOpsAnalyticsSubscriptionTermLayerView {
+  start_at: string
+  end_at: string
+  observed_until: string | null
+  cycle_index: number
+  total_cycles: number
+  duration_days: number
+  elapsed_hours: number
+  remaining_hours: number
+  forecast_status: string
+  usage: SiteOpsAnalyticsUsageWindowView | null
+  group_usage: SiteOpsAnalyticsUsageWindowView | null
+  boundary_approx: boolean
+  day_boundary_note?: string
+  burn_slow_usd_day: number | null
+  burn_fast_usd_day: number | null
+  burn_fast_source?: string
+  burn_effective_usd_day: number | null
+  uncapped_estimate_usd: number | null
+  projected_end_usd: number | null
+  theoretical_max_usd: number | null
+  cap_state: string
+  capped_by_limit: boolean
+  cap_binding_window?: string
+  confidence: string
+  reason?: string
+}
+
+export interface SiteOpsAnalyticsReferencePriceView {
+  instance_id: number
+  scope: SiteOpsAnalyticsPriceScope
+  scope_id: number
+  currency: SiteOpsAnalyticsCurrency
+  monthly_minor: number
+  cny_per_usd_micros: number | null
+  updated_at: string
+}
+
+export interface SiteOpsAnalyticsSubscriptionPricingCompare {
+  price_source: string
+  reference_price: SiteOpsAnalyticsReferencePriceView | null
+  effective_fx: number
+  proration: number | null
+  cycle_ref_native: number | null
+  cycle_ref_usd: number | null
+  term_ref_usd: number | null
+  actual_leverage_x: number | null
+  projected_leverage_x: number | null
+  margin_risk: string
+}
+
+export interface SiteOpsAnalyticsSubscriptionRow {
+  subscription_id: number
+  user_id: number
+  user_email_masked: string | null
+  group_id: number
+  group_name: string
+  platform: string
+  status: string
+  cycle_state: string
+  starts_at: string | null
+  expires_at: string | null
+  expires_in_days: number | null
+  cycle_index: number
+  total_cycles: number
+  sub_cycle_start: string | null
+  sub_cycle_end: string | null
+  same_as_term: boolean
+  attribution: string
+  attribution_reason?: string
+  daily_window: SiteOpsAnalyticsRollingWindowView
+  weekly_window: SiteOpsAnalyticsRollingWindowView
+  monthly_window: SiteOpsAnalyticsRollingWindowView
+  pricing_compare: SiteOpsAnalyticsSubscriptionPricingCompare
+}
+
+export interface SiteOpsAnalyticsSubscriptionsResponse extends SiteOpsAnalyticsMeta {
+  analytics_config: SiteOpsAnalyticsConfig
+  groups: SiteOpsAnalyticsGroupOption[] | null
+  subscriptions: SiteOpsAnalyticsPage<SiteOpsAnalyticsSubscriptionRow>
+}
+
+export interface SiteOpsAnalyticsSubscriptionDetailResponse extends SiteOpsAnalyticsMeta {
+  analytics_config: SiteOpsAnalyticsConfig
+  subscription: SiteOpsAnalyticsSubscriptionRow
+  current_sub_cycle: SiteOpsAnalyticsSubscriptionTermLayerView | null
+  continuous_term: SiteOpsAnalyticsSubscriptionTermLayerView | null
+}
+
+export interface SiteOpsAnalyticsModelRowView {
+  model: string
+  requests: number | null
+  standard_usd: number | null
+  actual_usd: number | null
+  account_usd: number | null
+  has_cost_spread: boolean
+  cache: SiteOpsAnalyticsCacheMetricsView
+  mismatch_requests: number | null
+  has_mismatch: boolean
+  quality: SiteOpsFieldQualityState
+}
+
+export interface SiteOpsAnalyticsModelMismatchRowView {
+  requested_model: string
+  upstream_model?: string
+  requests: number | null
+  actual_usd: number | null
+}
+
+export interface SiteOpsAnalyticsModelMismatchSummaryView {
+  quality: SiteOpsFieldQualityState
+  total_requests: number | null
+  model_rows: number
+  rows: SiteOpsAnalyticsModelMismatchRowView[] | null
+}
+
+export interface SiteOpsAnalyticsGroupMarketRowView {
+  group_id: number
+  group_name: string
+  platform: string
+  subscription_type?: string
+  rate_multiplier: number | null
+  active_sub_count: number | null
+  requests: number | null
+  standard_usd: number | null
+  actual_usd: number | null
+  account_usd: number | null
+  has_cost_spread: boolean
+  reference_price: SiteOpsAnalyticsReferencePriceView | null
+  ref_monthly_usd: number | null
+  quality: SiteOpsFieldQualityState
+}
+
+export interface SiteOpsAnalyticsMarketResponse extends SiteOpsAnalyticsMeta {
+  range: SiteOpsAnalyticsRange
+  date_range: SiteOpsAnalyticsDateRange
+  analytics_config: SiteOpsAnalyticsConfig
+  total_requests: number | null
+  total_actual_usd: number | null
+  total_account_usd: number | null
+  has_cost_spread: boolean
+  models: SiteOpsAnalyticsModelRowView[] | null
+  mismatches: SiteOpsAnalyticsModelMismatchSummaryView
+  groups: SiteOpsAnalyticsGroupMarketRowView[] | null
+}
+
+export interface SiteOpsAnalyticsPricingResponse {
+  instance_id: number
+  generation: number
+  config: SiteOpsAnalyticsConfig
+  prices: SiteOpsAnalyticsReferencePriceView[] | null
+}
+
+export interface SiteOpsAnalyticsPutReferencePriceInput {
+  generation: number
+  currency: SiteOpsAnalyticsCurrency
+  monthly_minor: number
+  cny_per_usd_micros?: number | null
+}
+
+export interface SiteOpsAnalyticsPlatformCostBrief {
+  platform: string
+  today_actual_usd: number | null
+  recent_actual_usd: number | null
+}
+
+export interface SiteOpsAnalyticsUserConcurrencyView {
+  current_in_use: number | null
+  max_capacity: number | null
+  load_percentage: number | null
+  waiting_in_queue: number | null
+}
+
+export interface SiteOpsAnalyticsUserSubscriptionBrief {
+  subscription_id: number
+  group_id: number
+  group_name: string
+  platform: string
+  status: string
+  starts_at: string | null
+  expires_at: string | null
+  expires_in_days: number | null
+}
+
+export interface SiteOpsAnalyticsGroupOption {
+  group_id: number
+  group_name: string
+  platform: string
+  reference_price: SiteOpsAnalyticsReferencePriceView | null
+}

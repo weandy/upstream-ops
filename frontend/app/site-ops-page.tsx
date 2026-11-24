@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { AccountEfficiencyPanel } from "@/components/site-ops/account-efficiency-panel"
+import { AnalyticsPanel } from "@/components/site-ops/analytics-panel"
 import { AccountsStatusPanel } from "@/components/site-ops/accounts-status-panel"
 import { CapabilityDrawer } from "@/components/site-ops/capability-drawer"
 import { EventsTimelinePanel } from "@/components/site-ops/events-timeline-panel"
@@ -85,7 +86,7 @@ interface EventsSectionState {
 }
 
 type Action = "refresh" | "probe"
-type DetailSection = "overview" | "forecast" | "accounts" | "events"
+type DetailSection = "overview" | "forecast" | "accounts" | "events" | "analytics"
 
 function ReadState({ error, loading, empty }: { error?: string; loading: boolean; empty: string }) {
   return (
@@ -532,7 +533,7 @@ export default function SiteOpsPage() {
                   onValueChange={(value) => setActiveSection(value as DetailSection)}
                   className="gap-4"
                 >
-                  <TabsList>
+                  <TabsList className="h-auto max-w-full flex-wrap justify-start">
                     <TabsTrigger value="overview">总览与容量</TabsTrigger>
                     <TabsTrigger value="forecast">
                       号池预测与效率
@@ -567,6 +568,7 @@ export default function SiteOpsPage() {
                         </Badge>
                       ) : null}
                     </TabsTrigger>
+                    <TabsTrigger value="analytics">运营分析</TabsTrigger>
                   </TabsList>
 
                   <TabsContent value="overview" className="space-y-5">
@@ -644,6 +646,15 @@ export default function SiteOpsPage() {
                       }}
                     />
                   </TabsContent>
+                  {selected && activeSection === "analytics" && !blocked && (
+                    <TabsContent value="analytics">
+                      <AnalyticsPanel
+                        key={`${selected.id}:${selected.generation}:${selected.cred_gen}`}
+                        instance={selected}
+                        onAuthRequired={requireAuth}
+                      />
+                    </TabsContent>
+                  )}
                 </Tabs>
               </TabsContent>
               {drawerId === selected.id && (
