@@ -67,7 +67,9 @@ export function InstanceFormDialog({
       if (isSiteOpsAuthRequiredError(err)) {
         onAuthRequired()
       } else {
-        setError("保存失败。请检查站点地址白名单、名称和 Slug 是否重复，以及各项配置。")
+        const message = err instanceof Error ? err.message.trim() : ""
+        const reason = apiKey ? message.split(apiKey).join("[已隐藏]") : message
+        setError(`保存失败。请检查站点地址白名单、名称和 Slug 是否重复，以及各项配置。${reason ? ` ${reason.slice(0, 240)}` : ""}`)
       }
     } finally {
       setSaving(false)

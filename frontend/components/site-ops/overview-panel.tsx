@@ -113,7 +113,7 @@ export function OverviewPanel({ overview }: { overview: SiteOpsOverviewResponse 
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h2 className="text-sm font-semibold">主机与中间件</h2>
           <p className="text-xs text-muted-foreground">
-            system_metrics 原始采集分辨率 {overview.system_metrics_resolution || "60s"} · 采集时间 {fullDateTime(snapshot.system_metrics_at)}
+            {overview.system_metrics_resolution || "system_metrics 原始采集分辨率为 60s"} · 采集时间 {fullDateTime(snapshot.system_metrics_at)}
           </p>
         </div>
         <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">

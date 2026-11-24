@@ -1,4 +1,4 @@
-import { Activity, PencilLine, Plus, RefreshCw } from "lucide-react"
+import { Activity, PencilLine, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -25,7 +25,7 @@ function AuditBudget({ budget }: { budget?: SiteOpsAuditBudgetUsage }) {
 }
 
 export function InstanceSwitcher({
-  instances, summaries, selected, readOnly, busy, onAdd, onEdit, onDiagnose, onRefresh,
+  instances, summaries, selected, readOnly, busy, onAdd, onEdit, onDelete, onDiagnose, onRefresh,
 }: {
   instances: SiteOpsInstanceView[]
   summaries: SiteOpsInstanceSummaryItem[]
@@ -34,6 +34,7 @@ export function InstanceSwitcher({
   busy: boolean
   onAdd: () => void
   onEdit: () => void
+  onDelete: () => void
   onDiagnose: () => void
   onRefresh: () => void
 }) {
@@ -72,6 +73,7 @@ export function InstanceSwitcher({
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" disabled={readOnly || busy} onClick={onEdit}><PencilLine />编辑</Button>
+          <Button variant="outline" size="sm" className="text-destructive" disabled={readOnly || busy} onClick={onDelete}><Trash2 />删除</Button>
           <Button variant="outline" size="sm" onClick={onDiagnose}><Activity />能力诊断</Button>
           <Button variant="outline" size="sm" disabled={readOnly || busy} onClick={onRefresh}>
             <RefreshCw />立即刷新
