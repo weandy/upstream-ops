@@ -284,8 +284,87 @@ func (r *analyticsRequest) concurrency() SanitizedUserConcurrencyMap {
 		return r.c.FetchUserConcurrency(ctx, r.target)
 	})
 }
+func buildUserConcurrencyPeakSamples(con SanitizedUserConcurrencyMap, highPct float64) []storage.SiteOpsUserConcurrencyPeak {
+	if len(con) == 0 {
+		return nil
+	}
+	if highPct <= 0 {
+		highPct = 85
+	}
+	out := make([]storage.SiteOpsUserConcurrencyPeak, 0, len(con))
+	for uid, c := range con {
+		inUse := max(int64(0), val(c.CurrentInUse))
+		maxCap := max(int64(0), val(c.MaxCapacity))
+		waiting := max(int64(0), val(c.WaitingInQueue))
+		if uid <= 0 || (inUse == 0 && waiting == 0) {
+			continue
+		}
+		var hit int64
+		if waiting > 0 || (maxCap > 0 && float64(inUse)*100 >= float64(maxCap)*highPct) {
+			hit = 1
+		}
+		out = append(out, storage.SiteOpsUserConcurrencyPeak{
+			UserID:       uid,
+			PeakInUse:    inUse,
+			MaxCapacity:  maxCap,
+			PeakWaiting:  waiting,
+			FullLoadHits: hit,
+		})
+	}
+	return out
+}
+
+func (s *Service) peakStore() UserConcurrencyPeakStore {
+	if ps, ok := s.deps.AnalyticsStore.(UserConcurrencyPeakStore); ok {
+		return ps
+	}
+	if ps, ok := s.deps.Store.(UserConcurrencyPeakStore); ok {
+		return ps
+	}
+	return nil
+}
+
+func mergeConcurrencyPeak(v *AnalyticsUserRow, peak storage.SiteOpsUserConcurrencyPeak, hasPeak bool) {
+	if !hasPeak {
+		return
+	}
+	if v.LiveConcurrency == nil {
+		zero := int64(0)
+		var maxCap *int64
+		if peak.MaxCapacity > 0 {
+			mc := peak.MaxCapacity
+			maxCap = &mc
+		} else if v.ConcurrencyLimit != nil {
+			mc := int64(*v.ConcurrencyLimit)
+			maxCap = &mc
+		}
+		v.LiveConcurrency = &UserConcurrencyView{
+			CurrentInUse:   &zero,
+			MaxCapacity:    maxCap,
+			WaitingInQueue: &zero,
+		}
+	}
+	pInUse := peak.PeakInUse
+	if v.LiveConcurrency.CurrentInUse != nil && *v.LiveConcurrency.CurrentInUse > pInUse {
+		pInUse = *v.LiveConcurrency.CurrentInUse
+	}
+	pWait := peak.PeakWaiting
+	if v.LiveConcurrency.WaitingInQueue != nil && *v.LiveConcurrency.WaitingInQueue > pWait {
+		pWait = *v.LiveConcurrency.WaitingInQueue
+	}
+	hits := peak.FullLoadHits
+	peakAt := peak.PeakAt
+	v.LiveConcurrency.PeakInUse = &pInUse
+	v.LiveConcurrency.PeakWaiting = &pWait
+	v.LiveConcurrency.FullLoadHits = &hits
+	if !peakAt.IsZero() {
+		v.LiveConcurrency.PeakAt = &peakAt
+	}
+	v.LiveConcurrency.PeakWindowDays = 7
+}
+
 func baseUser(u SanitizedAnalyticsUser, q SanitizedUserQuickUsage, con SanitizedUserConcurrencyMap, subs []SanitizedSubscription, n time.Time) AnalyticsUserRow {
-	v := AnalyticsUserRow{UserID: u.ID, EmailMasked: u.EmailMasked, Role: u.Role, Status: u.Status, CreatedAt: u.CreatedAt, BalanceUSD: u.BalanceUSD, ConcurrencyLimit: u.ConcurrencyLimit, TodayActualUSD: q.Today, RecentAggregateActualUSD: q.Recent, ByPlatform: q.ByPlatform, EnrichmentState: "not_loaded"}
+	v := AnalyticsUserRow{UserID: u.ID, Email: u.Email, EmailMasked: u.EmailMasked, Role: u.Role, Status: u.Status, CreatedAt: u.CreatedAt, BalanceUSD: u.BalanceUSD, ConcurrencyLimit: u.ConcurrencyLimit, TodayActualUSD: q.Today, RecentAggregateActualUSD: q.Recent, ByPlatform: q.ByPlatform, EnrichmentState: "not_loaded"}
 	if c, ok := con[u.ID]; ok {
 		v.LiveConcurrency = &c
 	}
@@ -376,7 +455,7 @@ func (s *Service) GetAnalyticsUsers(ctx context.Context, id uint, q AnalyticsUse
 		return nil, ErrInvalidInput
 	}
 	return runAnalysis(s, ctx, id, q.Force, q.CacheOnly, func(r *analyticsRequest) *AnalyticsUsersResponse {
-		r.groups()
+		groups := r.groups()
 		p := r.users(q.Page)
 		ids := make([]int64, 0, len(p.Items))
 		for _, u := range p.Items {
@@ -385,11 +464,37 @@ func (s *Service) GetAnalyticsUsers(ctx context.Context, id uint, q AnalyticsUse
 		quick := r.quick(ids)
 		con := r.concurrency()
 		subs := r.subs(1)
+		cfg := analyticsConfig(r.inst)
+		prices := r.prices()
+		var peaks map[int64]storage.SiteOpsUserConcurrencyPeak
+		if ps := s.peakStore(); ps != nil {
+			todayStr := r.meta.AsOf.In(locUTC8).Format(time.DateOnly)
+			if samples := buildUserConcurrencyPeakSamples(con, cfg.HighConcurrencyPct); len(samples) > 0 {
+				_ = ps.RecordUserConcurrencyPeaks(r.ctx, id, todayStr, r.meta.AsOf, samples)
+			}
+			sinceStr := r.meta.AsOf.In(locUTC8).AddDate(0, 0, -6).Format(time.DateOnly)
+			if queried, err := ps.QueryUserConcurrencyPeaks(r.ctx, id, sinceStr, ids); err == nil {
+				peaks = queried
+			}
+		}
+		activeSubsByUser := make(map[int64][]AnalyticsSubscriptionRow)
+		for _, sub := range subs.Items {
+			if activeSub(sub, r.meta.AsOf) {
+				row := r.subRow(sub, subs, groups, prices)
+				activeSubsByUser[sub.UserID] = append(activeSubsByUser[sub.UserID], row)
+			}
+		}
 		rows := mappedPage[SanitizedAnalyticsUser, AnalyticsUserRow](p)
 		summary := AnalyticsUsersSummary{UsersSeen: len(p.Items), UsersCoverage: coverage(p), SubsCoverage: coverage(subs), TagCounts: map[string]int{}}
 		var candidates []int
 		for i, u := range p.Items {
 			v := baseUser(u, quick[u.ID], con, subs.Items, r.meta.AsOf)
+			if peak, ok := peaks[u.ID]; ok {
+				mergeConcurrencyPeak(&v, peak, true)
+			}
+			if list := activeSubsByUser[u.ID]; len(list) > 0 {
+				v.ActiveSubscriptions = list
+			}
 			if v.ActiveSubCount > 0 || val(v.TodayActualUSD) > 0 || val(v.RecentAggregateActualUSD) > 0 || val(v.BalanceUSD) >= 20 {
 				candidates = append(candidates, i)
 			}
@@ -475,6 +580,7 @@ func (s *Service) GetAnalyticsUsers(ctx context.Context, id uint, q AnalyticsUse
 		for i := range rows.Items {
 			v := &rows.Items[i]
 			v.Tags = userTags(*v, subs.Items, coverage(subs) == "complete", r.meta.AsOf)
+			v.ActivityState = userActivityState(*v, v.Tags)
 			for _, tag := range v.Tags {
 				summary.TagCounts[tag.Key]++
 				if tag.Key == "concurrency_queued" {
@@ -493,7 +599,7 @@ func (s *Service) GetAnalyticsUsers(ctx context.Context, id uint, q AnalyticsUse
 		if summary.BudgetDeferredUsers > 0 {
 			summary.BudgetNote = "部分用户补查已延后"
 		}
-		return &AnalyticsUsersResponse{r.meta, q.TopN, summary, rows}
+		return &AnalyticsUsersResponse{r.meta, cfg, q.TopN, summary, rows}
 	})
 }
 func (s *Service) GetAnalyticsUserDetail(ctx context.Context, id uint, userID int64, page, keyPage int, force bool) (*AnalyticsUserDetailResponse, error) {
@@ -587,14 +693,27 @@ func (s *Service) binding(inst storage.SiteOpsInstance) (string, error) {
 func analyticsConfig(inst storage.SiteOpsInstance) AnalyticsConfig {
 	v := DefaultAnalyticsConfig()
 	if inst.AnalyticsConfigJSON != "" {
-		if json.Unmarshal([]byte(inst.AnalyticsConfigJSON), &v) != nil || !validConfig(v) {
+		if json.Unmarshal([]byte(inst.AnalyticsConfigJSON), &v) != nil {
+			return DefaultAnalyticsConfig()
+		}
+		v = v.withForecastDefaults()
+		if !validConfig(v) {
 			return DefaultAnalyticsConfig()
 		}
 	}
 	return v
 }
 func validConfig(v AnalyticsConfig) bool {
-	return v.CNYPerUSD > 0 && v.CNYPerUSD <= 100 && v.LeverageWarnThreshold >= 0 && v.LeverageWarnThreshold <= 1000 && v.LeverageDangerThreshold >= 0 && v.LeverageDangerThreshold <= 1000 && (v.LeverageDangerThreshold == 0 || v.LeverageDangerThreshold >= v.LeverageWarnThreshold)
+	v = v.withForecastDefaults()
+	return v.CNYPerUSD > 0 && v.CNYPerUSD <= 100 &&
+		v.LeverageWarnThreshold >= 0 && v.LeverageWarnThreshold <= 1000 &&
+		v.LeverageDangerThreshold >= 0 && v.LeverageDangerThreshold <= 1000 &&
+		(v.LeverageDangerThreshold == 0 || v.LeverageDangerThreshold >= v.LeverageWarnThreshold) &&
+		v.NearFullPct >= 50 && v.NearFullPct <= 99 &&
+		v.UnderUsePct >= 5 && v.UnderUsePct <= 70 &&
+		v.UnderUsePct < v.NearFullPct &&
+		v.HighConcurrencyPct >= 50 && v.HighConcurrencyPct <= 100 &&
+		v.UnlimitedTargetUSD >= 10 && v.UnlimitedTargetUSD <= 100000
 }
 func priceView(v storage.SiteOpsReferencePrice) ReferencePriceView {
 	return ReferencePriceView{v.InstanceID, v.Scope, v.ScopeID, v.Currency, v.MonthlyMinor, v.CNYPerUSDMicros, v.UpdatedAt}
@@ -652,7 +771,9 @@ func (r *analyticsRequest) subRow(sub SanitizedSubscription, page AnalyticsPage[
 		d = v.SubCycleEnd.Sub(*v.SubCycleStart)
 		total = sub.ExpiresAt.Sub(*sub.StartsAt)
 	}
-	v.PricingCompare = priceCompare(p, analyticsConfig(r.inst), d, total, v.Attribution == "unique_group_term", nil, nil)
+	cfg := analyticsConfig(r.inst)
+	v.Forecast = subscriptionForecastSummary(v, cfg, r.meta.AsOf)
+	v.PricingCompare = priceCompare(p, cfg, d, total, v.Attribution == "unique_group_term", nil, nil)
 	return v
 }
 func (s *Service) GetAnalyticsSubscriptions(ctx context.Context, id uint, q AnalyticsSubscriptionsQuery) (*AnalyticsSubscriptionsResponse, error) {
@@ -884,6 +1005,7 @@ func (s *Service) GetAnalyticsPricing(ctx context.Context, id uint) (*AnalyticsP
 	return out, nil
 }
 func (s *Service) UpdateAnalyticsConfig(ctx context.Context, id uint, in AnalyticsConfig) (*AnalyticsConfig, error) {
+	in = in.withForecastDefaults()
 	if !validConfig(in) {
 		return nil, ErrInvalidInput
 	}

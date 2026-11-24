@@ -13,9 +13,10 @@ import (
 type countedAnalytics struct {
 	siteOpsTestClient
 	P2AnalyticsClient
-	calls     atomic.Int32
-	available int
-	now       func() time.Time
+	calls         atomic.Int32
+	userConcCalls atomic.Int32
+	available     int
+	now           func() time.Time
 }
 
 func (c *countedAnalytics) meta() UpstreamFetchMeta {
@@ -50,6 +51,7 @@ func (c *countedAnalytics) FetchBackupsList(context.Context, TargetEndpoint) (Sa
 	return SanitizedBackupsResult{}, c.meta(), nil
 }
 func (c *countedAnalytics) FetchUserConcurrency(context.Context, TargetEndpoint) (SanitizedUserConcurrencyMap, UpstreamFetchMeta, error) {
+	c.userConcCalls.Add(1)
 	return SanitizedUserConcurrencyMap{}, c.meta(), nil
 }
 func (c *countedAnalytics) FetchUsersUsageBatch(context.Context, TargetEndpoint, []int64) (map[int64]SanitizedUserQuickUsage, UpstreamFetchMeta, error) {
@@ -84,8 +86,12 @@ func TestAnalyticsBudgetLedgerAndOrchestration(t *testing.T) {
 	refreshTestSiteOps(t, ctx, svc, id)
 	clock.add(time.Minute)
 	refreshTestSiteOps(t, ctx, svc, id)
-	if c.calls.Load() != 0 {
-		t.Fatal("P2 出现在后台采集")
+	// 后台轮询仅允许采轻量 /ops/user-concurrency 以记录单用户并发峰值，严禁触发其他重型 P2 分析端点。
+	if heavy := c.calls.Load() - c.userConcCalls.Load(); heavy != 0 {
+		t.Fatalf("重型 P2 分析端点出现在后台采集: %d", heavy)
+	}
+	if c.userConcCalls.Load() == 0 {
+		t.Fatal("后台轮询未采样单用户并发峰值")
 	}
 	check := func(want int32, fn func() error) {
 		t.Helper()

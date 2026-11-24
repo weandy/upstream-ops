@@ -12,14 +12,15 @@ import (
 	"unicode"
 )
 
-func MaskEmailStrict(raw string) *string {
+// SanitizeEmailDisplay 校验并返回仅用于内存与前端展示的完整邮箱，严禁落库、写日志或外发通知。
+func SanitizeEmailDisplay(raw string) *string {
 	raw = strings.TrimSpace(raw)
 	if strings.IndexFunc(raw, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) || r == '<' || r == '>' }) >= 0 || strings.Count(raw, "@") != 1 {
 		return nil
 	}
 	local, domain, _ := strings.Cut(raw, "@")
 	domain = strings.ToLower(domain)
-	if local == "" || len(domain) > 253 || !strings.Contains(domain, ".") {
+	if local == "" || len(local) > 128 || len(domain) > 253 || !strings.Contains(domain, ".") {
 		return nil
 	}
 	for _, pre := range []string{"sk-", "adm_", "admin-"} {
@@ -37,6 +38,15 @@ func MaskEmailStrict(raw string) *string {
 			}
 		}
 	}
+	return ptr(local + "@" + domain)
+}
+
+func MaskEmailStrict(raw string) *string {
+	clean := SanitizeEmailDisplay(raw)
+	if clean == nil {
+		return nil
+	}
+	local, domain, _ := strings.Cut(*clean, "@")
 	r := []rune(local)
 	masked := "***"
 	if len(r) >= 5 {
@@ -168,7 +178,7 @@ func ParseUsersPage(raw []byte) (AnalyticsPage[SanitizedAnalyticsUser], error) {
 }
 func parseUsersPage(raw []byte, page int) (AnalyticsPage[SanitizedAnalyticsUser], error) {
 	return projectDirectoryPage(raw, page, 100, []string{"items", "users", "rows", "list"}, func(w userWire) (SanitizedAnalyticsUser, bool) {
-		return SanitizedAnalyticsUser{w.ID, MaskEmailStrict(w.Email), enum(w.Role, "admin", "user", "member"), enum(w.Status, "active", "disabled", "banned", "inactive"), w.CreatedAt, w.Balance, w.Concurrency}, w.ID > 0
+		return SanitizedAnalyticsUser{w.ID, SanitizeEmailDisplay(w.Email), MaskEmailStrict(w.Email), enum(w.Role, "admin", "user", "member"), enum(w.Status, "active", "disabled", "banned", "inactive"), w.CreatedAt, w.Balance, w.Concurrency}, w.ID > 0
 	})
 }
 
@@ -286,7 +296,7 @@ func parseSubscriptionsPage(raw []byte, page int) (AnalyticsPage[SanitizedSubscr
 	return projectDirectoryPage(raw, page, 100, []string{"items", "subscriptions", "rows", "list"}, func(w subWire) (SanitizedSubscription, bool) {
 		w.Group.ID = w.GroupID
 		g := cleanGroup(w.Group)
-		return SanitizedSubscription{w.ID, w.UserID, w.GroupID, MaskEmailStrict(w.User.Email), enum(w.Status, "active", "expired", "revoked", "cancelled", "inactive"), w.StartsAt, w.ExpiresAt, w.RevokedAt, g, listWindow(g.DailyLimitUSD, w.Daily, w.DailyStart), listWindow(g.WeeklyLimitUSD, w.Weekly, w.WeeklyStart), listWindow(g.MonthlyLimitUSD, w.Monthly, w.MonthlyStart)}, w.ID > 0 && w.UserID > 0 && w.GroupID > 0
+		return SanitizedSubscription{w.ID, w.UserID, w.GroupID, SanitizeEmailDisplay(w.User.Email), MaskEmailStrict(w.User.Email), enum(w.Status, "active", "expired", "revoked", "cancelled", "inactive"), w.StartsAt, w.ExpiresAt, w.RevokedAt, g, listWindow(g.DailyLimitUSD, w.Daily, w.DailyStart), listWindow(g.WeeklyLimitUSD, w.Weekly, w.WeeklyStart), listWindow(g.MonthlyLimitUSD, w.Monthly, w.MonthlyStart)}, w.ID > 0 && w.UserID > 0 && w.GroupID > 0
 	})
 }
 

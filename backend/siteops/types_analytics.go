@@ -25,9 +25,13 @@ const (
 )
 
 type AnalyticsConfig struct {
-	CNYPerUSD               float64 `json:"cny_per_usd"`               // 默认 7.20，范围 (0, 100]
-	LeverageWarnThreshold   float64 `json:"leverage_warn_threshold"`   // 默认 3.0，范围 [0, 1000]；0 表示关闭警告上色
-	LeverageDangerThreshold float64 `json:"leverage_danger_threshold"` // 默认 5.0，范围 [0, 1000]；0 表示关闭危险上色；两者均 >0 时须 danger >= warn
+	CNYPerUSD               float64 `json:"cny_per_usd"`                     // 默认 7.20，范围 (0, 100]
+	LeverageWarnThreshold   float64 `json:"leverage_warn_threshold"`         // 默认 3.0，范围 [0, 1000]；0 表示关闭警告上色
+	LeverageDangerThreshold float64 `json:"leverage_danger_threshold"`       // 默认 5.0，范围 [0, 1000]；0 表示关闭危险上色；两者均 >0 时须 danger >= warn
+	NearFullPct             float64 `json:"near_full_pct,omitempty"`         // 接近用满门槛 %，默认 85，范围 [50, 99]
+	UnderUsePct             float64 `json:"under_use_pct,omitempty"`         // 用量偏低门槛 %，默认 35，范围 [5, 70]
+	HighConcurrencyPct      float64 `json:"high_concurrency_pct,omitempty"`  // 并发高载门槛 %，默认 85，范围 [50, 100]
+	UnlimitedTargetUSD      float64 `json:"unlimited_target_usd,omitempty"`  // 不限额套餐单期期望上限 USD，默认 400，范围 [10, 100000]
 }
 
 func DefaultAnalyticsConfig() AnalyticsConfig {
@@ -35,7 +39,34 @@ func DefaultAnalyticsConfig() AnalyticsConfig {
 		CNYPerUSD:               7.2,
 		LeverageWarnThreshold:   3.0,
 		LeverageDangerThreshold: 5.0,
+		NearFullPct:             85,
+		UnderUsePct:             35,
+		HighConcurrencyPct:      85,
+		UnlimitedTargetUSD:      400,
 	}
+}
+
+func (c AnalyticsConfig) withForecastDefaults() AnalyticsConfig {
+	def := DefaultAnalyticsConfig()
+	if c.NearFullPct == 0 {
+		c.NearFullPct = def.NearFullPct
+	}
+	if c.UnderUsePct == 0 {
+		c.UnderUsePct = def.UnderUsePct
+	}
+	if c.HighConcurrencyPct == 0 {
+		c.HighConcurrencyPct = def.HighConcurrencyPct
+	}
+	if c.UnlimitedTargetUSD == 0 {
+		c.UnlimitedTargetUSD = def.UnlimitedTargetUSD
+	}
+	return c
+}
+
+type UserConcurrencyPeakStore interface {
+	RecordUserConcurrencyPeaks(ctx context.Context, instanceID uint, windowDate string, now time.Time, samples []storage.SiteOpsUserConcurrencyPeak) error
+	QueryUserConcurrencyPeaks(ctx context.Context, instanceID uint, sinceDate string, userIDs []int64) (map[int64]storage.SiteOpsUserConcurrencyPeak, error)
+	PruneUserConcurrencyPeaks(ctx context.Context, beforeDate string) (int64, error)
 }
 
 type AnalyticsStore interface {
@@ -211,23 +242,26 @@ type OperationalTagView struct {
 }
 
 type AnalyticsUserRow struct {
-	UserID                   int64                `json:"user_id"`
-	EmailMasked              *string              `json:"email_masked"`
-	Role                     string               `json:"role"`
-	Status                   string               `json:"status"`
-	CreatedAt                *time.Time           `json:"created_at"`
-	BalanceUSD               *float64             `json:"balance_usd"`
-	ConcurrencyLimit         *int                 `json:"concurrency_limit"`
-	TodayActualUSD           *float64             `json:"today_actual_usd"`
-	RecentAggregateActualUSD *float64             `json:"recent_aggregate_actual_usd"` // 来自 users-usage，显式标非全时段
-	ByPlatform               []PlatformCostBrief  `json:"by_platform"`
-	LiveConcurrency          *UserConcurrencyView `json:"live_concurrency"`
-	ActiveSubCount           int                  `json:"active_sub_count"`
-	NearestSubExpiresDays    *float64             `json:"nearest_sub_expires_days"`
-	EnrichmentState          string               `json:"enrichment_state"` // "loaded" | "not_loaded" | "deferred_budget" | "error"
-	AllTime                  *UsageWindowView     `json:"all_time"`
-	Last7d                   *UsageWindowView     `json:"last_7d"`
-	Tags                     []OperationalTagView `json:"tags"`
+	UserID                   int64                      `json:"user_id"`
+	Email                    *string                    `json:"email,omitempty"`
+	EmailMasked              *string                    `json:"email_masked"`
+	Role                     string                     `json:"role"`
+	Status                   string                     `json:"status"`
+	CreatedAt                *time.Time                 `json:"created_at"`
+	BalanceUSD               *float64                   `json:"balance_usd"`
+	ConcurrencyLimit         *int                       `json:"concurrency_limit"`
+	TodayActualUSD           *float64                   `json:"today_actual_usd"`
+	RecentAggregateActualUSD *float64                   `json:"recent_aggregate_actual_usd"` // 来自 users-usage，显式标非全时段
+	ByPlatform               []PlatformCostBrief        `json:"by_platform"`
+	LiveConcurrency          *UserConcurrencyView       `json:"live_concurrency"`
+	ActiveSubCount           int                        `json:"active_sub_count"`
+	NearestSubExpiresDays    *float64                   `json:"nearest_sub_expires_days"`
+	ActiveSubscriptions      []AnalyticsSubscriptionRow `json:"active_subscriptions,omitempty"`
+	ActivityState            string                     `json:"activity_state,omitempty"` // "active" | "drop" | "idle_balance" | "low"
+	EnrichmentState          string                     `json:"enrichment_state"`         // "loaded" | "not_loaded" | "deferred_budget" | "error"
+	AllTime                  *UsageWindowView           `json:"all_time"`
+	Last7d                   *UsageWindowView           `json:"last_7d"`
+	Tags                     []OperationalTagView       `json:"tags"`
 }
 
 type AnalyticsUsersSummary struct {
@@ -247,9 +281,10 @@ type AnalyticsUsersSummary struct {
 
 type AnalyticsUsersResponse struct {
 	AnalyticsMeta
-	TopN    int                             `json:"top_n"`
-	Summary AnalyticsUsersSummary           `json:"summary"`
-	Users   AnalyticsPage[AnalyticsUserRow] `json:"users"`
+	AnalyticsConfig AnalyticsConfig                 `json:"analytics_config"`
+	TopN            int                             `json:"top_n"`
+	Summary         AnalyticsUsersSummary           `json:"summary"`
+	Users           AnalyticsPage[AnalyticsUserRow] `json:"users"`
 }
 
 type UserAPIKeyCostView struct {
@@ -335,29 +370,47 @@ type SubscriptionPricingCompare struct {
 	MarginRisk         string              `json:"margin_risk"` // "unconfigured" | "free" | "threshold_disabled" | "normal" | "warn" | "danger" | "unknown"
 }
 
+type SubscriptionForecastSummary struct {
+	CycleDays       float64  `json:"cycle_days"`
+	ElapsedDays     float64  `json:"elapsed_days"`
+	RemainingDays   float64  `json:"remaining_days"`
+	TimeProgressPct float64  `json:"time_progress_pct"`
+	UsedUSD         *float64 `json:"used_usd"`
+	QuotaCapUSD     *float64 `json:"quota_cap_usd"`
+	IsUnlimited     bool     `json:"is_unlimited"`
+	UsedPct         *float64 `json:"used_pct"`
+	BurnUSDDay      *float64 `json:"burn_usd_day"`
+	ProjectedEndUSD *float64 `json:"projected_end_usd"`
+	ProjectedPct    *float64 `json:"projected_pct"`
+	DaysToExhaust   *float64 `json:"days_to_exhaust"`
+	Verdict         string   `json:"verdict"` // "observing" | "exhausted" | "will_hit" | "near_full" | "on_track" | "under_use" | "expired"
+}
+
 type AnalyticsSubscriptionRow struct {
-	SubscriptionID    int64                      `json:"subscription_id"`
-	UserID            int64                      `json:"user_id"`
-	UserEmailMasked   *string                    `json:"user_email_masked"`
-	GroupID           int64                      `json:"group_id"`
-	GroupName         string                     `json:"group_name"`
-	Platform          string                     `json:"platform"`
-	Status            string                     `json:"status"`
-	CycleState        string                     `json:"cycle_state"` // "active" | "expired" | "revoked" | "not_started" | "invalid_dates"
-	StartsAt          *time.Time                 `json:"starts_at"`
-	ExpiresAt         *time.Time                 `json:"expires_at"`
-	ExpiresInDays     *float64                   `json:"expires_in_days"`
-	CycleIndex        int                        `json:"cycle_index"`
-	TotalCycles       int                        `json:"total_cycles"`
-	SubCycleStart     *time.Time                 `json:"sub_cycle_start"`
-	SubCycleEnd       *time.Time                 `json:"sub_cycle_end"`
-	SameAsTerm        bool                       `json:"same_as_term"`
-	Attribution       string                     `json:"attribution"` // "unique_group_term" | "group_only"
-	AttributionReason string                     `json:"attribution_reason,omitempty"`
-	DailyWindow       RollingWindowView          `json:"daily_window"`
-	WeeklyWindow      RollingWindowView          `json:"weekly_window"`
-	MonthlyWindow     RollingWindowView          `json:"monthly_window"`
-	PricingCompare    SubscriptionPricingCompare `json:"pricing_compare"`
+	SubscriptionID    int64                        `json:"subscription_id"`
+	UserID            int64                        `json:"user_id"`
+	UserEmail         *string                      `json:"user_email,omitempty"`
+	UserEmailMasked   *string                      `json:"user_email_masked"`
+	GroupID           int64                        `json:"group_id"`
+	GroupName         string                       `json:"group_name"`
+	Platform          string                       `json:"platform"`
+	Status            string                       `json:"status"`
+	CycleState        string                       `json:"cycle_state"` // "active" | "expired" | "revoked" | "not_started" | "invalid_dates"
+	StartsAt          *time.Time                   `json:"starts_at"`
+	ExpiresAt         *time.Time                   `json:"expires_at"`
+	ExpiresInDays     *float64                     `json:"expires_in_days"`
+	CycleIndex        int                          `json:"cycle_index"`
+	TotalCycles       int                          `json:"total_cycles"`
+	SubCycleStart     *time.Time                   `json:"sub_cycle_start"`
+	SubCycleEnd       *time.Time                   `json:"sub_cycle_end"`
+	SameAsTerm        bool                         `json:"same_as_term"`
+	Attribution       string                       `json:"attribution"` // "unique_group_term" | "group_only"
+	AttributionReason string                       `json:"attribution_reason,omitempty"`
+	DailyWindow       RollingWindowView            `json:"daily_window"`
+	WeeklyWindow      RollingWindowView            `json:"weekly_window"`
+	MonthlyWindow     RollingWindowView            `json:"monthly_window"`
+	Forecast          *SubscriptionForecastSummary `json:"forecast,omitempty"`
+	PricingCompare    SubscriptionPricingCompare   `json:"pricing_compare"`
 }
 
 type AnalyticsSubscriptionsResponse struct {
@@ -470,10 +523,15 @@ type PlatformCostBrief struct {
 }
 
 type UserConcurrencyView struct {
-	CurrentInUse   *int64   `json:"current_in_use"`
-	MaxCapacity    *int64   `json:"max_capacity"`
-	LoadPercentage *float64 `json:"load_percentage"`
-	WaitingInQueue *int64   `json:"waiting_in_queue"`
+	CurrentInUse   *int64     `json:"current_in_use"`
+	MaxCapacity    *int64     `json:"max_capacity"`
+	LoadPercentage *float64   `json:"load_percentage"`
+	WaitingInQueue *int64     `json:"waiting_in_queue"`
+	PeakInUse      *int64     `json:"peak_in_use,omitempty"`
+	PeakWaiting    *int64     `json:"peak_waiting,omitempty"`
+	FullLoadHits   *int64     `json:"full_load_hits,omitempty"`
+	PeakAt         *time.Time `json:"peak_at,omitempty"`
+	PeakWindowDays int        `json:"peak_window_days,omitempty"`
 }
 
 type UserSubscriptionBrief struct {
@@ -495,6 +553,7 @@ type AnalyticsGroupOption struct {
 }
 type SanitizedAnalyticsUser struct {
 	ID               int64
+	Email            *string
 	EmailMasked      *string
 	Role, Status     string
 	CreatedAt        *time.Time
@@ -508,6 +567,7 @@ type SanitizedUserQuickUsage struct {
 type SanitizedUserConcurrencyMap map[int64]UserConcurrencyView
 type SanitizedSubscription struct {
 	ID, UserID, GroupID            int64
+	Email                          *string
 	EmailMasked                    *string
 	Status                         string
 	StartsAt, ExpiresAt, RevokedAt *time.Time

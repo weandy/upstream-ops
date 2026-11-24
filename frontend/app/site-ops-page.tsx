@@ -104,7 +104,7 @@ export default function SiteOpsPage() {
   const [catalog, setCatalog] = useState<{ summary: SiteOpsSummaryResponse; instances: SiteOpsInstanceView[] } | null>(null)
   const [catalogError, setCatalogError] = useState("")
   const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [activeSection, setActiveSection] = useState<DetailSection>("overview")
+  const [activeSection, setActiveSection] = useState<DetailSection>("analytics")
   const [range, setRange] = useState<SiteOpsTrendRange>("6h")
   const [details, setDetails] = useState<InstanceDetails | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
@@ -472,7 +472,7 @@ export default function SiteOpsPage() {
     <div className="space-y-5 pb-6">
       <header className="space-y-1">
         <h1 className="text-lg font-semibold tracking-tight sm:text-xl">自有站点运维</h1>
-        <p className="text-xs text-muted-foreground sm:text-sm">查看自有 Sub2API 站点的运行指标、端点能力与号池容量。</p>
+        <p className="text-xs text-muted-foreground sm:text-sm">统一查看客户消耗、订阅预测、站点监控、上游账号与号池成本。</p>
       </header>
 
       {blocked ? (
@@ -534,20 +534,10 @@ export default function SiteOpsPage() {
                   className="gap-4"
                 >
                   <TabsList className="h-auto max-w-full flex-wrap justify-start">
-                    <TabsTrigger value="overview">总览与容量</TabsTrigger>
-                    <TabsTrigger value="forecast">
-                      号池预测与效率
-                      {forecastRiskCount > 0 ? (
-                        <Badge
-                          variant="destructive"
-                          className="ml-1 h-4.5 px-1.5 text-[11px] tabular-nums"
-                        >
-                          {forecastRiskCount}
-                        </Badge>
-                      ) : null}
-                    </TabsTrigger>
+                    <TabsTrigger value="analytics">客户与订阅</TabsTrigger>
+                    <TabsTrigger value="overview">站点监控</TabsTrigger>
                     <TabsTrigger value="accounts">
-                      账号状态
+                      上游账号
                       {abnormalAccountsCount > 0 ? (
                         <Badge
                           variant="outline"
@@ -557,8 +547,19 @@ export default function SiteOpsPage() {
                         </Badge>
                       ) : null}
                     </TabsTrigger>
+                    <TabsTrigger value="forecast">
+                      号池成本
+                      {forecastRiskCount > 0 ? (
+                        <Badge
+                          variant="destructive"
+                          className="ml-1 h-4.5 px-1.5 text-[11px] tabular-nums"
+                        >
+                          {forecastRiskCount}
+                        </Badge>
+                      ) : null}
+                    </TabsTrigger>
                     <TabsTrigger value="events">
-                      事件与日报
+                      告警日报
                       {firingEventsCount > 0 ? (
                         <Badge
                           variant="destructive"
@@ -568,7 +569,6 @@ export default function SiteOpsPage() {
                         </Badge>
                       ) : null}
                     </TabsTrigger>
-                    <TabsTrigger value="analytics">运营分析</TabsTrigger>
                   </TabsList>
 
                   <TabsContent value="overview" className="space-y-5">

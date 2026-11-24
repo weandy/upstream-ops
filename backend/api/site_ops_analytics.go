@@ -162,14 +162,51 @@ func registerSiteOpsAnalytics(sg *gin.RouterGroup, d *Deps) {
 	})
 	register("PUT", "/pricing/config", "", func(c *gin.Context, p analyticsParams) (any, error) {
 		var b struct {
-			FX     *float64 `json:"cny_per_usd"`
-			Warn   *float64 `json:"leverage_warn_threshold"`
-			Danger *float64 `json:"leverage_danger_threshold"`
+			FX                 *float64 `json:"cny_per_usd"`
+			Warn               *float64 `json:"leverage_warn_threshold"`
+			Danger             *float64 `json:"leverage_danger_threshold"`
+			NearFullPct        *float64 `json:"near_full_pct"`
+			UnderUsePct        *float64 `json:"under_use_pct"`
+			HighConcurrencyPct *float64 `json:"high_concurrency_pct"`
+			UnlimitedTargetUSD *float64 `json:"unlimited_target_usd"`
 		}
-		if !analyticsBody(c, 2048, &b) || b.FX == nil || b.Warn == nil || b.Danger == nil {
+		if !analyticsBody(c, 2048, &b) {
 			return nil, siteops.ErrInvalidInput
 		}
-		return svc.UpdateAnalyticsConfig(c.Request.Context(), p.id, siteops.AnalyticsConfig{CNYPerUSD: *b.FX, LeverageWarnThreshold: *b.Warn, LeverageDangerThreshold: *b.Danger})
+		hasLegacy := b.FX != nil || b.Warn != nil || b.Danger != nil
+		hasForecast := b.NearFullPct != nil || b.UnderUsePct != nil || b.HighConcurrencyPct != nil || b.UnlimitedTargetUSD != nil
+		if !hasLegacy && !hasForecast {
+			return nil, siteops.ErrInvalidInput
+		}
+		if hasLegacy && (b.FX == nil || b.Warn == nil || b.Danger == nil) {
+			return nil, siteops.ErrInvalidInput
+		}
+		cfg := siteops.DefaultAnalyticsConfig()
+		if existing, err := svc.GetAnalyticsPricing(c.Request.Context(), p.id); err == nil && existing != nil {
+			cfg = existing.Config
+		}
+		if b.FX != nil {
+			cfg.CNYPerUSD = *b.FX
+		}
+		if b.Warn != nil {
+			cfg.LeverageWarnThreshold = *b.Warn
+		}
+		if b.Danger != nil {
+			cfg.LeverageDangerThreshold = *b.Danger
+		}
+		if b.NearFullPct != nil {
+			cfg.NearFullPct = *b.NearFullPct
+		}
+		if b.UnderUsePct != nil {
+			cfg.UnderUsePct = *b.UnderUsePct
+		}
+		if b.HighConcurrencyPct != nil {
+			cfg.HighConcurrencyPct = *b.HighConcurrencyPct
+		}
+		if b.UnlimitedTargetUSD != nil {
+			cfg.UnlimitedTargetUSD = *b.UnlimitedTargetUSD
+		}
+		return svc.UpdateAnalyticsConfig(c.Request.Context(), p.id, cfg)
 	})
 	register("PUT", "/reference-prices/:scope/:scope_id", "", func(c *gin.Context, p analyticsParams) (any, error) {
 		var b siteops.PutReferencePriceInput

@@ -970,6 +970,23 @@ func (r *collectionRound) collectAdmin(ctx context.Context, target TargetEndpoin
 		}
 		w.collectPassivePoolForecast(ctx, r, p1b, target, in, quality)
 	}
+	if p2, ok := client.(P2AnalyticsClient); ok && r.authenticated && !r.haltAdmin && ctx.Err() == nil && !r.skip(EndpointUserConcurrency) {
+		if ps, ok := w.poller.deps.Store.(UserConcurrencyPeakStore); ok {
+			con, cmeta, cerr := p2.FetchUserConcurrency(ctx, target)
+			if cerr != nil {
+				if errors.Is(cerr, ErrForbidden) || errors.Is(cerr, ErrOpsDisabled) || errors.Is(cerr, ErrUnsupportedRoute) {
+					r.capability(EndpointUserConcurrency, cmeta, cerr)
+				}
+			} else {
+				r.capability(EndpointUserConcurrency, cmeta, nil)
+				cfg := analyticsConfig(w.instance)
+				if samples := buildUserConcurrencyPeakSamples(con, cfg.HighConcurrencyPct); len(samples) > 0 {
+					todayStr := r.now.In(locUTC8).Format(time.DateOnly)
+					_ = ps.RecordUserConcurrencyPeaks(ctx, w.instance.ID, todayStr, r.now, samples)
+				}
+			}
+		}
+	}
 	return meta
 }
 
@@ -1345,8 +1362,24 @@ func (p *Poller) runMaintenance(ctx context.Context) {
 			p.processRetries(ctx)
 		case <-reportTicker.C:
 			p.checkScheduledDailyReports(ctx)
+			p.pruneUserConcurrencyPeaks(ctx)
 		}
 	}
+}
+
+func (p *Poller) pruneUserConcurrencyPeaks(ctx context.Context) {
+	ps, ok := p.deps.Store.(UserConcurrencyPeakStore)
+	if !ok {
+		return
+	}
+	nowUTC8 := p.now().In(locUTC8)
+	if nowUTC8.Minute() != 0 {
+		return
+	}
+	cutoff := nowUTC8.AddDate(0, 0, -7).Format(time.DateOnly)
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, _ = ps.PruneUserConcurrencyPeaks(runCtx, cutoff)
 }
 
 func (p *Poller) processRetries(ctx context.Context) {

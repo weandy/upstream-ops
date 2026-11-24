@@ -231,6 +231,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&SiteOpsAccountWindowSample{},
 		&SiteOpsAccountCost{},
 		&SiteOpsReferencePrice{},
+		&SiteOpsUserConcurrencyPeak{},
 	); err != nil {
 		return err
 	}

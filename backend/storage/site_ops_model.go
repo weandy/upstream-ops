@@ -228,3 +228,20 @@ type SiteOpsReferencePrice struct {
 }
 
 func (SiteOpsReferencePrice) TableName() string { return "site_ops_reference_prices" }
+
+// SiteOpsUserConcurrencyPeak 每分钟采样记录的单用户并发峰值表（按 UTC+8 日期滚动保留 7 天，严格零用户 PII）。
+// 仅记录纯数字 user_id 与并发水位高点，不落库邮箱、用户名或 API Key。
+type SiteOpsUserConcurrencyPeak struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	InstanceID   uint      `gorm:"not null;uniqueIndex:uniq_so_uconc_peak,priority:1;index:idx_so_uconc_lookup,priority:1" json:"instance_id"`
+	UserID       int64     `gorm:"not null;uniqueIndex:uniq_so_uconc_peak,priority:2" json:"user_id"`
+	WindowDate   string    `gorm:"size:10;not null;uniqueIndex:uniq_so_uconc_peak,priority:3;index:idx_so_uconc_lookup,priority:2" json:"window_date"`
+	PeakInUse    int64     `gorm:"not null;default:0" json:"peak_in_use"`
+	MaxCapacity  int64     `gorm:"not null;default:0" json:"max_capacity"`
+	PeakWaiting  int64     `gorm:"not null;default:0" json:"peak_waiting"`
+	FullLoadHits int64     `gorm:"not null;default:0" json:"full_load_hits"`
+	PeakAt       time.Time `gorm:"not null" json:"peak_at"`
+	UpdatedAt    time.Time `gorm:"not null" json:"updated_at"`
+}
+
+func (SiteOpsUserConcurrencyPeak) TableName() string { return "site_ops_user_concurrency_peaks" }

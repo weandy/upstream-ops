@@ -193,6 +193,33 @@ func userTags(u AnalyticsUserRow, subs []SanitizedSubscription, complete bool, n
 	}
 	return tags
 }
+
+// userActivityState 返回 4 个互斥、直白的客户活跃度状态：drop / idle_balance / active / low。
+func userActivityState(u AnalyticsUserRow, tags []OperationalTagView) string {
+	for _, t := range tags {
+		if t.Key == "high_value_at_risk" {
+			return "drop"
+		}
+	}
+	for _, t := range tags {
+		if t.Key == "dormant_high_balance" {
+			return "idle_balance"
+		}
+	}
+	today := val(u.TodayActualUSD)
+	week := -1.0
+	if u.Last7d != nil && u.Last7d.ActualUSD != nil {
+		week = *u.Last7d.ActualUSD
+	}
+	recent := val(u.RecentAggregateActualUSD)
+	if val(u.BalanceUSD) >= 20 && today <= 0 && (week == 0 || (week < 0 && recent <= 0)) && u.ActiveSubCount == 0 {
+		return "idle_balance"
+	}
+	if today > 0 || week > 0 || (week < 0 && recent > 0) {
+		return "active"
+	}
+	return "low"
+}
 func riskLamp(w *SanitizedRiskControlStatus, m DomainMeta) RiskControlLampView {
 	v := RiskControlLampView{Level: SafetyLightUnknown, Quality: m.Quality, ObservedAt: m.ObservedAt, Reasons: []string{}}
 	if w == nil || m.Quality != QualityTrusted {

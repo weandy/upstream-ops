@@ -594,6 +594,10 @@ export interface SiteOpsAnalyticsConfig {
   cny_per_usd: number
   leverage_warn_threshold: number
   leverage_danger_threshold: number
+  near_full_pct?: number
+  under_use_pct?: number
+  high_concurrency_pct?: number
+  unlimited_target_usd?: number
 }
 
 export interface SiteOpsAnalyticsDateRange {
@@ -717,8 +721,11 @@ export interface SiteOpsAnalyticsOperationalTagView {
   reason: string
 }
 
+export type SiteOpsUserActivityState = "active" | "drop" | "idle_balance" | "low"
+
 export interface SiteOpsAnalyticsUserRow {
   user_id: number
+  email?: string | null
   email_masked: string | null
   role: string
   status: string
@@ -731,6 +738,8 @@ export interface SiteOpsAnalyticsUserRow {
   live_concurrency: SiteOpsAnalyticsUserConcurrencyView | null
   active_sub_count: number
   nearest_sub_expires_days: number | null
+  active_subscriptions?: SiteOpsAnalyticsSubscriptionRow[] | null
+  activity_state?: SiteOpsUserActivityState | string
   enrichment_state: string
   all_time: SiteOpsAnalyticsUsageWindowView | null
   last_7d: SiteOpsAnalyticsUsageWindowView | null
@@ -753,6 +762,7 @@ export interface SiteOpsAnalyticsUsersSummary {
 }
 
 export interface SiteOpsAnalyticsUsersResponse extends SiteOpsAnalyticsMeta {
+  analytics_config?: SiteOpsAnalyticsConfig
   top_n: number
   summary: SiteOpsAnalyticsUsersSummary
   users: SiteOpsAnalyticsPage<SiteOpsAnalyticsUserRow>
@@ -840,9 +850,36 @@ export interface SiteOpsAnalyticsSubscriptionPricingCompare {
   margin_risk: string
 }
 
+export type SiteOpsSubscriptionForecastVerdict =
+  | "observing"
+  | "exhausted"
+  | "will_hit"
+  | "near_full"
+  | "on_track"
+  | "under_use"
+  | "expired"
+  | string
+
+export interface SiteOpsSubscriptionForecastSummary {
+  cycle_days: number
+  elapsed_days: number
+  remaining_days: number
+  time_progress_pct: number
+  used_usd: number | null
+  quota_cap_usd: number | null
+  is_unlimited: boolean
+  used_pct: number | null
+  burn_usd_day: number | null
+  projected_end_usd: number | null
+  projected_pct: number | null
+  days_to_exhaust: number | null
+  verdict: SiteOpsSubscriptionForecastVerdict
+}
+
 export interface SiteOpsAnalyticsSubscriptionRow {
   subscription_id: number
   user_id: number
+  user_email?: string | null
   user_email_masked: string | null
   group_id: number
   group_name: string
@@ -862,6 +899,7 @@ export interface SiteOpsAnalyticsSubscriptionRow {
   daily_window: SiteOpsAnalyticsRollingWindowView
   weekly_window: SiteOpsAnalyticsRollingWindowView
   monthly_window: SiteOpsAnalyticsRollingWindowView
+  forecast?: SiteOpsSubscriptionForecastSummary | null
   pricing_compare: SiteOpsAnalyticsSubscriptionPricingCompare
 }
 
@@ -960,6 +998,11 @@ export interface SiteOpsAnalyticsUserConcurrencyView {
   max_capacity: number | null
   load_percentage: number | null
   waiting_in_queue: number | null
+  peak_in_use?: number | null
+  peak_waiting?: number | null
+  full_load_hits?: number | null
+  peak_at?: string | null
+  peak_window_days?: number
 }
 
 export interface SiteOpsAnalyticsUserSubscriptionBrief {

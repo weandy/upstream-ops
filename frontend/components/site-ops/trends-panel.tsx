@@ -25,32 +25,32 @@ interface Series {
 
 const charts: { title: string; series: Series[] }[] = [
   {
-    title: "SLA 与错误率",
+    title: "可用率与错误率",
     series: [
-      { key: "sla_percent_1h", label: "近 1 小时 SLA", unit: "%", color: "#0ea5e9" },
+      { key: "sla_percent_1h", label: "近 1 小时可用率", unit: "%", color: "#0ea5e9" },
       { key: "error_rate_percent_1h", label: "整体错误率", unit: "%", color: "#d97706", axis: "right" },
       { key: "upstream_error_rate_percent_1h", label: "上游错误率", unit: "%", color: "#a855f7", axis: "right" },
     ],
   },
   {
-    title: "QPS 与切号",
+    title: "请求速率与切号",
     series: [
-      { key: "qps_current", label: "QPS", unit: " 请求/秒", color: "#0ea5e9" },
+      { key: "qps_current", label: "QPS", unit: " 次/秒", color: "#0ea5e9" },
       { key: "account_switch_count_1m", label: "近 1 分钟切号", unit: " 次", color: "#d97706", axis: "right" },
     ],
   },
   {
-    title: "P95 延迟",
+    title: "P95 响应耗时",
     series: [
-      { key: "ttft_p95_ms", label: "首字（TTFT）", unit: " ms", color: "#0ea5e9" },
+      { key: "ttft_p95_ms", label: "首字耗时", unit: " ms", color: "#0ea5e9" },
       { key: "duration_p95_ms", label: "总耗时", unit: " ms", color: "#a855f7" },
     ],
   },
   {
-    title: "去重并发",
+    title: "全站实时并发",
     series: [
-      { key: "conc_used", label: "使用", unit: "", color: "#0ea5e9" },
-      { key: "conc_max", label: "上限", unit: "", color: "#a855f7" },
+      { key: "conc_used", label: "当前占用", unit: "", color: "#0ea5e9" },
+      { key: "conc_max", label: "可用上限", unit: "", color: "#a855f7" },
     ],
   },
 ]
@@ -107,8 +107,8 @@ export function TrendsPanel({ points, range, onRangeChange, loading, error }: {
   return (
     <section aria-busy={loading} className="min-w-0 space-y-3">
       <header className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold">历史趋势</h2>
-        <div role="group" aria-label="趋势时间范围" className="flex flex-wrap gap-1">
+        <h2 className="text-sm font-semibold">运行走势</h2>
+        <div role="group" aria-label="走势时间范围" className="flex flex-wrap gap-1">
           {ranges.map(({ value, label }) => (
             <Button key={value} size="sm" className="h-7 px-2 text-xs" variant={range === value ? "default" : "outline"} aria-pressed={range === value} onClick={() => onRangeChange(value)}>
               {label}
@@ -134,7 +134,7 @@ export function TrendsPanel({ points, range, onRangeChange, loading, error }: {
                       </span>
                     ))}
                   </div>
-                  {title === "去重并发" && unverified > 0 && (
+                  {title === "全站实时并发" && unverified > 0 && (
                     <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                       <FieldQualityBadge quality="unverified_zero" /> {unverified} 个样本已留空
                     </p>

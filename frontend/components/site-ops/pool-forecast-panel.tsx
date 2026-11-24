@@ -149,21 +149,21 @@ function PassiveSupportBadge({
 
   switch (support) {
     case "passive_proven":
-      label = "被动证实"
+      label = "支持预测"
       className =
         "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-      defaultReason = "已通过纯被动只读证明矩阵，允许后台周期拉取"
+      defaultReason = "支持后台读取用量窗口并进行周期耗尽预测"
       break
     case "passive_unverified":
-      label = "未证实被动"
+      label = "未开启拉取"
       className =
         "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-      defaultReason = "尚未通过纯被动无副作用证明，默认不开启后台 usage/batch 自动拉取"
+      defaultReason = "暂未开启自动额度拉取，不主动触发上游查询"
       break
     case "excluded_payg":
-      label = "按量排除"
+      label = "按量计费"
       className = "border-border bg-muted/60 text-muted-foreground"
-      defaultReason = "按量 API Key / Upstream 转发号无订阅重置周期，永久排除出周期预测分母"
+      defaultReason = "按量 API Key 无固定订阅重置周期，不参与周期预测"
       break
   }
 
@@ -491,23 +491,43 @@ export function PoolForecastPanel({
   const resetNote = data.reset_constraint_note || defaultResetConstraintNote
   const passiveNote = data.passive_matrix_note || defaultPassiveMatrixNote
 
+  // 全站尚无开启自动额度拉取的订阅号时，收成一行紧凑说明，直接把焦点留给下方单号产出与月租成本表
+  if (data.proven_count === 0 && riskGroups.length === 0) {
+    return (
+      <div
+        role="status"
+        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-sky-500/35 bg-sky-500/10 px-3.5 py-2.5 text-xs text-sky-900 dark:text-sky-200"
+      >
+        <div className="flex items-start gap-2">
+          <Info className="mt-0.5 size-4 shrink-0 text-sky-600 dark:text-sky-300" />
+          <span>
+            当前站点 {data.unverified_count} 个订阅号未开启上游额度自动拉取，{data.excluded_payg_count} 个为按量账号；此处直接展示实际消耗与单并发产出。
+          </span>
+        </div>
+        {onReload && (
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onReload} disabled={loading}>
+            <RefreshCw className={`size-3 ${loading ? "animate-spin" : ""}`} />
+            刷新
+          </Button>
+        )}
+      </div>
+    )
+  }
+
   return (
     <section className="space-y-3">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          <h2 className="text-sm font-semibold">被动号池重置周期预测</h2>
+          <h2 className="text-sm font-semibold">上游号池额度预测</h2>
           <FieldQualityBadge quality={trustState} />
-          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            窗口重置口径
-            <MetricNote label="窗口重置约束说明">{resetNote}</MetricNote>
-          </span>
+          <MetricNote label="窗口重置说明">{resetNote}</MetricNote>
           <span className="text-xs text-muted-foreground">
-            最近观测（UTC+8）{formatUTC8DateTime(data.observed_at)}
+            观测 {formatUTC8DateTime(data.observed_at)}
           </span>
         </div>
         {onReload && (
-          <Button size="sm" variant="outline" onClick={onReload} disabled={loading}>
-            <RefreshCw className={loading ? "animate-spin" : undefined} />
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onReload} disabled={loading}>
+            <RefreshCw className={`size-3 ${loading ? "animate-spin" : ""}`} />
             刷新
           </Button>
         )}

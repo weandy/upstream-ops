@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
 import {
-  BellRing,
   Check,
   ChevronDown,
   ChevronRight,
@@ -72,14 +71,14 @@ function formatUTC8DateTime(iso?: string | null): string {
 function SeverityBadge({ severity }: { severity: SiteOpsEventSeverity }) {
   switch (severity) {
     case "critical":
-      return <Badge variant="destructive">Critical</Badge>
+      return <Badge variant="destructive">严重</Badge>
     case "warning":
       return (
         <Badge
           variant="outline"
           className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
         >
-          Warning
+          预警
         </Badge>
       )
     case "info":
@@ -88,7 +87,7 @@ function SeverityBadge({ severity }: { severity: SiteOpsEventSeverity }) {
           variant="outline"
           className="border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
         >
-          Info
+          提示
         </Badge>
       )
     default:
@@ -221,17 +220,16 @@ function EventCard({ event }: { event: SiteOpsEventItem }) {
         <div className="flex flex-wrap items-center gap-1.5">
           <SeverityBadge severity={event.severity} />
           <EventStateBadge state={event.state} />
-          <code className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium">
-            {event.rule_key}
-          </code>
           {event.resource_key ? (
-            <code className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground">
+            <span className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground">
               {event.resource_key}
-            </code>
+            </span>
           ) : null}
-          <Badge variant="secondary" className="text-[11px] tabular-nums">
-            连续命中 {event.consecutive_hits} 次
-          </Badge>
+          {event.consecutive_hits > 1 ? (
+            <Badge variant="secondary" className="text-[11px] tabular-nums">
+              连续命中 {event.consecutive_hits} 次
+            </Badge>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
           <span>触发 {formatUTC8DateTime(event.fired_at)}</span>
@@ -391,54 +389,53 @@ export function EventsTimelinePanel({
 
   return (
     <section className="space-y-3">
-      {/* 顶部工具栏 */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-sm font-semibold">告警事件与运维日报</h2>
-          <Badge variant={firingCount > 0 ? "destructive" : "outline"} className="gap-1 tabular-nums">
-            <BellRing className="size-3" />
-            活跃告警 {firingCount}
-          </Badge>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Select
-            value={stateFilter}
-            onValueChange={(value) => setStateFilter(value as StateFilter)}
-          >
-            <SelectTrigger className="h-8 w-36 text-xs" aria-label="按事件状态筛选">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
-              <SelectItem value="firing">告警中 (firing)</SelectItem>
-              <SelectItem value="resolved">已恢复 (resolved)</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex flex-wrap gap-1">
+            {(
+              [
+                ["all", `全部 ${items.length}`],
+                ["firing", `告警中 ${firingCount}`],
+                ["resolved", `已恢复 ${Math.max(0, items.length - firingCount)}`],
+              ] as const
+            ).map(([val, label]) => (
+              <Button
+                key={val}
+                size="sm"
+                variant={stateFilter === val ? "secondary" : "outline"}
+                className="h-7 rounded-full px-2.5 text-xs tabular-nums"
+                onClick={() => setStateFilter(val)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
 
           <Select
             value={severityFilter}
             onValueChange={(value) => setSeverityFilter(value as SeverityFilter)}
           >
-            <SelectTrigger className="h-8 w-32 text-xs" aria-label="按告警级别筛选">
+            <SelectTrigger className="h-8 w-28 text-xs" aria-label="按告警级别筛选">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部级别</SelectItem>
-              <SelectItem value="critical">critical</SelectItem>
-              <SelectItem value="warning">warning</SelectItem>
-              <SelectItem value="info">info</SelectItem>
+              <SelectItem value="critical">严重</SelectItem>
+              <SelectItem value="warning">预警</SelectItem>
+              <SelectItem value="info">提示</SelectItem>
             </SelectContent>
           </Select>
+        </div>
 
-          <Button size="sm" variant="outline" onClick={onReload} disabled={loading}>
-            <RefreshCw className={loading ? "animate-spin" : undefined} />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" className="h-8 text-xs" onClick={onReload} disabled={loading}>
+            <RefreshCw className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
             刷新
           </Button>
 
-          <Button size="sm" onClick={() => { void handleOpenReportPreview() }}>
-            <FileText />
-            预览运维日报
+          <Button size="sm" className="h-8 text-xs" onClick={() => { void handleOpenReportPreview() }}>
+            <FileText className="size-3.5" />
+            预览昨日日报
           </Button>
         </div>
       </div>

@@ -29,6 +29,14 @@ func noAnalyticsCanaries(t *testing.T, b []byte) {
 		}
 	}
 }
+func noNonEmailCanaries(t *testing.T, b []byte) {
+	t.Helper()
+	for _, secret := range []string{"AliceRealName", "sk-canary-secret-9999", "ProdBillingKey", "canaryhint", "deadbeef1234", "/var/lib/sub2api/backups/prod.sql.gz"} {
+		if strings.Contains(string(b), secret) {
+			t.Fatal("非邮箱隐私投影泄漏")
+		}
+	}
+}
 func TestAnalyticsProjectionAndPrivacyCanaries(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw string
@@ -61,7 +69,12 @@ func TestAnalyticsProjectionAndPrivacyCanaries(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				noAnalyticsCanaries(t, b)
+				allowDisplayEmail := tc.name == "ParseUsersPage" || tc.name == "ParseSubscriptionsPage"
+				if allowDisplayEmail {
+					noNonEmailCanaries(t, b)
+				} else {
+					noAnalyticsCanaries(t, b)
+				}
 				key := newLeafKey(c.scope(1, 1, 1), tc.name, "GET", nil)
 				_, _, _, err = loadProjection(context.Background(), c, key, leafOptions{}, func(context.Context) (any, UpstreamFetchMeta, error) { return value, UpstreamFetchMeta{}, nil })
 				if err != nil {
@@ -70,7 +83,11 @@ func TestAnalyticsProjectionAndPrivacyCanaries(t *testing.T) {
 				c.mu.Lock()
 				entry := c.entries[key].Value.(leafEntry)
 				c.mu.Unlock()
-				noAnalyticsCanaries(t, entry.data)
+				if allowDisplayEmail {
+					noNonEmailCanaries(t, entry.data)
+				} else {
+					noAnalyticsCanaries(t, entry.data)
+				}
 			}
 			for _, bad := range []string{`{"code":1,"data":` + tc.raw + "}", "null"} {
 				if _, err := tc.parse([]byte(bad)); err == nil {
@@ -154,6 +171,9 @@ func TestAnalyticsPrivacyAcrossServiceOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.User.Email == nil || *result.User.Email != "alice.chen@portal.example.com" {
+		t.Fatal("display email missing")
+	}
 	if result.User.EmailMasked == nil || *result.User.EmailMasked != "al***n@portal.example.com" {
 		t.Fatal("masked email missing")
 	}
@@ -165,7 +185,13 @@ func TestAnalyticsPrivacyAcrossServiceOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, out := range []any{result, lights, report} {
+	// 用户接口仅在内存与 HTTP 响应直出完整邮箱，严禁泄漏其他敏感字段；风控灯与日报严格零邮箱。
+	if b, err := json.Marshal(result); err != nil {
+		t.Fatal(err)
+	} else {
+		noNonEmailCanaries(t, b)
+	}
+	for _, out := range []any{lights, report} {
 		b, err := json.Marshal(out)
 		if err != nil {
 			t.Fatal(err)
@@ -178,7 +204,7 @@ func TestAnalyticsPrivacyAcrossServiceOutputs(t *testing.T) {
 	noAnalyticsCanaries(t, log.Bytes())
 	svc.analytics.mu.Lock()
 	for _, e := range svc.analytics.entries {
-		noAnalyticsCanaries(t, e.Value.(leafEntry).data)
+		noNonEmailCanaries(t, e.Value.(leafEntry).data)
 	}
 	svc.analytics.mu.Unlock()
 	var tables []string

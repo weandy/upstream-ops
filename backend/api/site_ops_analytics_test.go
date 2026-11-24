@@ -81,9 +81,14 @@ func TestSiteOpsAnalyticsHTTPRoutes(t *testing.T) {
 		if w.Code != want || w.Header().Get("Cache-Control") != "no-store" || !json.Valid(w.Body.Bytes()) {
 			t.Fatalf("%s %s: %d %s", method, path, w.Code, w.Body.String())
 		}
-		for _, secret := range []string{"alice.chen@portal.example.com", "AliceRealName", "sk-canary-secret-9999", "ProdBillingKey", "deadbeef1234", "target_binding"} {
+		for _, secret := range []string{"AliceRealName", "sk-canary-secret-9999", "ProdBillingKey", "deadbeef1234", "target_binding"} {
 			if strings.Contains(w.Body.String(), secret) {
 				t.Fatal("HTTP 泄漏")
+			}
+		}
+		if !strings.HasPrefix(path, "/users") && !strings.HasPrefix(path, "/subscriptions") {
+			if strings.Contains(w.Body.String(), "alice.chen@portal.example.com") {
+				t.Fatal("非用户接口邮箱泄漏")
 			}
 		}
 		return w.Body.String()

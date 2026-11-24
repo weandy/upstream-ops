@@ -144,7 +144,10 @@ func (s *SiteOpsStore) DeleteInstance(ctx context.Context, id uint) error {
 		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsAccountCost{}).Error; err != nil {
 			return err
 		}
-		return tx.Where("instance_id = ?", id).Delete(&SiteOpsReferencePrice{}).Error
+		if err := tx.Where("instance_id = ?", id).Delete(&SiteOpsReferencePrice{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("instance_id = ?", id).Delete(&SiteOpsUserConcurrencyPeak{}).Error
 	})
 }
 
@@ -714,4 +717,172 @@ func (s *SiteOpsStore) UpdateAnalyticsConfig(ctx context.Context, id uint, confi
 		return err
 	}
 	return res.Error
+}
+
+// RecordUserConcurrencyPeaks 按 UTC+8 自然日更新单用户并发峰值高水位（仅存数字 user_id，零 PII）。
+func (s *SiteOpsStore) RecordUserConcurrencyPeaks(ctx context.Context, instanceID uint, windowDate string, now time.Time, samples []SiteOpsUserConcurrencyPeak) error {
+	if instanceID == 0 || windowDate == "" || len(samples) == 0 {
+		return nil
+	}
+	ts := now.UTC()
+	byUser := make(map[int64]SiteOpsUserConcurrencyPeak, len(samples))
+	ids := make([]int64, 0, len(samples))
+	for _, sample := range samples {
+		if sample.UserID <= 0 {
+			continue
+		}
+		cur, exists := byUser[sample.UserID]
+		if !exists {
+			ids = append(ids, sample.UserID)
+			cur = sample
+		} else {
+			if sample.PeakInUse > cur.PeakInUse {
+				cur.PeakInUse = sample.PeakInUse
+			}
+			if sample.MaxCapacity > cur.MaxCapacity {
+				cur.MaxCapacity = sample.MaxCapacity
+			}
+			if sample.PeakWaiting > cur.PeakWaiting {
+				cur.PeakWaiting = sample.PeakWaiting
+			}
+			cur.FullLoadHits += sample.FullLoadHits
+		}
+		byUser[sample.UserID] = cur
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		existing := make(map[int64]SiteOpsUserConcurrencyPeak, len(ids))
+		for start := 0; start < len(ids); start += 100 {
+			end := min(len(ids), start+100)
+			var rows []SiteOpsUserConcurrencyPeak
+			if err := tx.Where("instance_id = ? AND window_date = ? AND user_id IN ?", instanceID, windowDate, ids[start:end]).Find(&rows).Error; err != nil {
+				return err
+			}
+			for _, row := range rows {
+				existing[row.UserID] = row
+			}
+		}
+		for _, uid := range ids {
+			sample := byUser[uid]
+			old, ok := existing[uid]
+			if !ok {
+				row := SiteOpsUserConcurrencyPeak{
+					InstanceID:   instanceID,
+					UserID:       uid,
+					WindowDate:   windowDate,
+					PeakInUse:    max(int64(0), sample.PeakInUse),
+					MaxCapacity:  max(int64(0), sample.MaxCapacity),
+					PeakWaiting:  max(int64(0), sample.PeakWaiting),
+					FullLoadHits: max(int64(0), sample.FullLoadHits),
+					PeakAt:       ts,
+					UpdatedAt:    ts,
+				}
+				if err := tx.Create(&row).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			nextPeak := old.PeakInUse
+			nextCap := old.MaxCapacity
+			nextWait := old.PeakWaiting
+			nextPeakAt := old.PeakAt
+			changed := false
+			if sample.PeakInUse > nextPeak {
+				nextPeak = sample.PeakInUse
+				nextPeakAt = ts
+				changed = true
+			}
+			if sample.PeakWaiting > nextWait {
+				nextWait = sample.PeakWaiting
+				if nextPeak == sample.PeakInUse {
+					nextPeakAt = ts
+				}
+				changed = true
+			}
+			if sample.MaxCapacity > nextCap {
+				nextCap = sample.MaxCapacity
+				changed = true
+			}
+			nextHits := old.FullLoadHits + max(int64(0), sample.FullLoadHits)
+			if nextHits != old.FullLoadHits {
+				changed = true
+			}
+			if !changed {
+				continue
+			}
+			if err := tx.Model(&SiteOpsUserConcurrencyPeak{}).Where("id = ?", old.ID).Updates(map[string]any{
+				"peak_in_use":    nextPeak,
+				"max_capacity":   nextCap,
+				"peak_waiting":   nextWait,
+				"full_load_hits": nextHits,
+				"peak_at":        nextPeakAt,
+				"updated_at":     ts,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// QueryUserConcurrencyPeaks 汇总最近窗口（window_date >= sinceDate）内的单用户并发峰值。
+func (s *SiteOpsStore) QueryUserConcurrencyPeaks(ctx context.Context, instanceID uint, sinceDate string, userIDs []int64) (map[int64]SiteOpsUserConcurrencyPeak, error) {
+	out := make(map[int64]SiteOpsUserConcurrencyPeak)
+	if instanceID == 0 || sinceDate == "" {
+		return out, nil
+	}
+	var rows []SiteOpsUserConcurrencyPeak
+	if len(userIDs) == 0 {
+		if err := s.db.WithContext(ctx).Where("instance_id = ? AND window_date >= ?", instanceID, sinceDate).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+	} else {
+		seen := make(map[int64]bool, len(userIDs))
+		unique := make([]int64, 0, len(userIDs))
+		for _, uid := range userIDs {
+			if uid > 0 && !seen[uid] {
+				seen[uid] = true
+				unique = append(unique, uid)
+			}
+		}
+		for start := 0; start < len(unique); start += 100 {
+			end := min(len(unique), start+100)
+			var part []SiteOpsUserConcurrencyPeak
+			if err := s.db.WithContext(ctx).Where("instance_id = ? AND window_date >= ? AND user_id IN ?", instanceID, sinceDate, unique[start:end]).Find(&part).Error; err != nil {
+				return nil, err
+			}
+			rows = append(rows, part...)
+		}
+	}
+	for _, row := range rows {
+		cur, ok := out[row.UserID]
+		if !ok {
+			out[row.UserID] = row
+			continue
+		}
+		if row.PeakInUse > cur.PeakInUse || (row.PeakInUse == cur.PeakInUse && row.PeakWaiting > cur.PeakWaiting) || (row.PeakInUse == cur.PeakInUse && row.PeakWaiting == cur.PeakWaiting && row.PeakAt.After(cur.PeakAt)) {
+			cur.PeakInUse = row.PeakInUse
+			cur.PeakAt = row.PeakAt
+		}
+		if row.PeakWaiting > cur.PeakWaiting {
+			cur.PeakWaiting = row.PeakWaiting
+		}
+		if row.MaxCapacity > cur.MaxCapacity {
+			cur.MaxCapacity = row.MaxCapacity
+		}
+		cur.FullLoadHits += row.FullLoadHits
+		out[row.UserID] = cur
+	}
+	return out, nil
+}
+
+// PruneUserConcurrencyPeaks 清理早于 beforeDate 的并发峰值日记录。
+func (s *SiteOpsStore) PruneUserConcurrencyPeaks(ctx context.Context, beforeDate string) (int64, error) {
+	if beforeDate == "" {
+		return 0, nil
+	}
+	res := s.db.WithContext(ctx).Where("window_date < ?", beforeDate).Delete(&SiteOpsUserConcurrencyPeak{})
+	return res.RowsAffected, res.Error
 }
