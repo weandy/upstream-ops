@@ -198,7 +198,7 @@ func TestSiteOpsEndToEndCRUDProbeRefreshOverviewGroups(t *testing.T) {
 		t.Fatalf("expected sanitized hint and active status, got %+v", createResp.Data)
 	}
 
-	// 3. Probe + Refresh + Overview + Trends + Groups.
+	// 3. Probe + Refresh + Overview + Trends + Groups + Wave 2 (Events / Accounts / Report Preview & Send).
 	for _, tc := range []struct {
 		method string
 		path   string
@@ -208,6 +208,10 @@ func TestSiteOpsEndToEndCRUDProbeRefreshOverviewGroups(t *testing.T) {
 		{http.MethodGet, "/api/site-ops/instances/1/overview"},
 		{http.MethodGet, "/api/site-ops/instances/1/trends?range=6h"},
 		{http.MethodGet, "/api/site-ops/instances/1/groups"},
+		{http.MethodGet, "/api/site-ops/instances/1/events"},
+		{http.MethodGet, "/api/site-ops/instances/1/accounts?view=status"},
+		{http.MethodPost, "/api/site-ops/instances/1/report/preview"},
+		{http.MethodPost, "/api/site-ops/instances/1/report/send"},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
 		w := httptest.NewRecorder()

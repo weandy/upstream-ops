@@ -15,14 +15,21 @@ import (
 )
 
 const (
-	authRetryInterval     = 15 * time.Minute
-	capabilityRetryWindow = 6 * time.Hour
-	liveGroupsTTL         = 60 * time.Second
-	metadataRefreshPeriod = 5 * time.Minute
+	authRetryInterval       = 15 * time.Minute
+	capabilityRetryWindow   = 6 * time.Hour
+	liveGroupsTTL           = 60 * time.Second
+	liveAccountsTTL         = 10 * time.Minute
+	metadataRefreshPeriod   = 5 * time.Minute
+	l2RefreshPeriod         = 5 * time.Minute
+	l3AccountsRefreshPeriod = 30 * time.Minute
+	deliveryRetryTick       = 30 * time.Second
+	dailyReportCheckTick    = time.Minute
 )
 
 type PollerDeps struct {
 	Store         Store
+	EventStore    EventStore
+	Notifier      DirectNotifier
 	Cipher        *crypto.Cipher
 	Validator     OutboundValidator
 	Client        UpstreamClient
@@ -43,15 +50,25 @@ type Poller struct {
 	cfg       config.SiteOpsConfig
 	running   bool
 	allowed   bool
+	bgCancel  context.CancelFunc
 	instances map[uint]storage.SiteOpsInstance
 	workers   map[uint]*instanceWorker
 	tails     map[uint]chan struct{}
 	security  map[uint]pollSecurity
 	live      map[uint]liveGroupSample
+	accounts  map[uint]liveAccountsSample
+	evaluator *EventEvaluator
+	alerter   *AlertDispatcher
+	dailySent map[uint]string
 }
 
 type liveGroupSample struct {
 	response GroupsResponse
+	cachedAt time.Time
+}
+
+type liveAccountsSample struct {
+	response AccountsStatusResponse
 	cachedAt time.Time
 }
 
@@ -91,11 +108,21 @@ type instanceWorker struct {
 	last          *storage.SiteOpsSnapshot
 	trusted       *storage.SiteOpsSnapshot
 	trustedGroups bool
-	lastArchive   time.Time
-	groupMetadata []SanitizedGroupInfo
+	lastArchive     time.Time
+	groupMetadata   []SanitizedGroupInfo
+	lastL2At        time.Time
+	lastAccountsAt  time.Time
+	authCacheHealth *SanitizedAuthCacheHealth
+	ingressHealth   *SanitizedIngressRejectHealth
+	accountsDir     []SanitizedAccountSummary
 }
 
 func NewPoller(deps PollerDeps) *Poller {
+	if deps.EventStore == nil && deps.Store != nil {
+		if es, ok := deps.Store.(EventStore); ok {
+			deps.EventStore = es
+		}
+	}
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
@@ -107,10 +134,35 @@ func NewPoller(deps PollerDeps) *Poller {
 	if deps.Log == nil {
 		deps.Log = slog.Default()
 	}
+	var evaluator *EventEvaluator
+	var alerter *AlertDispatcher
+	if deps.EventStore != nil {
+		evaluator = NewEventEvaluator()
+		if deps.Notifier != nil {
+			alerter = NewAlertDispatcher(deps.EventStore, deps.Notifier)
+			alerter.Now = func() time.Time { return deps.Now().UTC() }
+		}
+	}
 	return &Poller{
 		deps: deps, cfg: deps.InitialConfig.WithDefaults(), allowed: true,
 		instances: make(map[uint]storage.SiteOpsInstance), workers: make(map[uint]*instanceWorker),
-		tails: make(map[uint]chan struct{}), security: make(map[uint]pollSecurity), live: make(map[uint]liveGroupSample),
+		tails: make(map[uint]chan struct{}), security: make(map[uint]pollSecurity),
+		live: make(map[uint]liveGroupSample), accounts: make(map[uint]liveAccountsSample),
+		evaluator: evaluator, alerter: alerter, dailySent: make(map[uint]string),
+	}
+}
+
+// SetNotifier 运行时绑定或更新专用直投通知器。
+func (p *Poller) SetNotifier(notifier DirectNotifier) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.deps.Notifier = notifier
+	if p.deps.EventStore != nil && notifier != nil {
+		ad := NewAlertDispatcher(p.deps.EventStore, notifier)
+		ad.Now = p.now
+		p.alerter = ad
+	} else {
+		p.alerter = nil
 	}
 }
 
@@ -119,7 +171,19 @@ func (p *Poller) Start() {
 	defer p.lifecycle.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.running {
+		return
+	}
 	p.running = true
+	if p.deps.EventStore != nil {
+		bgCtx, bgCancel := context.WithCancel(context.Background())
+		p.bgCancel = bgCancel
+		p.wg.Add(1)
+		go func() {
+			defer p.wg.Done()
+			p.runMaintenance(bgCtx)
+		}()
+	}
 	for _, inst := range p.instances {
 		p.startWorkerLocked(inst)
 	}
@@ -130,6 +194,10 @@ func (p *Poller) Stop() {
 	defer p.lifecycle.Unlock()
 	p.mu.Lock()
 	p.running = false
+	if p.bgCancel != nil {
+		p.bgCancel()
+		p.bgCancel = nil
+	}
 	for id := range p.workers {
 		p.stopWorkerLocked(id)
 	}
@@ -205,6 +273,9 @@ func (p *Poller) reconcileLocked(inst storage.SiteOpsInstance) {
 		p.stopWorkerLocked(inst.ID)
 		if credentialTargetChanged(previous, inst) {
 			delete(p.security, inst.ID)
+			if p.evaluator != nil {
+				p.evaluator.ResetInstance(inst.ID)
+			}
 		}
 	}
 	p.instances[inst.ID] = inst
@@ -226,6 +297,10 @@ func (p *Poller) removeLocked(id uint) {
 	p.stopWorkerLocked(id)
 	delete(p.instances, id)
 	delete(p.security, id)
+	delete(p.dailySent, id)
+	if p.evaluator != nil {
+		p.evaluator.ResetInstance(id)
+	}
 }
 
 func (p *Poller) stopWorkerLocked(id uint) {
@@ -234,6 +309,7 @@ func (p *Poller) stopWorkerLocked(id uint) {
 		delete(p.workers, id)
 	}
 	delete(p.live, id)
+	delete(p.accounts, id)
 	if p.deps.Client != nil {
 		p.deps.Client.ResetInstanceState(id)
 	}
@@ -662,9 +738,9 @@ func (w *instanceWorker) collect(commitCtx, batch context.Context, archiveInterv
 				w.last.ConcTrustState != string(QualityUnverifiedZero) && decodeFieldQuality(w.last.FieldQualityJSON)[DomainInfraMetrics] != QualityStale {
 				r.patch.LastStatus = ptr(string(StatusOnline))
 			}
-			return r.persist(commitCtx, nil, nil, &verified, nil)
+			return r.persist(commitCtx, nil, nil, &verified, nil, nil)
 		}
-		return r.persist(commitCtx, nil, nil, nil, nil)
+		return r.persist(commitCtx, nil, nil, nil, nil, nil)
 	}
 	if in.Overview != nil && !overviewMeta.ObservedAt.IsZero() {
 		in.ObservedAt = overviewMeta.ObservedAt
@@ -678,15 +754,24 @@ func (w *instanceWorker) collect(commitCtx, batch context.Context, archiveInterv
 		r.patch.LastStatus = ptr(string(StatusDegraded))
 	}
 	if w.last != nil && snap.ObservedAt.Before(w.last.ObservedAt) {
-		return r.persist(commitCtx, nil, nil, nil, nil)
+		return r.persist(commitCtx, nil, nil, nil, nil, nil)
 	}
 	r.patch.LastObservedAt, r.patch.LastVerifiedAt, r.patch.LastHealthScore = &snap.ObservedAt, &snap.VerifiedAt, &snap.HealthScore
 	live := groupsView(w.instance.ID, &snap.ObservedAt, out.FieldQuality[DomainGroupCapacity], out.Detail.ConcTrustReason, out.Detail.PlatformBreakdown, out.Groups)
+	var liveAccounts *AccountsStatusResponse
+	if in.Availability != nil || in.Concurrency != nil || len(w.accountsDir) > 0 {
+		fused := buildLiveAccountsStatus(w.instance.ID, snap.ObservedAt, out.FieldQuality[DomainAccountAvailability], in.Availability, in.Concurrency, w.accountsDir)
+		liveAccounts = &fused
+	}
 	var archive []storage.SiteOpsGroupSnapshot
 	if len(out.Groups) > 0 && (w.lastArchive.IsZero() || snap.ObservedAt.Sub(w.lastArchive) >= archiveInterval) {
 		archive = archiveGroups(w.instance.ID, out.Groups)
 	}
-	return r.persist(commitCtx, snap, archive, nil, &live)
+	if err := r.persist(commitCtx, snap, archive, nil, &live, liveAccounts); err != nil {
+		return err
+	}
+	w.evaluateAfterCollect(commitCtx, r, snap, out.Detail, out.FieldQuality, out.Groups, in.Availability)
+	return nil
 }
 
 func (r *collectionRound) collectAdmin(ctx context.Context, target TargetEndpoint, in *AnalyzeInput) UpstreamFetchMeta {
@@ -783,6 +868,37 @@ func (r *collectionRound) collectAdmin(ctx context.Context, target TargetEndpoin
 			return client.FetchSystemVersion(ctx, target)
 		})
 	}
+	if p1a, ok := client.(P1AClient); ok && !r.haltAdmin && ctx.Err() == nil {
+		if w.lastL2At.IsZero() || r.now.Sub(w.lastL2At) >= l2RefreshPeriod {
+			authCache, _ := roundFetch(r, ctx, EndpointOpsAuthCacheHealth, DomainAuthCacheHealth, quality, func() (*SanitizedAuthCacheHealth, UpstreamFetchMeta, error) {
+				return p1a.FetchAuthCacheHealth(ctx, target)
+			})
+			if authCache != nil {
+				w.authCacheHealth = authCache
+				quality[DomainAuthCacheHealth] = QualityTrusted
+			}
+			ingress, _ := roundFetch(r, ctx, EndpointOpsIngressHealth, DomainIngressHealth, quality, func() (*SanitizedIngressRejectHealth, UpstreamFetchMeta, error) {
+				return p1a.FetchIngressRejectHealth(ctx, target)
+			})
+			if ingress != nil {
+				w.ingressHealth = ingress
+				quality[DomainIngressHealth] = QualityTrusted
+			}
+			_, _ = roundFetch(r, ctx, EndpointOpsAlertEvents, "", make(FieldQualityMap), func() ([]SanitizedOpsAlertEvent, UpstreamFetchMeta, error) {
+				return p1a.FetchOpsAlertEvents(ctx, target)
+			})
+			w.lastL2At = r.now
+		}
+		if w.lastAccountsAt.IsZero() || r.now.Sub(w.lastAccountsAt) >= l3AccountsRefreshPeriod {
+			dir, _ := roundFetch(r, ctx, EndpointAccounts, "", make(FieldQualityMap), func() ([]SanitizedAccountSummary, UpstreamFetchMeta, error) {
+				return p1a.FetchAccountsDirectory(ctx, target)
+			})
+			if dir != nil {
+				w.accountsDir = dir
+				w.lastAccountsAt = r.now
+			}
+		}
+	}
 	return meta
 }
 
@@ -809,7 +925,7 @@ func (r *collectionRound) recordError(err error) {
 	}
 }
 
-func (r *collectionRound) persist(ctx context.Context, snap *storage.SiteOpsSnapshot, archive []storage.SiteOpsGroupSnapshot, verified *time.Time, live *GroupsResponse) error {
+func (r *collectionRound) persist(ctx context.Context, snap *storage.SiteOpsSnapshot, archive []storage.SiteOpsGroupSnapshot, verified *time.Time, live *GroupsResponse, liveAccounts *AccountsStatusResponse) error {
 	w, p := r.w, r.w.poller
 	if r.authenticated && !errors.Is(r.adminErr, ErrRateLimited) {
 		r.security.backoff, r.backoff = 0, nil
@@ -857,6 +973,9 @@ func (r *collectionRound) persist(ctx context.Context, snap *storage.SiteOpsSnap
 			}
 		}
 	}
+	if liveAccounts != nil {
+		p.accounts[id] = liveAccountsSample{response: *liveAccounts, cachedAt: p.now()}
+	}
 	return nil
 }
 
@@ -890,7 +1009,7 @@ func (w *instanceWorker) probe(commitCtx, batch context.Context) (*ProbeReport, 
 			return nil, safeProbeError(err)
 		}
 		r.recordError(err)
-		if err := r.persist(commitCtx, nil, nil, nil, nil); err != nil {
+		if err := r.persist(commitCtx, nil, nil, nil, nil, nil); err != nil {
 			return nil, err
 		}
 		return nil, safeProbeError(err)
@@ -904,7 +1023,8 @@ func (w *instanceWorker) probe(commitCtx, batch context.Context) (*ProbeReport, 
 	var authorized, unauthorized, rateLimited bool
 	for endpoint, cap := range report.Capabilities {
 		switch endpoint {
-		case EndpointHealth, EndpointOpsSnapshotV2, EndpointOpsOverview, EndpointOpsConcurrency, EndpointOpsAccountAvail, EndpointGroupsAll, EndpointSystemVersion:
+		case EndpointHealth, EndpointOpsSnapshotV2, EndpointOpsOverview, EndpointOpsConcurrency, EndpointOpsAccountAvail,
+			EndpointGroupsAll, EndpointSystemVersion, EndpointOpsAlertEvents, EndpointOpsIngressHealth, EndpointOpsAuthCacheHealth, EndpointAccounts:
 		default:
 			continue
 		}
@@ -945,7 +1065,7 @@ func (w *instanceWorker) probe(commitCtx, batch context.Context) (*ProbeReport, 
 		r.recordError(r.adminErr)
 	}
 	r.setStatus(status, &clean.Health)
-	if err := r.persist(commitCtx, nil, nil, nil, nil); err != nil {
+	if err := r.persist(commitCtx, nil, nil, nil, nil, nil); err != nil {
 		return nil, err
 	}
 	return &clean, nil
@@ -1040,4 +1160,166 @@ func (p *Poller) LatestLiveGroups(instanceID uint) (*GroupsResponse, bool) {
 	}
 	// Return a detached view, including optional metric pointers.
 	return cloneGroupsView(sample.response), true
+}
+
+func (p *Poller) LatestAccountsStatus(instanceID uint) (*AccountsStatusResponse, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	sample, found := p.accounts[instanceID]
+	if !found || p.now().Sub(sample.cachedAt) > liveAccountsTTL {
+		return nil, false
+	}
+	return filterAccountsStatus(&sample.response, "", ""), true
+}
+
+func (w *instanceWorker) evaluateAfterCollect(
+	ctx context.Context,
+	r *collectionRound,
+	snap *storage.SiteOpsSnapshot,
+	detail SnapshotDetailPayload,
+	quality FieldQualityMap,
+	groups []GroupCapacityItem,
+	avail *SanitizedAvailabilityPayload,
+) {
+	p := w.poller
+	if p.deps.EventStore == nil || p.evaluator == nil || ctx.Err() != nil {
+		return
+	}
+	var accounts []SanitizedAccountAvailability
+	if avail != nil && len(avail.Accounts) > 0 {
+		accounts = make([]SanitizedAccountAvailability, 0, len(avail.Accounts))
+		for _, a := range avail.Accounts {
+			accounts = append(accounts, a)
+		}
+	}
+	cfg := ParseAlertConfig(w.instance.AlertConfigJSON)
+	in := EvalInput{
+		Instance:           w.instance,
+		Config:             cfg,
+		Now:                r.now,
+		Snapshot:           snap,
+		Detail:             detail,
+		FieldQuality:       maps.Clone(quality),
+		Groups:             groups,
+		Accounts:           accounts,
+		AuthCacheHealth:    w.authCacheHealth,
+		Auth401Consecutive: r.security.unauthorized,
+		Auth401CredGen:     w.instance.CredGen,
+		AuthVerified:       r.authenticated,
+	}
+	evalCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	transitions, err := p.evaluator.Evaluate(evalCtx, p.deps.EventStore, in)
+	if err != nil {
+		p.deps.Log.Warn("站点运维告警评估失败", "instance_id", w.instance.ID, "err", err)
+		return
+	}
+	if len(transitions) == 0 {
+		return
+	}
+	p.mu.Lock()
+	alerter := p.alerter
+	p.mu.Unlock()
+	if alerter == nil {
+		return
+	}
+	if _, err := alerter.DispatchTransitions(evalCtx, w.instance, cfg, transitions); err != nil {
+		p.deps.Log.Warn("站点运维告警直投失败", "instance_id", w.instance.ID, "err", err)
+	}
+}
+
+func (p *Poller) runMaintenance(ctx context.Context) {
+	retryTicker := time.NewTicker(deliveryRetryTick)
+	reportTicker := time.NewTicker(dailyReportCheckTick)
+	defer retryTicker.Stop()
+	defer reportTicker.Stop()
+
+	// 启动后先检查一次重启前遗留的待重试投递。
+	p.processRetries(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-retryTicker.C:
+			p.processRetries(ctx)
+		case <-reportTicker.C:
+			p.checkScheduledDailyReports(ctx)
+		}
+	}
+}
+
+func (p *Poller) processRetries(ctx context.Context) {
+	p.mu.Lock()
+	allowed, alerter := p.allowed, p.alerter
+	p.mu.Unlock()
+	if !allowed || alerter == nil {
+		return
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if _, err := alerter.ProcessDueDeliveries(runCtx, 50); err != nil && !errors.Is(err, context.Canceled) {
+		p.deps.Log.Warn("站点运维告警补发失败", "err", err)
+	}
+}
+
+func (p *Poller) checkScheduledDailyReports(ctx context.Context) {
+	p.mu.Lock()
+	if !p.allowed || p.alerter == nil || p.deps.EventStore == nil || p.deps.Store == nil {
+		p.mu.Unlock()
+		return
+	}
+	alerter := p.alerter
+	now := p.now()
+	nowUTC8 := now.In(locUTC8)
+	startUTC, _, dateLabel := YesterdayWindowUTC8(now)
+	var due []storage.SiteOpsInstance
+	for _, inst := range p.instances {
+		if !inst.Enabled {
+			continue
+		}
+		cfg := ParseAlertConfig(inst.AlertConfigJSON)
+		if !cfg.DailyReportEnabled || nowUTC8.Hour() != cfg.DailyReportHourUTC8 {
+			continue
+		}
+		if p.dailySent[inst.ID] == dateLabel {
+			continue
+		}
+		due = append(due, inst)
+	}
+	p.mu.Unlock()
+
+	for _, inst := range due {
+		if ctx.Err() != nil {
+			return
+		}
+		runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		snapshots, err := p.deps.Store.ListSnapshotsSince(runCtx, inst.ID, startUTC.Add(-2*time.Hour), 0)
+		if err != nil {
+			cancel()
+			continue
+		}
+		active, err := p.deps.EventStore.ListActiveEvents(runCtx, inst.ID)
+		if err != nil {
+			cancel()
+			continue
+		}
+		cfg := ParseAlertConfig(inst.AlertConfigJSON)
+		preview := BuildDailyReport(DailyReportInput{
+			Instance:             inst,
+			Now:                  now,
+			Snapshots:            snapshots,
+			ActiveEvents:         active,
+			IncludeMaskedSummary: cfg.IncludeMaskedSummary,
+		})
+		_, _, err = alerter.DispatchDailyReport(runCtx, inst, preview)
+		cancel()
+		if err != nil {
+			p.deps.Log.Warn("站点运维定时日报直投失败", "instance_id", inst.ID, "err", err)
+			continue
+		}
+		p.mu.Lock()
+		p.dailySent[inst.ID] = dateLabel
+		p.mu.Unlock()
+	}
 }

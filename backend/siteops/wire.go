@@ -5,9 +5,12 @@ import (
 
 	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/bejix/upstream-ops/backend/crypto"
+	"github.com/bejix/upstream-ops/backend/notify"
 	"github.com/bejix/upstream-ops/backend/storage"
 	"gorm.io/gorm"
 )
+
+var _ DirectNotifier = (*notify.Dispatcher)(nil)
 
 // NewDefaultService 使用真实出站门禁、Admin 客户端、能力探测器与 GORM 仓储组装默认 SiteOps 服务。
 func NewDefaultService(

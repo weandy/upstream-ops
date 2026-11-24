@@ -144,7 +144,9 @@ func (s *Scheduler) hasRetention() bool {
 		r.ProbeLivenessDays > 0 ||
 		r.ProbeIntelligenceRunsDays > 0 ||
 		r.SiteOpsSnapshotsDays > 0 ||
-		r.SiteOpsGroupSnapshotsDays > 0
+		r.SiteOpsGroupSnapshotsDays > 0 ||
+		r.SiteOpsEventsDays > 0 ||
+		r.SiteOpsAlertDeliveriesDays > 0
 }
 
 // runRetention 按配置删除过期历史。任一表失败不影响其它，全部错误写日志。
@@ -240,6 +242,30 @@ func (s *Scheduler) runRetention() {
 			s.log.Warn("retention site_ops_group_snapshots failed", "err", err)
 		} else if n > 0 {
 			s.log.Info("retention site_ops_group_snapshots deleted", "rows", n, "before", cutoff)
+		}
+	}
+
+	if r.SiteOpsEventsDays > 0 && s.siteOps != nil {
+		cutoff := now.UTC().AddDate(0, 0, -r.SiteOpsEventsDays)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		n, err := s.siteOps.DeleteEventsBeforeChunked(ctx, cutoff, 500, 10000, 2*time.Second)
+		cancel()
+		if err != nil {
+			s.log.Warn("retention site_ops_events failed", "err", err)
+		} else if n > 0 {
+			s.log.Info("retention site_ops_events deleted", "rows", n, "before", cutoff)
+		}
+	}
+
+	if r.SiteOpsAlertDeliveriesDays > 0 && s.siteOps != nil {
+		cutoff := now.UTC().AddDate(0, 0, -r.SiteOpsAlertDeliveriesDays)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		n, err := s.siteOps.DeleteDeliveriesBeforeChunked(ctx, cutoff, 500, 10000, 2*time.Second)
+		cancel()
+		if err != nil {
+			s.log.Warn("retention site_ops_alert_deliveries failed", "err", err)
+		} else if n > 0 {
+			s.log.Info("retention site_ops_alert_deliveries deleted", "rows", n, "before", cutoff)
 		}
 	}
 }
