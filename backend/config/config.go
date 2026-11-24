@@ -447,10 +447,12 @@ const (
 )
 
 // SiteOpsConfig 自有 Sub2API 站点运维模块运行时配置。
-// 默认 Fail-Closed：auth.enabled=false 时拒绝全部 /api/site-ops/* 并暂停采集；
-// 仅当显式开启 AllowUnauthenticatedLocalOnly 时允许本机回环只读调试（P3 写动作永久禁止逃生阀）。
+// SiteOpsConfig 配置自有 Sub2API 站点运维模块（backend/siteops）的出站安全、并发与预算策略。
+// P0–P2 鉴权跟随全局 AuthMiddleware；出站默认放行公网地址并拦截内网/回环/保留与云元数据地址。
+// 同机或内网直连可通过 allowLoopback、allowedOrigins、allowedCIDRs 显式配置例外（云元数据/链路本地/未指定地址永久硬拦截）。
 type SiteOpsConfig struct {
 	AllowUnauthenticatedLocalOnly bool     `mapstructure:"allowUnauthenticatedLocalOnly" yaml:"allowUnauthenticatedLocalOnly" json:"allowUnauthenticatedLocalOnly"`
+	AllowLoopback                 bool     `mapstructure:"allowLoopback" yaml:"allowLoopback" json:"allowLoopback"`
 	AllowedOrigins                []string `mapstructure:"allowedOrigins" yaml:"allowedOrigins" json:"allowedOrigins"`
 	AllowedCIDRs                  []string `mapstructure:"allowedCIDRs" yaml:"allowedCIDRs" json:"allowedCIDRs"`
 	DefaultPollIntervalSeconds    int      `mapstructure:"defaultPollIntervalSeconds" yaml:"defaultPollIntervalSeconds" json:"defaultPollIntervalSeconds"`
@@ -573,6 +575,7 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		_ = v.BindEnv("server.port", "SERVER_PORT")
 		_ = v.BindEnv("server.mode", "SERVER_MODE")
 		_ = v.BindEnv("log.level", "LOG_LEVEL")
+		_ = v.BindEnv("siteOps.allowLoopback", "SITEOPS_ALLOW_LOOPBACK")
 	}
 
 	if err := v.ReadInConfig(); err != nil {
@@ -762,6 +765,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("embed.rateLimitBurst", DefaultEmbedRateLimitBurst)
 
 	v.SetDefault("siteOps.allowUnauthenticatedLocalOnly", false)
+	v.SetDefault("siteOps.allowLoopback", false)
 	v.SetDefault("siteOps.defaultPollIntervalSeconds", DefaultSiteOpsPollIntervalSeconds)
 	v.SetDefault("siteOps.defaultAuditBudgetPerDay", DefaultSiteOpsAuditBudgetPerDay)
 	v.SetDefault("siteOps.globalMaxConcurrency", DefaultSiteOpsGlobalMaxConcurrency)

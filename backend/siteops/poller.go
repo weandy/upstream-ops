@@ -167,7 +167,7 @@ func (p *Poller) applyRuntimeConfig(allowed bool, cfg config.SiteOpsConfig, prox
 	}
 	p.cfg = cfg
 	if p.deps.Validator != nil {
-		p.deps.Validator.UpdatePolicy(cfg.AllowedOrigins, cfg.AllowedCIDRs)
+		p.deps.Validator.UpdatePolicy(cfg.AllowLoopback, cfg.AllowedOrigins, cfg.AllowedCIDRs)
 	}
 	if p.deps.Client != nil {
 		p.deps.Client.UpdateRuntimeConfig(cfg, proxy, upstream)

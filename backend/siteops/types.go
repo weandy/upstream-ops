@@ -27,8 +27,8 @@ const (
 )
 
 var (
-	ErrAuthRequired       = errors.New("site-ops requires auth.enabled=true (or explicit local-only read escape hatch)")
-	ErrOriginNotAllowed   = errors.New("target origin or resolved IP is not in allowed siteOps origins/CIDRs")
+	ErrAuthRequired       = errors.New("site-ops requires auth.enabled=true")
+	ErrOriginNotAllowed   = errors.New("target host or resolved IP is blocked by site-ops internal address policy")
 	ErrRedirectBlocked    = errors.New("HTTP redirects are blocked for site-ops outbound requests")
 	ErrBudgetExceeded     = errors.New("site-ops audit request budget exceeded")
 	ErrQueueTimeout       = errors.New("site-ops outbound queue wait timeout")
@@ -575,11 +575,11 @@ type RefreshResult struct {
 
 // ---------- 包内模块协作接口（确保 W1-A 与 W1-B 零冲突并行开发） ----------
 
-// OutboundValidator 出站 Origin/CIDR 门禁与 Dial 复检接口（由 W1-A guard.go 实现）。
+// OutboundValidator 出站内网黑名单、可选例外与 Dial 复检接口（由 W1-A guard.go 实现）。
 type OutboundValidator interface {
 	ValidateBaseURL(rawURL string) (normalizedURL string, err error)
 	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
-	UpdatePolicy(allowedOrigins, allowedCIDRs []string)
+	UpdatePolicy(allowLoopback bool, allowedOrigins, allowedCIDRs []string)
 }
 
 // UpstreamClient Sub2API Admin API 客户端接口（由 W1-A client.go 实现）。

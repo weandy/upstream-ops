@@ -387,10 +387,12 @@ func TestSiteOpsQueueLimits(t *testing.T) {
 
 func TestProxyPinsResolvedTarget(t *testing.T) {
 	var hits atomic.Int32
+	expectedConnect := "192.0.2.30:80"
+	expectedHost := "portal.example.com"
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
-		if r.Method != http.MethodConnect || r.Host != "192.0.2.30:80" || r.Header.Get("x-api-key") != "" {
-			t.Errorf("unexpected CONNECT: %s %s, Admin header present = %v", r.Method, r.Host, r.Header.Get("x-api-key") != "")
+		if r.Method != http.MethodConnect || r.Host != expectedConnect || r.Header.Get("x-api-key") != "" {
+			t.Errorf("unexpected CONNECT: %s %s (want %s), Admin header present = %v", r.Method, r.Host, expectedConnect, r.Header.Get("x-api-key") != "")
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -408,7 +410,7 @@ func TestProxyPinsResolvedTarget(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		if req.Host != "portal.example.com" || req.URL.Path != versionPath || req.Header.Get("x-api-key") != testAdminKey {
+		if req.Host != expectedHost || req.URL.Path != versionPath || req.Header.Get("x-api-key") != testAdminKey {
 			t.Error("tunneled request lost its upstream Host, path or credentials")
 		}
 		body := `{"version":"v0.2.24"}`
@@ -419,8 +421,9 @@ func TestProxyPinsResolvedTarget(t *testing.T) {
 	proxyURL, _ := url.Parse(proxy.URL)
 	hostname, portText, _ := net.SplitHostPort(proxyURL.Host)
 	port, _ := strconv.Atoi(portText)
-	siteCfg := config.SiteOpsConfig{AllowedOrigins: []string{"http://portal.example.com"}}
-	guard := NewOutboundGuard(siteCfg.AllowedOrigins, nil)
+	// Default empty SiteOpsConfig allows public resolved IPs and blocks cloud metadata / private IPs.
+	siteCfg := config.SiteOpsConfig{}
+	guard := NewOutboundGuard(false, nil, nil)
 	guard.lookupIP = func(context.Context, string, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("169.254.169.254")}, nil
 	}
@@ -428,16 +431,32 @@ func TestProxyPinsResolvedTarget(t *testing.T) {
 	client := NewClient(siteCfg, proxyCfg, config.UpstreamConfig{}, guard, nil)
 	inst := TargetEndpoint{InstanceID: 1, APIKey: testAdminKey, BaseURL: "http://portal.example.com", ProxyEnabled: true}
 	if _, _, err := client.FetchSystemVersion(context.Background(), inst); !errors.Is(err, ErrOriginNotAllowed) || hits.Load() != 0 {
-		t.Fatalf("unapproved proxy target = %v, %d proxy hits", err, hits.Load())
+		t.Fatalf("metadata proxy target = %v, %d proxy hits", err, hits.Load())
+	}
+	guard.lookupIP = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("10.0.0.5")}, nil
+	}
+	if _, _, err := client.FetchSystemVersion(context.Background(), inst); !errors.Is(err, ErrOriginNotAllowed) || hits.Load() != 0 {
+		t.Fatalf("private proxy target = %v, %d proxy hits", err, hits.Load())
 	}
 	guard.lookupIP = func(context.Context, string, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("192.0.2.30")}, nil
 	}
 	if result, _, err := client.FetchSystemVersion(context.Background(), inst); err != nil || result.Version != "v0.2.24" || hits.Load() != 1 {
-		t.Fatalf("approved proxy target = %+v, %v, %d proxy hits", result, err, hits.Load())
+		t.Fatalf("public proxy target = %+v, %v, %d proxy hits", result, err, hits.Load())
+	}
+	// Explicit internal Docker exemption works and revokes immediately upon runtime config update.
+	expectedConnect, expectedHost = "172.18.0.3:8080", "sub2api:8080"
+	client.UpdateRuntimeConfig(config.SiteOpsConfig{AllowedOrigins: []string{"http://sub2api:8080"}}, proxyCfg, config.UpstreamConfig{})
+	guard.lookupIP = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("172.18.0.3")}, nil
+	}
+	dockerInst := TargetEndpoint{InstanceID: 2, APIKey: testAdminKey, BaseURL: "http://sub2api:8080", ProxyEnabled: true}
+	if result, _, err := client.FetchSystemVersion(context.Background(), dockerInst); err != nil || result.Version != "v0.2.24" || hits.Load() != 2 {
+		t.Fatalf("exempted internal proxy target = %+v, %v, %d proxy hits", result, err, hits.Load())
 	}
 	client.UpdateRuntimeConfig(config.SiteOpsConfig{}, proxyCfg, config.UpstreamConfig{})
-	if _, _, err := client.FetchSystemVersion(context.Background(), inst); !errors.Is(err, ErrOriginNotAllowed) || hits.Load() != 1 {
-		t.Fatalf("revoked target = %v, %d proxy hits", err, hits.Load())
+	if _, _, err := client.FetchSystemVersion(context.Background(), dockerInst); !errors.Is(err, ErrOriginNotAllowed) || hits.Load() != 2 {
+		t.Fatalf("revoked internal target = %v, %d proxy hits", err, hits.Load())
 	}
 }

@@ -40,7 +40,7 @@ func (siteOpsTestValidator) DialContext(context.Context, string, string) (net.Co
 	return nil, ErrOriginNotAllowed
 }
 
-func (siteOpsTestValidator) UpdatePolicy([]string, []string) {}
+func (siteOpsTestValidator) UpdatePolicy(bool, []string, []string) {}
 
 type siteOpsTestProber func(context.Context, TargetEndpoint, CapabilitiesMap) (*ProbeReport, error)
 
@@ -134,7 +134,33 @@ func TestServiceValidatesStoresAndProjectsInstances(t *testing.T) {
 	}
 }
 
-func TestServiceAuthHotReloadCancelsAndResumesPolling(t *testing.T) {
+func TestServiceWorksWithoutGlobalAuth(t *testing.T) {
+	svc, _, clock := newTestSiteOpsService(t, &siteOpsTestClient{}, nil)
+	ctx := context.Background()
+	svc.ApplyRuntimeConfig(false, config.SiteOpsConfig{}, config.ProxyConfig{}, config.UpstreamConfig{})
+
+	summary, err := svc.GetSummary(ctx)
+	if err != nil || summary.AuthEnabled || !summary.PollingActive {
+		t.Fatalf("expected active polling when global auth disabled: %+v, %v", summary, err)
+	}
+	inst := addTestSiteOpsInstance(t, svc, ctx)
+	if inst.LastStatus == StatusPausedNoAuth {
+		t.Fatalf("new instance should not be paused_no_auth: %+v", inst)
+	}
+	updated, err := svc.UpdateInstance(ctx, inst.ID, UpdateInstanceInput{SortOrder: ptr(2)})
+	if err != nil || updated.SortOrder != 2 || updated.LastStatus == StatusPausedNoAuth {
+		t.Fatalf("update without global auth failed: %+v, %v", updated, err)
+	}
+	clock.add(time.Minute)
+	if got := refreshTestSiteOps(t, ctx, svc, inst.ID); got.Status != StatusOnline || got.Snapshot == nil {
+		t.Fatalf("refresh without global auth failed: %+v", got)
+	}
+	if err := svc.DeleteInstance(ctx, inst.ID); err != nil {
+		t.Fatalf("delete without global auth failed: %v", err)
+	}
+}
+
+func TestServiceRuntimeConfigHotReloadAndPollerPauseLifecycle(t *testing.T) {
 	started, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	var calls atomic.Int32
@@ -152,25 +178,27 @@ func TestServiceAuthHotReloadCancelsAndResumesPolling(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	inst := addTestSiteOpsInstance(t, svc, ctx)
+	// Applying runtime config hot-reloads flags without stopping active polling.
+	svc.ApplyRuntimeConfig(false, config.SiteOpsConfig{AllowLoopback: true}, config.ProxyConfig{}, config.UpstreamConfig{})
+	if !svc.CurrentConfig().AllowLoopback {
+		t.Fatal("ApplyRuntimeConfig did not update AllowLoopback")
+	}
 	result := make(chan error, 1)
 	go func() { result <- svc.poller.TriggerRefresh(ctx, inst.ID) }()
 	waitSiteOpsSignal(t, ctx, started)
-	svc.ApplyRuntimeConfig(false, config.SiteOpsConfig{AllowUnauthenticatedLocalOnly: true}, config.ProxyConfig{}, config.UpstreamConfig{})
+	// Explicitly pausing the poller cancels the in-flight worker and prevents stale writes.
+	svc.poller.SetPollingAllowed(false)
 	waitSiteOpsSignal(t, ctx, canceled)
 	if err := svc.poller.TriggerRefresh(ctx, inst.ID); !errors.Is(err, ErrAuthRequired) {
-		t.Fatalf("refresh during auth pause: %v", err)
+		t.Fatalf("refresh during poller pause: %v", err)
 	}
 	if _, err := svc.ProbeInstance(ctx, inst.ID); !errors.Is(err, ErrAuthRequired) {
-		t.Fatalf("persistent probe during auth pause: %v", err)
-	}
-	paused, err := svc.GetSummary(ctx)
-	if err != nil || paused.AuthEnabled || paused.PollingActive || paused.Instances[0].LastStatus != StatusPausedNoAuth {
-		t.Fatalf("auth disabled summary: %+v, %v", paused, err)
+		t.Fatalf("probe during poller pause: %v", err)
 	}
 	if snap, err := store.GetLatestSnapshot(ctx, inst.ID); err != nil || snap != nil {
 		t.Fatalf("snapshot from paused worker: %+v, %v", snap, err)
 	}
-	svc.ApplyRuntimeConfig(true, config.SiteOpsConfig{}, config.ProxyConfig{}, config.UpstreamConfig{})
+	svc.poller.SetPollingAllowed(true)
 	clock.add(time.Minute)
 	once.Do(func() { close(release) })
 	select {

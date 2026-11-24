@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/bejix/upstream-ops/backend/siteops"
 	"github.com/gin-gonic/gin"
 )
@@ -14,19 +13,9 @@ func registerSiteOps(g *gin.RouterGroup, d *Deps) {
 	if d.SiteOps == nil {
 		return
 	}
-	authActive := func() bool {
-		if d.Runtime != nil {
-			return d.Runtime.CurrentAuth() != nil
-		}
-		active, _ := d.SiteOps.AccessPolicy()
-		return active
-	}
-	cfgProvider := func() config.SiteOpsConfig {
-		return d.SiteOps.CurrentConfig()
-	}
 
+	// P0–P2 鉴权统一跟随全局 AuthMiddleware；P3 高危写操作端点将单独挂载强制鉴权守卫。
 	sg := g.Group("/site-ops")
-	sg.Use(siteops.RequireAccessMiddleware(authActive, cfgProvider))
 
 	sg.GET("/summary", func(c *gin.Context) {
 		res, err := d.SiteOps.GetSummary(c.Request.Context())

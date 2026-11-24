@@ -49,7 +49,7 @@ func NewService(deps ServiceDeps) *Service {
 		Log: deps.Log, InitialConfig: cfg, Now: deps.Now, Jitter: deps.Jitter, SanitizeError: deps.SanitizeError,
 	})
 	if deps.Validator != nil {
-		deps.Validator.UpdatePolicy(cfg.AllowedOrigins, cfg.AllowedCIDRs)
+		deps.Validator.UpdatePolicy(cfg.AllowLoopback, cfg.AllowedOrigins, cfg.AllowedCIDRs)
 	}
 	poller.SetPollingAllowed(IsPollingAllowed(deps.AuthActive, cfg))
 	return &Service{deps: deps, poller: poller, cfg: cfg, auth: deps.AuthActive}
@@ -125,9 +125,6 @@ func (s *Service) ListInstances(ctx context.Context) ([]InstanceView, error) {
 func (s *Service) CreateInstance(ctx context.Context, input CreateInstanceInput) (*InstanceView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.auth {
-		return nil, ErrAuthRequired
-	}
 	inst := storage.SiteOpsInstance{Name: input.Name, Slug: input.Slug, BaseURL: input.BaseURL, KeyKind: input.KeyKind,
 		Enabled: true, ProxyEnabled: input.ProxyEnabled, SortOrder: input.SortOrder, PollIntervalSeconds: input.PollIntervalSeconds,
 		AuditBudgetPerDay: input.AuditBudgetPerDay, CredGen: 1, Generation: 1}
@@ -145,16 +142,13 @@ func (s *Service) CreateInstance(ctx context.Context, input CreateInstanceInput)
 		return nil, err
 	}
 	s.poller.ReconcileInstance(inst)
-	view := s.instanceView(inst, s.auth)
+	view := s.instanceView(inst, IsPollingAllowed(s.auth, s.cfg))
 	return &view, nil
 }
 
 func (s *Service) UpdateInstance(ctx context.Context, id uint, input UpdateInstanceInput) (*InstanceView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.auth {
-		return nil, ErrAuthRequired
-	}
 	previous, err := s.deps.Store.GetInstance(ctx, id)
 	if err != nil {
 		return nil, err
@@ -183,8 +177,9 @@ func (s *Service) UpdateInstance(ctx context.Context, id uint, input UpdateInsta
 			return nil, err
 		}
 	}
+	pollingAllowed := IsPollingAllowed(s.auth, s.cfg)
 	if inst == *previous {
-		view := s.instanceView(inst, s.auth)
+		view := s.instanceView(inst, pollingAllowed)
 		return &view, nil
 	}
 	inst.Generation++
@@ -201,7 +196,7 @@ func (s *Service) UpdateInstance(ctx context.Context, id uint, input UpdateInsta
 	if err != nil {
 		return nil, err
 	}
-	view := s.instanceView(*updated, s.auth)
+	view := s.instanceView(*updated, pollingAllowed)
 	return &view, nil
 }
 
@@ -326,9 +321,6 @@ func slugify(name string) string {
 func (s *Service) DeleteInstance(ctx context.Context, id uint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.auth {
-		return ErrAuthRequired
-	}
 	inst, err := s.deps.Store.GetInstance(ctx, id)
 	if err != nil {
 		return err

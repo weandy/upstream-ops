@@ -69,7 +69,7 @@ export function InstanceFormDialog({
       } else {
         const message = err instanceof Error ? err.message.trim() : ""
         const reason = apiKey ? message.split(apiKey).join("[已隐藏]") : message
-        setError(`保存失败。请检查站点地址白名单、名称和 Slug 是否重复，以及各项配置。${reason ? ` ${reason.slice(0, 240)}` : ""}`)
+        setError(`保存失败。请检查站点地址是否命中内网拦截规则、名称或 Slug 是否重复，以及各项配置。${reason ? ` ${reason.slice(0, 240)}` : ""}`)
       }
     } finally {
       setSaving(false)
@@ -82,7 +82,7 @@ export function InstanceFormDialog({
         <DialogHeader>
           <DialogTitle>{instance ? "编辑自有站点" : "添加自有站点"}</DialogTitle>
           <DialogDescription>
-            站点地址须命中部署侧的 <code>siteOps.allowedOrigins</code> 或 <code>siteOps.allowedCIDRs</code> 白名单。
+            默认放行公网 HTTP/HTTPS 地址并自动拦截内网、回环与云元数据地址；同机或内网直连可在 <code>config.yaml</code> 的 <code>siteOps</code> 中配置例外。
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={save} className="space-y-4">

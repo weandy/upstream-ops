@@ -119,7 +119,7 @@ var _ UpstreamClient = (*Client)(nil)
 
 func NewClient(siteCfg config.SiteOpsConfig, proxyCfg config.ProxyConfig, upstreamCfg config.UpstreamConfig, guard OutboundValidator, log *slog.Logger) *Client {
 	if guard == nil {
-		guard = NewOutboundGuard(siteCfg.AllowedOrigins, siteCfg.AllowedCIDRs)
+		guard = NewOutboundGuard(siteCfg.AllowLoopback, siteCfg.AllowedOrigins, siteCfg.AllowedCIDRs)
 	}
 	return &Client{
 		runtime: clientRuntime{siteCfg.WithDefaults(), proxyCfg, upstreamCfg.WithDefaults().UserAgent},
@@ -132,7 +132,7 @@ func (c *Client) UpdateRuntimeConfig(siteCfg config.SiteOpsConfig, proxyCfg conf
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.runtime = clientRuntime{siteCfg.WithDefaults(), proxyCfg, upstreamCfg.WithDefaults().UserAgent}
-	c.guard.UpdatePolicy(siteCfg.AllowedOrigins, siteCfg.AllowedCIDRs)
+	c.guard.UpdatePolicy(siteCfg.AllowLoopback, siteCfg.AllowedOrigins, siteCfg.AllowedCIDRs)
 	for key, flight := range c.flights {
 		flight.cancel()
 		delete(c.flights, key)

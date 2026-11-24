@@ -74,7 +74,7 @@ export default function SiteOpsPage() {
 
   const selected = catalog?.instances.find((instance) => instance.id === selectedId) ?? catalog?.instances[0]
   const id = selected?.id
-  const readOnly = catalog?.summary.auth_enabled !== true
+  const readOnly = false
   const currentDetails = details?.id === id ? details : null
   const currentTrends = currentDetails?.range === range ? currentDetails : null
   const currentNotice = notice?.id === id ? notice : null
@@ -99,7 +99,6 @@ export default function SiteOpsPage() {
         setCatalog({ summary, instances: instances ?? [] })
         setCatalogError("")
         setBlocked(false)
-        if (!summary.auth_enabled) setForm(null)
         setSelectedId((current) => {
           if (instances?.some((instance) => instance.id === current)) return current
           return instances?.[0]?.id ?? null
@@ -263,9 +262,9 @@ export default function SiteOpsPage() {
           <CardContent role="status" className="flex items-start gap-3 py-5">
             <ShieldAlert className="mt-0.5 size-5 shrink-0 text-amber-600" />
             <div className="space-y-2">
-              <h2 className="font-semibold">站点运维需要开启管理鉴权</h2>
+              <h2 className="font-semibold">当前操作需要开启管理鉴权</h2>
               <p className="text-sm text-muted-foreground">
-                请在部署配置中设置 <code>auth.enabled: true</code>。本机单机只读调试可显式设置 <code>siteOps.allowUnauthenticatedLocalOnly: true</code>，并从回环地址访问。
+                请在部署配置中设置 <code>auth.enabled: true</code> 并登录后重试。
               </p>
               <Button size="sm" variant="outline" onClick={() => setReload((current) => current + 1)}>重新检查</Button>
             </div>
@@ -278,12 +277,11 @@ export default function SiteOpsPage() {
         </div>
       ) : (
         <>
-          {readOnly && <p className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">当前处于本机只读调试模式。启用管理鉴权后可添加或编辑站点并立即刷新。</p>}
           {!selected ? (
             <Card className="border-dashed">
               <CardContent className="space-y-3 py-5">
                 <h2 className="font-semibold">还没有自有站点</h2>
-                <p className="text-sm text-muted-foreground">添加已加入部署白名单的 Sub2API 站点，开始采集运行指标与号池容量。</p>
+                <p className="text-sm text-muted-foreground">添加自有 Sub2API 站点的公网地址与 Admin API Key，开始采集运行指标与号池容量。</p>
                 <Button size="sm" disabled={readOnly} onClick={() => setForm({ instance: null })}><Plus />添加自有站点</Button>
               </CardContent>
             </Card>

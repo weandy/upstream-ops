@@ -36,7 +36,7 @@
 
 | 序号 | 评审发现（Blocker / High） | Neon 终审定稿裁决 | 生效阶段 |
 | :--- | :--- | :--- | :--- |
-| **D1** | `auth.enabled` 默认关闭且服务监听 `:<port>`，管理 API 直接放行存在数据暴露与 SSRF 风险 | **P0 生效 Fail-Closed 模块鉴权 + 出站 Origin/CIDR 门禁**：未启用 `auth.enabled` 时默认拒绝全部 `/api/site-ops/*` 并暂停采集；本机开发仅允许通过配置显式开启只读回环逃生阀（`allowUnauthenticatedLocalOnly`，严格校验回环 IP，禁写操作）；`base_url` 须命中部署侧批准的 Origin/CIDR，Dial 阶段复验 IP，全局禁重定向，`/health` 禁带 Key。 | **P0-A** |
+| **D1** | `auth.enabled` 默认关闭，同时自有站常通过公网 HTTPS 接入，后期也可能同机/内网共部署 | **P0–P2 跟随全局鉴权 + 出站公网默认放行与内网黑名单门禁（P3 写动作强制开启鉴权）**：P0–P2 `/api/site-ops/*` 沿用现有全局 `AuthMiddleware`（未开 `auth.enabled` 也可正常查看、增删与轮询）；出站默认放行公网 `http`/`https` 域名与公网 IP，默认拦截全部私网/回环/`localhost`/保留/链路本地/云元数据地址（如 `169.254.169.254`、`100.100.100.200`、`fd00:ec2::254`），Dial 阶段复验实连 IP 防 DNS Rebinding，全局禁重定向，`/health` 禁带 Key；同机或内网共部署通过可选 `siteOps.allowLoopback`、`siteOps.allowedOrigins`、`siteOps.allowedCIDRs` 显式豁免（云元数据/链路本地/未指定地址永久硬拦截）。P3 所有写/有副作用动作仍强制 `auth.enabled == true`。 | **P0-A** |
 | **D2** | `/health`、`OPS_DISABLED`（404 或 `200 enabled:false`）、真 404、`401/403` 与 Redis 批读吞错返回 `0` 混为一谈 | **三态解耦（HTTP 可达性 / 可复探端点能力 / 域级样本可信度）**：先识别业务语义再触发版本回退，所有回退与能力均可复探；`403` 按端点降级，`401` 仅按同凭据代际累计；疑似 Redis 吞错的零值标为 `unverified_zero`，**严禁用于健康绿灯、归零告警或自动恢复**；告警恢复须由对应规则所依赖域的新鲜可信样本驱动。 | **P0-A / P0-B / P1-A** |
 | **D3** | 现有 `notify.Dispatcher.fanout` 对空/坏订阅默认放行，且 `Channels.Delete(id)` 会直接删除同数值 `channel_id` 的 `notification_cooldowns` 并按名 `LIKE` 误删 `NotificationLog` | **彻底隔离通知路由与状态存储**：为通知渠道增加显式 `site_ops` 订阅配置（**空或解析失败一律拒绝，默认零广播**）；在 `backend/notify` 增加专用直投方法复用加解密/发送器/重试但绕过旧 `fanout`；严禁复用 `notification_cooldowns`；用独立表 `site_ops_events` + `site_ops_alert_deliveries` 解耦状态跃迁、持久化冷却与按目的地投递重试。 | **P1-A** |
 | **D4** | P0 范围偏重（原稿含 6 表 + 动作骨架 + 会话/RPM + 经营字段），且“值班可观测 vs 叫醒人”边界不清 | **严格瘦身 P0**：P0 定位于**值班可观测与安全底座**，拆为 **P0-A（2 表：鉴权/出站门禁 + 多实例 + 探活 + 核心 Ops + 留存）** 与 **P0-B（+1 表：最小去重并发与分组容量矩阵）**；将完整「零广播通知 + 独立告警状态机」作为 **P1-A 首项任务**一次做扎实，杜绝 P0 临时补丁与死表；P3 才建动作表与写开关。 | **P0 → P3** |
@@ -54,7 +54,7 @@
 | 优先级 / 批次 | 模块编号 | 定位与核心交付 | 新增/变更数据表 | 依赖的 Sub2API 端点与权限范围 |
 | :--- | :--- | :--- | :--- | :--- |
 | **M0（前置门禁）**<br>契约核验 | **M0** | 对目标线上实例做只读契约核验：确认版本/镜像、逐端点最小 `adm_sc_` Scope、关闭/404 语义、脱敏样本 Fixture、单站调用预算、M4 被动只读矩阵、M5 `today-stats/batch` 授权顺序；同步更新 `AGENTS.md` 模块边界说明。*（线上接入与验收必须过 M0；基于固定版本确认的基础骨架可先用脱敏样本并行开发）* | 无 | 人工/脚本只读探测一次 |
-| **P0-A（必须先落地）**<br>安全底座 + 核心 SRE 可观测 | **M1, M2** | 1. 模块级鉴权守卫（默认 Fail-Closed）+ 出站 Origin/CIDR 白名单、Dial 校验、禁重定向；<br>2. 多实例 CRUD、AES-GCM 加密 Key、可复探 Capability Probe、单实例单 worker 生命周期（`generation` 校验）与白名单热重载；<br>3. L0 `/health` + L1 核心 Ops 总览（`ops/dashboard/snapshot-v2` 及确认路由缺失后的兼容回退）；<br>4. 字段级质量（`field_quality`）、审计调用预算、SQLite 短事务批写与 `scheduler` 分块留存清理；<br>5. 前端 `/site-ops` 顶栏多实例切换 + Tab 1 核心 Ops 与本地历史趋势。 | **+2 表**：<br>`site_ops_instances`<br>`site_ops_snapshots` | `GET /health`（无 Key）<br>`GET /ops/dashboard/snapshot-v2`（404 路由缺失回退 `/ops/dashboard/overview`）<br>`GET /system/version`（可选）<br>Scope：`ops.read`、`system.read` |
+| **P0-A（必须先落地）**<br>安全底座 + 核心 SRE 可观测 | **M1, M2** | 1. 鉴权跟随全局 `AuthMiddleware` + 出站公网默认放行与内网/云元数据黑名单、Dial IP 复检、禁重定向、可选同机/内网例外（`allowLoopback` / `allowedOrigins` / `allowedCIDRs`）；<br>2. 多实例 CRUD、AES-GCM 加密 Key、可复探 Capability Probe、单实例单 worker 生命周期（`generation` 校验）与白名单热重载；<br>3. L0 `/health` + L1 核心 Ops 总览（`ops/dashboard/snapshot-v2` 及确认路由缺失后的兼容回退）；<br>4. 字段级质量（`field_quality`）、审计调用预算、SQLite 短事务批写与 `scheduler` 分块留存清理；<br>5. 前端 `/site-ops` 顶栏多实例切换 + Tab 1 核心 Ops 与本地历史趋势。 | **+2 表**：<br>`site_ops_instances`<br>`site_ops_snapshots` | `GET /health`（无 Key）<br>`GET /ops/dashboard/snapshot-v2`（404 路由缺失回退 `/ops/dashboard/overview`）<br>`GET /system/version`（可选）<br>Scope：`ops.read`、`system.read` |
 | **P0-B（P0 第二批）**<br>最小去重并发与分组容量矩阵 | **M3** | 1. 按 `(instance_id, account_id)` 去重计算全站/平台真实并发与号池状态；<br>2. 服务端分组聚合容量矩阵（显式标「Ops 判定可用」「配置并发容量」）；<br>3. Redis 批读吞错伪零识别与 `unverified_zero` 警示（严禁伪零报绿）。<br>*（会话/RPM、异常号明细表、经营消耗后移，保持 P0 极简可验收）* | **+1 表**：<br>`site_ops_group_snapshots`（核心并发与 Ops 可用度列） | `GET /ops/concurrency`<br>`GET /ops/account-availability`<br>`GET /groups/all`<br>Scope：`ops.read`、`groups.read` |
 | **P1-A（首项高优）**<br>零广播告警闭环 + 运维日报 | **M6** | 1. 通知渠道显式 `site_ops` 订阅（默认零广播）+ `backend/notify` 专用直投通道（绕过旧 `fanout`，不碰 `notification_cooldowns`）；<br>2. 状态跃迁 + 持久化冷却占位 + 按目的地投递重试（支持部分失败与重启续发）；<br>3. P0/P1 核心告警与同域新鲜可信样本自动恢复；<br>4. 每日运维简报（仅消费 P0/P1 运维指标，24h 同窗聚合，默认纯聚合零 PII）；<br>5. 补齐异常/限流/过载账号状态面板与事件时间轴。 | **+2 表**：<br>`site_ops_events`<br>`site_ops_alert_deliveries` | 复用 P0 采集 + `GET /ops/alert-events`、`GET /ops/ingress-rejections/health`、`GET /ops/auth-cache-invalidation/health`、`GET /accounts`（基础目录）<br>Scope：`ops.alerts.read`、`accounts.read` |
 | **P1-B（核心差异化）**<br>被动号池周期预测 + 单号效率 | **M4, M5** | 1. **M4 被动预测引擎**：仅对 M0 证实为纯被动的 `平台 × 账号类型` 周期拉取窗口利用率，双速融合 + 回落新基线 + 严格边界校验，预测能否支撑到重置与分组断档风险；<br>2. **M5 单号成本效率**：三口径成本、当前容量归一化产出、同窗满额撬动价值与可选「账面扣费 / 参考月租」（`today-stats/batch` 须过授权缓存核验门禁）；<br>3. 补齐分组会话/RPM 容量条与前端 Tab 2。 | **+2 表 + 1 表扩列**：<br>`site_ops_account_window_samples`<br>`site_ops_account_costs`<br>扩展 `site_ops_group_snapshots`（sessions/rpm/risk） | `POST /accounts/usage/batch`（仅限被动矩阵，批 ≤80 + 速率限制）<br>`GET /groups/capacity-summary`<br>`POST /accounts/today-stats/batch`（过 M0/M5 授权门禁后）或单号统计<br>Scope：`accounts.usage.read`、`groups.capacity.read`、`accounts.stats.read` |
@@ -76,7 +76,7 @@ flowchart TB
     end
 
     subgraph SiteOpsBackend["upstream-ops 独立模块：backend/siteops/"]
-        AuthGate["Module Auth & SSRF/Origin Guard (P0-A)<br/>• auth.enabled 强门禁 (Fail-Closed)<br/>• Origin/CIDR 白名单 + Dial IP 复检 + 禁重定向"]
+        AuthGate["Global Auth & Outbound SSRF Guard (P0-A)<br/>• P0–P2 跟随全局 AuthMiddleware (P3 写动作强制鉴权)<br/>• 公网默认放行 + 内网/云元数据黑名单 + Dial IP 复检 + 禁重定向"]
         InstMgr["Instance Registry & Probe (P0-A)<br/>• 单实例单 Worker + generation 代际防串写<br/>• 可复探 Capability Matrix (按端点/操作)"]
         Client["Admin API Client (P0-A)<br/>• /health 不带 Key; x-api-key 绑定批准 Origin<br/>• 每站/全局审计预算 + 并发≤4 + 队列≤32<br/>• 独立有界 singleflight ctx + 双格式 429 退避"]
         Sanitizer["五面字段级隐私投影器 (P0-A)<br/>• 缓存/DB/日志/API/通知前强制白名单脱敏"]
@@ -103,27 +103,23 @@ flowchart TB
     Crypto -.加解密 Key.-> InstMgr
 ```
 
-### 2.2 模块级鉴权与出站 SSRF/Origin 门禁（P0-A 强制生效）
-鉴于 `upstream-ops` 默认 `auth.enabled == false`（`backend/config/config.go:625`）、`CurrentAuth() == nil` 直接放行（`backend/runtimeconfig/runtime.go:121`）且监听 `:<port>`（`cmd/server/main.go:224`），`siteops` **严禁沿用默认放行行为**：
-
-1. **模块级 Fail-Closed 鉴权守卫**：
-   - 全部 `/api/site-ops/*` 路由均挂载独立中间件 `requireSiteOpsAccess()`。
-   - 当运行时 `auth.enabled == false`（含通过配置文件热重载将 `auth.enabled` 切回 `false`）时：
-     - 拒绝所有 `/api/site-ops/*` 访问（返回 `403` 与清晰错误码 `SITE_OPS_AUTH_REQUIRED`）；
-     - 同步暂停 `siteops` 后台轮询，避免无鉴权运行态下持续出站或缓存敏感状态。
-   - **本机单机开发显式逃生阀（默认关闭，仅限只读）**：
-     - 仅当 `config.yaml` 显式配置 `siteOps.allowUnauthenticatedLocalOnly: true` 时生效；
-     - 每次请求校验真实 TCP `RemoteAddr` 严格为回环地址（`127.0.0.1` / `::1`，**忽略任何 `X-Forwarded-For` / `X-Real-IP` 头**）；
-     - 仅放行只读查询、实例读取与本地测试探测；**任何 P3 写/有副作用动作永久禁止走逃生阀，必须 `auth.enabled == true`**。
-2. **出站 Origin / CIDR 白名单与连接层防线**：
-   - `config.yaml` 配置 `siteOps.allowedOrigins`（如 `https://portal.example.com`）与/或 `siteOps.allowedCIDRs`（用于显式放行合法的自有内网/局域网 Sub2API，如 `10.0.0.0/8`、`192.168.1.0/24`）。未配置任何允许规则时，拒绝新增或出站请求。
-   - 校验策略分两层：
-     1. **配置保存与请求前校验**：规范化 `base_url`（仅允许 `http`/`https`，去尾 `/`、禁止 URL 内嵌 `userinfo`），匹配批准的 Origin 或主机/CIDR；
-     2. **Dial 阶段实连 IP 复检**：通过自定义 `net.Dialer.Control` / `DialContext` 在 DNS 解析后校验实际连接的 IP，阻止指向未批准私网/环回/链路本地/云元数据地址（如 `169.254.169.254`），防御 DNS Rebinding。
-   - **全局禁用 HTTP 重定向**：`http.Client.CheckRedirect` 一律返回错误，杜绝 301/302 将 `x-api-key` 转发至未批准目标。
+### 2.2 鉴权策略与出站内网黑名单门禁（P0-A 强制生效）
+1. **P0–P2 跟随全局鉴权，P3 写动作强制鉴权**：
+   - P0–P2（只读观测、实例管理、能力探测与轮询）统一挂载在 `/api/site-ops/*` 下，**沿用现有全局 `runtimeconfig.Manager.AuthMiddleware()`**，与既有上游监控、智力监测体验一致：开启 `auth.enabled: true` 时强制登录鉴权；未开启时开箱可用、后台轮询正常运行。
+   - **P3 控制面写操作硬门禁**：所有会产生远端写/副作用的 P3 操作仍强制要求 `auth.enabled == true`（由 `siteops.RequireAccessMiddleware` 守护，永久不开放免鉴权逃生阀）。
+2. **出站公网默认放行 + 内网/云元数据默认黑名单 + 可选同机/内网豁免**：
+   - **默认策略（零配置即可接入公网 Sub2API）**：
+     1. 放行合法公网 `http`/`https` 域名与公网 IP（规范化 `base_url`、去尾 `/`、禁止 URL 内嵌 `userinfo`/query/fragment）；
+     2. **默认拦截全部非公网地址**：回环（`127.0.0.0/8`、`::1`、`localhost` / `*.localhost`）、私网 RFC1918 / ULA（`10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`、`fc00::/7`）、CGNAT 及保留网段（`100.64.0.0/10`、`192.0.0.0/24`、`198.18.0.0/15`、`240.0.0.0/4` 等）、无点号单标签内部主机名（如 `sub2api`、`metadata`），以及云元数据与链路本地地址；
+     3. **永久硬拦截（任何配置均不可豁免）**：链路本地与云元数据（`169.254.0.0/16`、`100.100.100.200/32`、`fe80::/10`、`fd00:ec2::254/128`）、未指定地址（`0.0.0.0/8`、`::/128`）、广播与组播地址；
+     4. **Dial 阶段实连 IP 复检与代理 IP 固定**：通过自定义 `DialContext` 在 DNS 解析后校验实际连接的 IP（代理模式下解析后将核验通过的公网 IP 固定到 CONNECT / SOCKS5 目标），彻底防御 DNS Rebinding。
+   - **同机 / 内网共部署可选豁免（默认全部关闭/留空）**：
+     - `siteOps.allowLoopback: true`（可选环境变量 `SITEOPS_ALLOW_LOOPBACK=true`）：仅放行 `127.0.0.0/8`、`::1` 与 `localhost`（要求目标主机本身即为回环/localhost，禁止外部域名 DNS Rebinding 至 `127.0.0.1`），仍拦截私网与云元数据；
+     - `siteOps.allowedOrigins`（如 `["http://sub2api:8080"]`）与 `siteOps.allowedCIDRs`（如 `["172.18.0.0/16"]`）：定向豁免 Docker Compose / 局域网内部 Sub2API，仍永久硬拦截云元数据与链路本地地址。
+   - **全局禁用 HTTP 重定向**：`http.Client.CheckRedirect` 一律返回 `ErrRedirectBlocked`，杜绝 301/302 将 `x-api-key` 转发至未批准或内网目标。
    - **凭据发送范围硬绑定**：
      - `GET /health` 严禁附带 `x-api-key`；
-     - `x-api-key` 仅发送到该实例已绑定的唯一批准 Origin（`scheme + host + port`）。
+     - `x-api-key` 仅发送到该实例绑定的 `BaseURL` 目标。
 
 ### 2.3 三态解耦：HTTP 可达性 / 可复探能力矩阵 / 域级样本可信度
 严禁将“站活着”“接口支持”“数字为 0”混为单一布尔或整站状态：
@@ -156,7 +152,7 @@ flowchart TB
    - **实例变更归 DB CRUD 驱动**：每个 `instance_id` 在 `siteops.Poller` 中严格对应至多 1 个运行中 worker，并持有单调递增的 `instance_generation`（与 `cred_gen`）。
    - 编辑 URL/Key、停用或删除实例时：先原子递增 `generation` 并 `cancel` 旧 worker 的 `ctx`，等待或隔离旧飞行中请求；任何采集结果落库前，在事务内校验该 `instance_id` 仍存在、仍启用且 `generation` 匹配，杜绝换 Key/改地址/删实例后旧请求迟到写回。
 2. **`runtimeconfig.ApplyFromFile` 白名单热更新**：
-   - 配置文件热重载仅通知 `siteops.Service.ApplyRuntimeConfig(...)` 更新显式列出的全局参数：`auth.enabled`、`siteOps.allowUnauthenticatedLocalOnly`、`siteOps.allowedOrigins` / `allowedCIDRs`、全局代理配置、默认请求超时/UA、全局并发上限与审计调用预算。不重建整个 poller 树。
+   - 配置文件热重载仅通知 `siteops.Service.ApplyRuntimeConfig(...)` 更新显式列出的全局参数：`auth.enabled`、`siteOps.allowLoopback`、`siteOps.allowedOrigins` / `allowedCIDRs`、全局代理配置、默认请求超时/UA、全局并发上限与审计调用预算。不重建整个 poller 树。
    - 进程退出由 `cmd/server/main.go` 作为**唯一关闭责任方**调用 `defer siteOpsSvc.Stop()`。
 3. **留存清理三处完整挂接**：
    - `siteops` 数据留存必须同时接入 `backend/scheduler/scheduler.go` 的三处位置：`schedulerFactory`（确保每次热重载重建 scheduler 时注入 `siteops` 留存钩子）、`hasRetention()` 与 `runRetention()`。
@@ -361,7 +357,7 @@ flowchart TB
 ### 6.1 统一门禁与动作分级
 - **全量纳管原则**：P3 中**所有会产生上游请求或状态副作用的操作**（包括 `account.test`、`account.refresh_token`、`proxy.test`、`accounts/usage/batch` `force:true`，以及 L2 恢复动作和 L3 高危动作）**全部**必须通过以下门禁：
   1. `auth.enabled == true`（**严禁走本地免鉴权逃生阀**）；
-  2. 通过部署侧批准的 Origin/CIDR 与 Dial IP 校验；
+  2. 通过出站内网黑名单与 Dial IP 校验（公网默认放行，内网/回环须显式豁免，云元数据永久硬拦截）；
   3. 仅允许管理员手动点击触发，**绝不自动执行写操作**；
   4. 429 限流账号行隐藏“停止调度”快捷入口并提示 Sub2API 自动回池机制，防止误关 `schedulable`。
 - **动作三级划分**：
@@ -436,7 +432,7 @@ flowchart TB
 ## 8. 后端分期路由与前端 `/site-ops` 信息架构
 
 ### 8.1 后端目录规划（`backend/siteops/`）与分期 API 路由（统一挂载 `/api/site-ops/*`）
-全部路由前置 `requireSiteOpsAccess()` 鉴权中间件：
+P0–P2 统一沿用全局 `AuthMiddleware`；P3 高危写操作端点额外前置 `RequireAccessMiddleware` 强制鉴权中间件：
 
 | 分期 | 新增/扩展后端文件 | 新增 API 路由 |
 | :--- | :--- | :--- |
@@ -475,7 +471,7 @@ flowchart TB
 
 | 阶段 | 核心交付 | 必须通过的自动化单测与验收边界（DoD） |
 | :--- | :--- | :--- |
-| **Phase 1-A（P0-A）**<br>安全底座 + 核心 SRE | 1. 更新 `AGENTS.md` 明确 `siteops` 边界；<br>2. 实现模块级 Fail-Closed 鉴权、本机只读逃生阀、Origin/CIDR 与 Dial IP 校验、禁重定向、`/health` 不带 Key；<br>3. 建 `site_ops_instances`、`site_ops_snapshots` + `scheduler` 三处挂接分块留存；<br>4. 实现多实例单 worker（`generation` 校验）、白名单热重载、可复探 Capability Probe、审计调用预算、双格式 `Retry-After`、独立有界 `singleflight ctx`、`304` 保留 `observed_at`；<br>5. 交付前端 `/site-ops` 顶栏 + Tab 1 核心 Ops 与趋势。 | **单测必须覆盖**：<br>• `auth.enabled=false` 默认拒绝全量 `/api/site-ops/*` 并暂停轮询；伪造 `X-Forwarded-For` 绕过本地逃生阀被拒；未批准 Origin / DNS 解析到禁网 IP / 302 重定向均被拦截；<br>• `OPS_DISABLED`（404 与 `200 enabled:false`）不误触发回退；真 404 回退且可复探恢复；`403` 单端点降级；`401` 按同 `cred_gen` 累计且旧代际 401 被丢弃；<br>• **换 Key / 改 URL / 删实例后旧 worker 迟到响应不可写回 DB**；<br>• **SQLite `MaxOpenConns(1)` 下采集并发写与分块留存清理无锁死/超时**；<br>• `304` 更新 `verified_at` 且不覆盖 `observed_at`；<br>• Go 测试、前端 `tsc`/`lint`/`build` 全绿；值班可观测达标。 |
+| **Phase 1-A（P0-A）**<br>安全底座 + 核心 SRE | 1. 更新 `AGENTS.md` 明确 `siteops` 边界；<br>2. 实现 P0–P2 全局鉴权对齐 + 出站公网放行与内网/云元数据黑名单、可选同机/内网豁免（`allowLoopback`/`allowedOrigins`/`allowedCIDRs`）、Dial IP 校验、禁重定向、`/health` 不带 Key；<br>3. 建 `site_ops_instances`、`site_ops_snapshots` + `scheduler` 三处挂接分块留存；<br>4. 实现多实例单 worker（`generation` 校验）、白名单热重载、可复探 Capability Probe、审计调用预算、双格式 `Retry-After`、独立有界 `singleflight ctx`、`304` 保留 `observed_at`；<br>5. 交付前端 `/site-ops` 顶栏 + Tab 1 核心 Ops 与趋势。 | **单测必须覆盖**：<br>• `auth.enabled=false` 下 P0–P2 接口与轮询开箱可用；公网域名与公网 IP 无需白名单即可放行；默认拦截 `localhost`/回环/私网/保留/云元数据 IP 及 DNS Rebinding；`allowLoopback` 仅放行本机回环且禁外部域名 Rebinding；`allowedOrigins`/`allowedCIDRs` 豁免内网时仍永久硬拦截云元数据与链路本地 IP；302 重定向被拦截；<br>• `OPS_DISABLED`（404 与 `200 enabled:false`）不误触发回退；真 404 回退且可复探恢复；`403` 单端点降级；`401` 按同 `cred_gen` 累计且旧代际 401 被丢弃；<br>• **换 Key / 改 URL / 删实例后旧 worker 迟到响应不可写回 DB**；<br>• **SQLite `MaxOpenConns(1)` 下采集并发写与分块留存清理无锁死/超时**；<br>• `304` 更新 `verified_at` 且不覆盖 `observed_at`；<br>• Go 测试、前端 `tsc`/`lint`/`build` 全绿；值班可观测达标。 |
 | **Phase 1-B（P0-B）**<br>最小去重与分组矩阵 | 1. 建 `site_ops_group_snapshots`（5m 归档）；<br>2. 实现 `(instance_id, account_id)` 去重并发/可用度聚合与服务端分组矩阵；<br>3. 实现 Redis 吞错伪零检测与 `unverified_zero` 标注；<br>4. Tab 1 接入最小分组容量矩阵与口径提示。 | **单测必须覆盖**：<br>• 跨多分组共享账号去重正确，全站并发不重复累加；<br>• **实时接口空样本 / `redis_ok=false` / 活跃流量下突发全站跌零被标为 `unverified_zero`**，不渲染绿灯；<br>• 缺失权限或禁用态不显示 `0`。 |
 | **Phase 2-A（P1-A）**<br>零广播告警 + 运维日报 | 1. 通知渠道新增显式 `site_ops` 订阅 + `backend/notify` 专用直投；<br>2. 建 `site_ops_events`、`site_ops_alert_deliveries`；<br>3. 实现 P0/P1 告警状态机与同域新鲜可信恢复；<br>4. 实现 P1 运维日报（24h 同窗聚合 SLA、24h P95、零 PII）；<br>5. 前端异常号状态面板与事件/投递时间轴。 | **单测必须覆盖**：<br>• **空订阅、老渠道、坏 JSON 订阅一律拒绝站点事件（零广播）**；<br>• 删除同数值 ID 上游渠道不影响 `site_ops_alert_deliveries` 冷却记录；<br>• 多渠道部分失败 + 重启后仅补发失败目的地，不重发已成功渠道；<br>• `unverified_zero` / `stale` 样本既不触发归零告警也不触发自动恢复；非相关域缺权不阻断核心域恢复；纯 429 不误报单号错误；<br>• 日报 24h SLA 非 1h 平均，缺失 24h P95 明确标缺失。 |
 | **Phase 2-B（P1-B）**<br>被动预测 + 单号效率 | 1. 建 `site_ops_account_window_samples`、`site_ops_account_costs`，扩 `site_ops_group_snapshots`；<br>2. 实现仅限被动矩阵准入的 `forecast.go`（回落新基线、递增校验、零速率 `null`、最早阻塞窗）；<br>3. 过授权缓存门禁后实现 `efficiency.go`；<br>4. 前端 Tab 2 完整上线。 | **单测必须覆盖**：<br>• 非被动矩阵平台不进入后台批次；单批 ≤80 且速率受限；<br>• **M4 边界表驱动**：窗口刚重置样本不足、缓存重放不递增跳过、过期重置点/异常剩余时长丢弃、**利用率回落开启新基线**、零速率序列化 `eta_seconds: null`、`100–105%` 标 `will_exhaust` vs `≥105%` 标 `will_exhaust_high`、多窗取最早阻塞；<br>• M5 零并发/零月租返回 `null`；若 `today-stats/batch` 未过缓存授权核验，默认禁用并降级。 |
@@ -486,7 +482,7 @@ flowchart TB
 
 ## 10. 已知风险与防御速查表
 
-1. **默认无鉴权暴露与 SSRF**：P0-A 模块级 Fail-Closed 鉴权 + 部署侧 Origin/CIDR 白名单 + Dial 阶段 IP 复检 + 全局禁重定向 + `/health` 不带 Key。
+1. **出站 SSRF 与内网/云元数据风险**：P0-A 默认放行公网地址 + 默认拦截全部内网/回环/保留/云元数据地址（云元数据与链路本地永久硬拦截）+ Dial 阶段 IP 复检与代理 IP 固定 + 全局禁重定向 + `/health` 不带 Key；同机或内网共部署通过 `allowLoopback` / `allowedOrigins` / `allowedCIDRs` 显式豁免；P3 写动作强制 `auth.enabled == true`。
 2. **Redis 批读吞错伪零**：`unverified_zero` 显式标记，绝不报绿、绝不误报归零告警、绝不驱动自动恢复。
 3. **旧通知渠道误广播与删渠道串扰**：默认零广播显式订阅 + 专用直投绕过旧 `fanout` + 独立 `site_ops_events` / `site_ops_alert_deliveries` 表（绝不复用 `notification_cooldowns`）。
 4. **`force:false` 隐藏上游副作用**：M4 强制走 M0 证实的被动只读白名单矩阵；未证实平台禁止后台自动拉取。

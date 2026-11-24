@@ -21,7 +21,7 @@ func NewDefaultService(
 ) (*Service, *storage.SiteOpsStore) {
 	cfg := copySiteOpsConfig(siteCfg)
 	rawStore := storage.NewSiteOpsStore(db)
-	guard := NewOutboundGuard(cfg.AllowedOrigins, cfg.AllowedCIDRs)
+	guard := NewOutboundGuard(cfg.AllowLoopback, cfg.AllowedOrigins, cfg.AllowedCIDRs)
 	client := NewClient(cfg, proxyCfg, upstreamCfg, guard, log)
 	prober := NewProber(client)
 	svc := NewService(ServiceDeps{

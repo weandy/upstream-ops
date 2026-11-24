@@ -23,10 +23,12 @@ func IsLoopbackRemoteAddr(remoteAddr string) bool {
 	return err == nil && (host == "127.0.0.1" || host == "::1")
 }
 
-func IsPollingAllowed(authActive bool, _ config.SiteOpsConfig) bool {
-	return authActive
+// IsPollingAllowed P0–P2 阶段不要求强开 auth.enabled，跟随站点实例自身的 enabled 状态运行。
+func IsPollingAllowed(_ bool, _ config.SiteOpsConfig) bool {
+	return true
 }
 
+// RequireAccessMiddleware 保留供 P3 高危写操作端点复用（要求 auth.enabled=true）。
 func RequireAccessMiddleware(authActive func() bool, cfgProvider func() config.SiteOpsConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if (authActive != nil && authActive()) || (cfgProvider != nil && cfgProvider().AllowUnauthenticatedLocalOnly &&
@@ -46,8 +48,9 @@ type origin struct {
 }
 
 type outboundPolicy struct {
-	origins map[origin]struct{}
-	cidrs   []netip.Prefix
+	allowLoopback bool
+	origins       map[origin]struct{}
+	cidrs         []netip.Prefix
 }
 
 type OutboundGuard struct {
@@ -59,10 +62,15 @@ type OutboundGuard struct {
 
 var _ OutboundValidator = (*OutboundGuard)(nil)
 
-func NewOutboundGuard(allowedOrigins, allowedCIDRs []string) *OutboundGuard {
+func NewOutboundGuard(allowLoopback bool, allowedOrigins, allowedCIDRs []string) *OutboundGuard {
 	g := &OutboundGuard{lookupIP: net.DefaultResolver.LookupNetIP}
-	g.UpdatePolicy(allowedOrigins, allowedCIDRs)
+	g.UpdatePolicy(allowLoopback, allowedOrigins, allowedCIDRs)
 	return g
+}
+
+func isLocalhostName(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	return host == "localhost" || strings.HasSuffix(host, ".localhost")
 }
 
 func parseBaseURL(raw string) (*url.URL, origin, error) {
@@ -99,8 +107,11 @@ func parseBaseURL(raw string) (*url.URL, origin, error) {
 	return u, origin{u.Scheme, host, port}, nil
 }
 
-func (g *OutboundGuard) UpdatePolicy(allowedOrigins, allowedCIDRs []string) {
-	policy := outboundPolicy{origins: make(map[origin]struct{}, len(allowedOrigins))}
+func (g *OutboundGuard) UpdatePolicy(allowLoopback bool, allowedOrigins, allowedCIDRs []string) {
+	policy := outboundPolicy{
+		allowLoopback: allowLoopback,
+		origins:       make(map[origin]struct{}, len(allowedOrigins)),
+	}
 	for _, raw := range allowedOrigins {
 		if _, key, err := parseBaseURL(raw); err == nil {
 			policy.origins[key] = struct{}{}
@@ -125,7 +136,7 @@ func (g *OutboundGuard) currentPolicy() outboundPolicy {
 	return g.policy
 }
 
-func (p outboundPolicy) allowsIP(ip netip.Addr) bool {
+func (p outboundPolicy) allowsCIDR(ip netip.Addr) bool {
 	for _, prefix := range p.cidrs {
 		if prefix.Contains(ip) {
 			return true
@@ -134,22 +145,18 @@ func (p outboundPolicy) allowsIP(ip netip.Addr) bool {
 	return false
 }
 
-func (g *OutboundGuard) ValidateBaseURL(rawURL string) (string, error) {
-	u, key, err := parseBaseURL(rawURL)
-	if err != nil {
-		return "", err
-	}
-	p := g.currentPolicy()
-	_, allowedOrigin := p.origins[key]
-	ip, _ := netip.ParseAddr(key.host)
-	if !allowedOrigin && !p.allowsIP(ip) {
-		return "", ErrOriginNotAllowed
-	}
-	return strings.TrimRight(u.String(), "/"), nil
+// hardBlockedRanges 永久硬拦截地址段：云元数据、链路本地、未指定与受限广播，任何配置均不可豁免。
+var hardBlockedRanges = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("100.100.100.200/32"),
+	netip.MustParsePrefix("255.255.255.255/32"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("fd00:ec2::254/128"),
 }
 
+// restrictedDialRanges 默认拦截的非公网/保留地址段（可通过显式 allowedOrigins / allowedCIDRs 定向豁免）。
 var restrictedDialRanges = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("198.18.0.0/15"),
@@ -162,8 +169,23 @@ var restrictedDialRanges = []netip.Prefix{
 	netip.MustParsePrefix("fec0::/10"),
 }
 
+func hardBlockedIP(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if !ip.IsValid() || ip.IsUnspecified() || ip.IsMulticast() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() {
+		return true
+	}
+	for _, prefix := range hardBlockedRanges {
+		if prefix.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func publicDialIP(ip netip.Addr) bool {
-	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+	ip = ip.Unmap()
+	if hardBlockedIP(ip) || !ip.IsGlobalUnicast() || ip.IsPrivate() {
 		return false
 	}
 	for _, prefix := range restrictedDialRanges {
@@ -174,6 +196,47 @@ func publicDialIP(ip netip.Addr) bool {
 	return true
 }
 
+func (p outboundPolicy) allowsDialIP(ip netip.Addr, isLoopbackHost, originAllowed bool) bool {
+	ip = ip.Unmap()
+	if hardBlockedIP(ip) {
+		return false
+	}
+	if publicDialIP(ip) {
+		return true
+	}
+	if ip.IsLoopback() && p.allowLoopback && isLoopbackHost {
+		return true
+	}
+	return originAllowed || p.allowsCIDR(ip)
+}
+
+func (g *OutboundGuard) ValidateBaseURL(rawURL string) (string, error) {
+	u, key, err := parseBaseURL(rawURL)
+	if err != nil {
+		return "", err
+	}
+	p := g.currentPolicy()
+	_, originAllowed := p.origins[key]
+	if ip, ipErr := netip.ParseAddr(key.host); ipErr == nil {
+		ip = ip.Unmap()
+		if !p.allowsDialIP(ip, ip.IsLoopback(), originAllowed) {
+			return "", ErrOriginNotAllowed
+		}
+		return strings.TrimRight(u.String(), "/"), nil
+	}
+	if isLocalhostName(key.host) {
+		if !p.allowLoopback && !originAllowed {
+			return "", ErrOriginNotAllowed
+		}
+		return strings.TrimRight(u.String(), "/"), nil
+	}
+	// 无点号的单标签内部主机名（如 sub2api、metadata）默认视为内网名，需显式配置 allowedOrigins 或 allowedCIDRs。
+	if !strings.Contains(strings.TrimSuffix(key.host, "."), ".") && !originAllowed && len(p.cidrs) == 0 {
+		return "", ErrOriginNotAllowed
+	}
+	return strings.TrimRight(u.String(), "/"), nil
+}
+
 func (g *OutboundGuard) resolveTarget(ctx context.Context, network, addr string) ([]string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -181,18 +244,28 @@ func (g *OutboundGuard) resolveTarget(ctx context.Context, network, addr string)
 	}
 	host = strings.ToLower(host)
 	ip, literalErr := netip.ParseAddr(host)
+	isLoopbackHost := false
 	if literalErr == nil {
 		if ip.Zone() != "" {
 			return nil, ErrOriginNotAllowed
 		}
-		host = ip.Unmap().String()
+		ip = ip.Unmap()
+		host = ip.String()
+		isLoopbackHost = ip.IsLoopback()
+	} else {
+		isLoopbackHost = isLocalhostName(host)
 	}
 	p := g.currentPolicy()
 	_, httpAllowed := p.origins[origin{"http", host, port}]
 	_, httpsAllowed := p.origins[origin{"https", host, port}]
 	originAllowed := httpAllowed || httpsAllowed
-	if literalErr != nil && !originAllowed {
-		return nil, ErrOriginNotAllowed
+	if literalErr != nil {
+		if isLoopbackHost && !p.allowLoopback && !originAllowed {
+			return nil, ErrOriginNotAllowed
+		}
+		if !isLoopbackHost && !strings.Contains(strings.TrimSuffix(host, "."), ".") && !originAllowed && len(p.cidrs) == 0 {
+			return nil, ErrOriginNotAllowed
+		}
 	}
 	resolved := []netip.Addr{ip}
 	if literalErr != nil {
@@ -207,7 +280,7 @@ func (g *OutboundGuard) resolveTarget(ctx context.Context, network, addr string)
 		if (network == "tcp4" && !candidate.Is4()) || (network == "tcp6" && !candidate.Is6()) {
 			continue
 		}
-		if p.allowsIP(candidate) || (originAllowed && (literalErr == nil || publicDialIP(candidate))) {
+		if p.allowsDialIP(candidate, isLoopbackHost, originAllowed) {
 			targets = append(targets, net.JoinHostPort(candidate.String(), port))
 		}
 	}
