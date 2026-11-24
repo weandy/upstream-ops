@@ -124,6 +124,27 @@ func registerIntelligence(g *gin.RouterGroup, d *Deps) {
 		c.JSON(http.StatusOK, gin.H{"data": gin.H{"deleted": true}})
 	})
 
+	toggleTarget := func(c *gin.Context, enabled bool) {
+		id, ok := parseRequiredUintParam(c, "id")
+		if !ok {
+			return
+		}
+		target, err := d.Intelligence.SetTargetEnabled(id, enabled)
+		if err != nil {
+			failLookupOrBadRequest(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"data": target})
+	}
+
+	ig.POST("/targets/:id/enable", func(c *gin.Context) {
+		toggleTarget(c, true)
+	})
+
+	ig.POST("/targets/:id/disable", func(c *gin.Context) {
+		toggleTarget(c, false)
+	})
+
 	ig.POST("/targets/:id/ensure-key", func(c *gin.Context) {
 		id, ok := parseRequiredUintParam(c, "id")
 		if !ok {

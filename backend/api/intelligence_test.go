@@ -110,6 +110,25 @@ func TestIntelligenceTargetsHTTPAPI(t *testing.T) {
 		t.Fatalf("GET overview status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
+	// 4.5 停用与重新启用目标
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/intelligence/targets/1/disable", nil))
+	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"enabled":false`)) {
+		t.Fatalf("POST disable status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/intelligence/targets/1/enable", nil))
+	if rec.Code != http.StatusOK || !bytes.Contains(rec.Body.Bytes(), []byte(`"enabled":true`)) {
+		t.Fatalf("POST enable status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/intelligence/targets/999/disable", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("POST disable missing target expected 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
 	// 5. 删除目标
 	rec = httptest.NewRecorder()
 	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/intelligence/targets/1", nil))

@@ -227,7 +227,7 @@ func (s *Service) CreateTarget(in TargetInput) (*storage.ProbeTarget, error) {
 	return target, nil
 }
 
-// UpdateTarget 更新监测目标。APIKey 留空时保留原有加密密钥；更新后自动清零该目标下插件退避状态。
+// UpdateTarget 更新监测目标。APIKey 留空时保留原有加密密钥；启用状态下更新后自动清零该目标下插件退避状态。
 func (s *Service) UpdateTarget(id uint, in TargetInput) (*storage.ProbeTarget, error) {
 	existing, err := s.Targets.FindByID(id)
 	if err != nil {
@@ -240,9 +240,30 @@ func (s *Service) UpdateTarget(id uint, in TargetInput) (*storage.ProbeTarget, e
 	if err := s.Targets.Update(updated); err != nil {
 		return nil, err
 	}
-	_ = s.Configs.ResetTargetBackoff(updated.ID, time.Now().UTC())
+	if updated.Enabled {
+		_ = s.Configs.ResetTargetBackoff(updated.ID, time.Now().UTC())
+	}
 	s.notifyPublicDataChanged()
 	return updated, nil
+}
+
+// SetTargetEnabled 单独切换监测目标启用状态（保留密钥、插件配置与历史采样）。
+// 停用时不改动插件退避与计划时间；重新启用时清零退避，安排已启用插件尽快恢复调度。
+func (s *Service) SetTargetEnabled(id uint, enabled bool) (*storage.ProbeTarget, error) {
+	existing, err := s.Targets.FindByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if existing.Enabled != enabled {
+		if err := s.Targets.SetEnabled(id, enabled); err != nil {
+			return nil, err
+		}
+		if enabled {
+			_ = s.Configs.ResetTargetBackoff(id, time.Now().UTC())
+		}
+		s.notifyPublicDataChanged()
+	}
+	return s.Targets.FindByID(id)
 }
 
 func (s *Service) DeleteTarget(id uint) error {

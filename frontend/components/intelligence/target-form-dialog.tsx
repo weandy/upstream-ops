@@ -626,8 +626,8 @@ export function TargetFormDialog({
           <div className="grid gap-2.5 sm:grid-cols-3">
             <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
               <div>
-                <p className="text-xs font-medium">启用目标</p>
-                <p className="text-[11px] text-muted-foreground">关闭暂停调度</p>
+                <p className="text-xs font-medium">启用</p>
+                <p className="text-[11px] text-muted-foreground">停用暂停调度与公开</p>
               </div>
               <Switch
                 checked={form.enabled}

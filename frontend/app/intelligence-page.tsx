@@ -22,6 +22,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { apiFetch } from "@/lib/api"
 import { formatDurationMS, relativeTime } from "@/lib/format"
@@ -60,6 +61,7 @@ export default function IntelligencePage() {
 
   const [search, setSearch] = useState("")
   const [familyFilter, setFamilyFilter] = useState<ProbeFamily | "all">("all")
+  const [statusFilter, setStatusFilter] = useState<"all" | "enabled" | "disabled">("all")
   const [onlyAlert, setOnlyAlert] = useState(false)
   const [viewMode, setViewMode] = useState<"list" | "compare">("list")
 
@@ -73,6 +75,9 @@ export default function IntelligencePage() {
     tab: string
   }>({ target: null, tab: "liveness" })
   const [runningTargetIDs, setRunningTargetIDs] = useState<Set<number>>(
+    () => new Set(),
+  )
+  const [togglingTargetIDs, setTogglingTargetIDs] = useState<Set<number>>(
     () => new Set(),
   )
   const [nowMs, setNowMs] = useState<number>(() => Date.now())
@@ -114,13 +119,18 @@ export default function IntelligencePage() {
 
   const kpi = useMemo(() => {
     let enabledCount = 0
+    let disabledCount = 0
     let embedCount = 0
     let totalSamples = 0
     let totalSuccess = 0
     let alertTargets = 0
 
     for (const t of targets) {
-      if (t.enabled) enabledCount++
+      if (!t.enabled) {
+        disabledCount++
+        continue
+      }
+      enabledCount++
       if (t.embed_visible) embedCount++
       const ov = overviews[t.id]
       if (!ov) continue
@@ -138,6 +148,7 @@ export default function IntelligencePage() {
     return {
       total: targets.length,
       enabledCount,
+      disabledCount,
       embedCount,
       avgRate,
       alertTargets,
@@ -148,12 +159,15 @@ export default function IntelligencePage() {
     const q = search.trim().toLowerCase()
     return targets.filter((t) => {
       if (familyFilter !== "all" && t.family !== familyFilter) return false
+      if (statusFilter === "enabled" && !t.enabled) return false
+      if (statusFilter === "disabled" && t.enabled) return false
       if (q) {
         const chName = channelNameMap.get(t.channel_id) ?? ""
         const hay = `${t.name} ${t.slug} ${t.base_url} ${chName} ${t.source_group_name ?? ""}`.toLowerCase()
         if (!hay.includes(q)) return false
       }
       if (onlyAlert) {
+        if (!t.enabled) return false
         const ov = overviews[t.id]
         if (!ov) return false
         const hasIssue =
@@ -166,7 +180,35 @@ export default function IntelligencePage() {
       }
       return true
     })
-  }, [targets, familyFilter, search, onlyAlert, overviews, channelNameMap])
+  }, [targets, familyFilter, statusFilter, search, onlyAlert, overviews, channelNameMap])
+
+  async function handleToggleEnabled(target: ProbeTarget, nextEnabled: boolean) {
+    setTogglingTargetIDs((prev) => {
+      const next = new Set(prev)
+      next.add(target.id)
+      return next
+    })
+    try {
+      await apiFetch<ProbeTarget>(
+        `/intelligence/targets/${target.id}/${nextEnabled ? "enable" : "disable"}`,
+        { method: "POST" },
+      )
+      toast.success(
+        nextEnabled
+          ? `已启用 ${target.name}`
+          : `已停用 ${target.name}（已暂停自动调度与公开展示）`,
+      )
+      overviewsQuery.refetch()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "切换状态失败")
+    } finally {
+      setTogglingTargetIDs((prev) => {
+        const next = new Set(prev)
+        next.delete(target.id)
+        return next
+      })
+    }
+  }
 
   async function handleRunAllEnabled(target: ProbeTarget) {
     setRunningTargetIDs((prev) => {
@@ -356,6 +398,31 @@ export default function IntelligencePage() {
               </Button>
             ),
           )}
+          <span className="mx-0.5 hidden h-4 w-px bg-border sm:inline-block" aria-hidden="true" />
+          {(
+            [
+              { value: "all", label: "全部状态" },
+              { value: "enabled", label: "已启用" },
+              {
+                value: "disabled",
+                label:
+                  kpi.disabledCount > 0
+                    ? `已停用 (${kpi.disabledCount})`
+                    : "已停用",
+              },
+            ] as const
+          ).map((item) => (
+            <Button
+              key={item.value}
+              type="button"
+              size="sm"
+              variant={statusFilter === item.value ? "secondary" : "outline"}
+              className="h-7 px-2.5 text-xs"
+              onClick={() => setStatusFilter(item.value)}
+            >
+              {item.label}
+            </Button>
+          ))}
           <Button
             type="button"
             size="sm"
@@ -455,7 +522,7 @@ export default function IntelligencePage() {
                         </span>
                         {!target.enabled ? (
                           <Badge variant="secondary" className="text-[10px]">
-                            已暂停
+                            已停用
                           </Badge>
                         ) : null}
                         {target.embed_visible ? (
@@ -549,11 +616,39 @@ export default function IntelligencePage() {
 
                     {/* 右侧：操作按钮 */}
                     <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                      <Switch
+                        checked={target.enabled}
+                        disabled={togglingTargetIDs.has(target.id)}
+                        checkedChildren="启用"
+                        unCheckedChildren="停用"
+                        aria-label={
+                          target.enabled
+                            ? `停用 ${target.name}`
+                            : `启用 ${target.name}`
+                        }
+                        title={
+                          target.enabled
+                            ? "已启用自动调度与公开展示，点击停用"
+                            : "已停用自动调度与公开展示，点击启用"
+                        }
+                        onCheckedChange={(checked) =>
+                          handleToggleEnabled(target, checked)
+                        }
+                      />
+                      <span
+                        className="mx-0.5 hidden h-4 w-px bg-border sm:inline-block"
+                        aria-hidden="true"
+                      />
                       <Button
                         size="sm"
                         variant="outline"
                         className="h-8 gap-1 text-xs"
                         disabled={runningTargetIDs.has(target.id)}
+                        title={
+                          !target.enabled
+                            ? "目标已停用自动调度，仍可手动单次探测"
+                            : undefined
+                        }
                         onClick={() => handleRunAllEnabled(target)}
                       >
                         {runningTargetIDs.has(target.id) ? (
@@ -720,7 +815,11 @@ export default function IntelligencePage() {
                       </span>
                     ) : null}
 
-                    {activeBackoffs.length > 0 ? (
+                    {!target.enabled ? (
+                      <span className="ml-auto text-[11px] text-muted-foreground">
+                        已停用 · 暂停自动调度与公开展示
+                      </span>
+                    ) : activeBackoffs.length > 0 ? (
                       <div className="ml-auto flex flex-wrap items-center gap-1.5">
                         {activeBackoffs.map((item) => (
                           <Badge

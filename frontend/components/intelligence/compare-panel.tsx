@@ -273,6 +273,11 @@ export function ComparePanel({ targets }: { targets: ProbeTarget[] }) {
                     }}
                   />
                   <span>{t.name}</span>
+                  {!t.enabled ? (
+                    <span className="text-[10px] text-muted-foreground">
+                      (已停用)
+                    </span>
+                  ) : null}
                 </button>
               )
             })}

@@ -18,6 +18,13 @@ func NewProbeTargets(db *gorm.DB) *ProbeTargets { return &ProbeTargets{db: db} }
 func (r *ProbeTargets) Create(t *ProbeTarget) error { return r.db.Create(t).Error }
 func (r *ProbeTargets) Update(t *ProbeTarget) error { return r.db.Save(t).Error }
 
+func (r *ProbeTargets) SetEnabled(id uint, enabled bool) error {
+	return r.db.Model(&ProbeTarget{}).Where("id = ?", id).Updates(map[string]any{
+		"enabled":    enabled,
+		"updated_at": time.Now(),
+	}).Error
+}
+
 func (r *ProbeTargets) FindByID(id uint) (*ProbeTarget, error) {
 	var t ProbeTarget
 	if err := r.db.First(&t, id).Error; err != nil {

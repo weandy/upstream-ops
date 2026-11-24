@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { KeyRound, Loader2, RefreshCw, Save, Sparkles } from "lucide-react"
 import {
@@ -189,6 +189,9 @@ function serializeParams(
   return Object.keys(out).length > 0 ? JSON.stringify(out) : ""
 }
 
+// 记录正在托管渠道 Key 的目标 ID，保证关闭并重开抽屉时仍与拉取模型保持互斥。
+const ensuringKeyTargetIDs = new Set<number>()
+
 export function DetectorsDrawer({
   open,
   onOpenChange,
@@ -196,21 +199,41 @@ export function DetectorsDrawer({
   detectors,
   onSaved,
 }: DetectorsDrawerProps) {
+  const targetID = target?.id ?? null
   const [rows, setRows] = useState<Record<string, EditableDetector>>({})
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [models, setModels] = useState<string[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [ensuringKey, setEnsuringKey] = useState(false)
+  const [openSelectKey, setOpenSelectKey] = useState<string | null>(null)
+
+  const sessionRef = useRef(0)
+  const currentTargetIDRef = useRef<number | null>(null)
+  const modelsReqSeqRef = useRef(0)
+  const inFlightModelsRef = useRef<Promise<string[]> | null>(null)
 
   useEffect(() => {
-    if (!open || !target) return
+    const session = ++sessionRef.current
+    currentTargetIDRef.current = open ? targetID : null
+    modelsReqSeqRef.current += 1
+    inFlightModelsRef.current = null
+    setLoadingModels(false)
+    setOpenSelectKey(null)
+    setModels([])
+
+    if (!open || !targetID) {
+      setEnsuringKey(false)
+      return
+    }
+
     let cancelled = false
     setLoading(true)
-    setModels([])
-    apiFetch<ProbeDetectorConfig[]>(`/intelligence/targets/${target.id}/detectors`)
+    setEnsuringKey(ensuringKeyTargetIDs.has(targetID))
+
+    apiFetch<ProbeDetectorConfig[]>(`/intelligence/targets/${targetID}/detectors`)
       .then((savedList) => {
-        if (cancelled) return
+        if (cancelled || sessionRef.current !== session) return
         const byKey = new Map<string, ProbeDetectorConfig>()
         for (const item of savedList ?? []) {
           byKey.set(item.detector_key, item)
@@ -242,17 +265,17 @@ export function DetectorsDrawer({
         setRows(next)
       })
       .catch((err) => {
-        if (!cancelled) {
+        if (!cancelled && sessionRef.current === session) {
           toast.error(err instanceof Error ? err.message : "加载插件配置失败")
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && sessionRef.current === session) setLoading(false)
       })
     return () => {
       cancelled = true
     }
-  }, [open, target, detectors])
+  }, [open, targetID, detectors])
 
   function updateRow(key: string, patch: Partial<EditableDetector>) {
     setRows((prev) => {
@@ -280,6 +303,7 @@ export function DetectorsDrawer({
   }
 
   function applyModelToAll(modelName: string) {
+    if (!modelName) return
     setRows((prev) => {
       const next: Record<string, EditableDetector> = {}
       for (const [k, v] of Object.entries(prev)) {
@@ -290,40 +314,87 @@ export function DetectorsDrawer({
     toast.success(`已将全部插件模型设为 ${modelName}`)
   }
 
-  async function handleFetchModels() {
-    if (!target) return
+  async function handleFetchModels(triggerDetectorKey?: string) {
+    if (!targetID || ensuringKeyTargetIDs.has(targetID)) return
+    if (inFlightModelsRef.current) return
+
+    const session = sessionRef.current
+    const reqSeq = ++modelsReqSeqRef.current
+    const hadExisting = models.length > 0
     setLoadingModels(true)
+
+    const req = apiFetch<string[]>(`/intelligence/targets/${targetID}/models`)
+    inFlightModelsRef.current = req
+
     try {
-      const list = await apiFetch<string[]>(
-        `/intelligence/targets/${target.id}/models`,
-      )
-      setModels(Array.isArray(list) ? list : [])
+      const raw = await req
+      if (sessionRef.current !== session || modelsReqSeqRef.current !== reqSeq) {
+        return
+      }
+      const list = Array.isArray(raw) ? raw : []
+      setModels(list)
       if (list.length === 0) {
+        setOpenSelectKey(null)
         toast.warning("上游返回空模型列表")
       } else {
         toast.success(`成功拉取 ${list.length} 个可用模型`)
+        if (triggerDetectorKey) {
+          setOpenSelectKey(triggerDetectorKey)
+        }
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "拉取模型失败")
+      if (sessionRef.current !== session || modelsReqSeqRef.current !== reqSeq) {
+        return
+      }
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : hadExisting
+            ? "刷新模型失败，已保留上次列表"
+            : "拉取模型失败",
+      )
     } finally {
-      setLoadingModels(false)
+      if (inFlightModelsRef.current === req) {
+        inFlightModelsRef.current = null
+      }
+      if (sessionRef.current === session && modelsReqSeqRef.current === reqSeq) {
+        setLoadingModels(false)
+      }
     }
   }
 
   async function handleEnsureKey() {
-    if (!target) return
+    if (!targetID || ensuringKeyTargetIDs.has(targetID) || inFlightModelsRef.current) {
+      return
+    }
+    const tid = targetID
+    ensuringKeyTargetIDs.add(tid)
     setEnsuringKey(true)
     try {
       const updated = await apiFetch<ProbeTarget>(
-        `/intelligence/targets/${target.id}/ensure-key`,
+        `/intelligence/targets/${tid}/ensure-key`,
         { method: "POST" },
       )
-      toast.success(`已托管 Key：${updated.api_key_hint || updated.api_key_name}`)
+      if (currentTargetIDRef.current === tid) {
+        modelsReqSeqRef.current += 1
+        inFlightModelsRef.current = null
+        setLoadingModels(false)
+        setModels([])
+        setOpenSelectKey(null)
+        toast.success(
+          `已托管 Key：${updated.api_key_hint || updated.api_key_name}，可重新拉取模型列表`,
+        )
+      } else {
+        toast.success(`已托管 Key：${updated.api_key_hint || updated.api_key_name}`)
+      }
       onSaved()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "托管 Key 失败")
     } finally {
-      setEnsuringKey(false)
+      ensuringKeyTargetIDs.delete(tid)
+      if (currentTargetIDRef.current === tid) {
+        setEnsuringKey(false)
+      }
     }
   }
 
@@ -401,8 +472,8 @@ export function DetectorsDrawer({
               type="button"
               size="sm"
               variant="outline"
-              onClick={handleFetchModels}
-              disabled={loadingModels || !target}
+              onClick={() => handleFetchModels()}
+              disabled={loadingModels || ensuringKey || !target}
               className="h-8 gap-1.5 text-xs"
             >
               {loadingModels ? (
@@ -410,7 +481,9 @@ export function DetectorsDrawer({
               ) : (
                 <RefreshCw className="size-3.5" />
               )}
-              拉取上游模型列表
+              {models.length > 0
+                ? `刷新模型 (${models.length})`
+                : "拉取上游模型列表"}
             </Button>
             {target?.source_kind === "channel" &&
             target.api_key_source === "auto_channel_key" ? (
@@ -419,7 +492,7 @@ export function DetectorsDrawer({
                 size="sm"
                 variant="outline"
                 onClick={handleEnsureKey}
-                disabled={ensuringKey}
+                disabled={ensuringKey || loadingModels}
                 className="h-8 gap-1.5 text-xs"
               >
                 {ensuringKey ? (
@@ -431,8 +504,12 @@ export function DetectorsDrawer({
               </Button>
             ) : null}
             {models.length > 0 ? (
-              <Select onValueChange={applyModelToAll}>
-                <SelectTrigger className="h-8 w-56 text-xs">
+              <Select value="" onValueChange={applyModelToAll}>
+                <SelectTrigger
+                  size="sm"
+                  disabled={loadingModels || ensuringKey}
+                  className="w-56 max-w-full text-xs"
+                >
                   <SelectValue placeholder="一键批量应用模型到所有插件" />
                 </SelectTrigger>
                 <SelectContent>
@@ -497,20 +574,30 @@ export function DetectorsDrawer({
                     />
                   </div>
 
-                  <div className="mt-3.5 grid gap-3 sm:grid-cols-2">
-                    <div className="space-y-1.5">
+                  <div className="mt-3.5 space-y-3">
+                    <div className="min-w-0 space-y-1.5">
                       <Label className="text-xs">测试模型 ID</Label>
-                      <div className="flex gap-1.5">
+                      <div className="flex min-w-0 items-center gap-2">
                         <Input
                           value={row.model_name}
                           placeholder="例如：gpt-6.2-sol / claude-opus-4-6"
-                          className="h-8 font-mono text-xs"
+                          className="h-8 w-0 min-w-0 flex-1 font-mono text-xs"
                           onChange={(e) =>
                             updateRow(meta.key, { model_name: e.target.value })
                           }
                         />
                         {models.length > 0 ? (
                           <Select
+                            open={openSelectKey === meta.key}
+                            onOpenChange={(nextOpen) =>
+                              setOpenSelectKey((prev) =>
+                                nextOpen
+                                  ? meta.key
+                                  : prev === meta.key
+                                    ? null
+                                    : prev,
+                              )
+                            }
                             value={
                               models.includes(row.model_name)
                                 ? row.model_name
@@ -520,11 +607,20 @@ export function DetectorsDrawer({
                               updateRow(meta.key, { model_name: v })
                             }
                           >
-                            <SelectTrigger className="h-8 w-24 shrink-0 text-xs">
-                              <Sparkles className="size-3" />
-                              <SelectValue placeholder="选用" />
+                            <SelectTrigger
+                              size="sm"
+                              disabled={loadingModels || ensuringKey}
+                              aria-label={`为 ${meta.name} 选用上游模型`}
+                              className="shrink-0 gap-1.5 px-2.5 text-xs"
+                            >
+                              {loadingModels ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <Sparkles className="size-3.5" />
+                              )}
+                              <span>{loadingModels ? "刷新中" : "选用模型"}</span>
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent align="end" className="max-w-sm">
                               {models.map((m) => (
                                 <SelectItem
                                   key={m}
@@ -536,64 +632,89 @@ export function DetectorsDrawer({
                               ))}
                             </SelectContent>
                           </Select>
-                        ) : null}
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleFetchModels(meta.key)}
+                            disabled={loadingModels || ensuringKey || !target}
+                            className="h-8 shrink-0 gap-1.5 px-2.5 text-xs"
+                          >
+                            {loadingModels ? (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            ) : (
+                              <RefreshCw className="size-3.5" />
+                            )}
+                            <span>{loadingModels ? "拉取中" : "拉取模型"}</span>
+                          </Button>
+                        )}
                       </div>
                     </div>
 
-                    {meta.supports_reasoning ? (
-                      <div className="space-y-1.5">
-                        <Label className="text-xs">推理强度 reasoning_effort</Label>
-                        <Select
-                          value={row.reasoning_effort || "omit"}
-                          onValueChange={(v) =>
-                            updateRow(meta.key, { reasoning_effort: v })
+                    <div
+                      className={cn(
+                        "grid gap-3",
+                        meta.supports_reasoning
+                          ? "sm:grid-cols-3"
+                          : "sm:grid-cols-2",
+                      )}
+                    >
+                      {meta.supports_reasoning ? (
+                        <div className="min-w-0 space-y-1.5">
+                          <Label className="text-xs">推理强度 reasoning_effort</Label>
+                          <Select
+                            value={row.reasoning_effort || "omit"}
+                            onValueChange={(v) =>
+                              updateRow(meta.key, { reasoning_effort: v })
+                            }
+                          >
+                            <SelectTrigger size="sm" className="w-full text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {REASONING_EFFORT_OPTIONS.map((opt) => (
+                                <SelectItem key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      ) : null}
+
+                      <div className="min-w-0 space-y-1.5">
+                        <Label className="text-xs">
+                          执行周期（秒 · 当前{" "}
+                          {formatIntervalHuman(row.interval_seconds)}）
+                        </Label>
+                        <Input
+                          type="number"
+                          min={60}
+                          className="h-8 font-mono text-xs"
+                          value={String(row.interval_seconds)}
+                          onChange={(e) =>
+                            updateRow(meta.key, {
+                              interval_seconds: Number(e.target.value || 60),
+                            })
                           }
-                        >
-                          <SelectTrigger className="h-8 w-full text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {REASONING_EFFORT_OPTIONS.map((opt) => (
-                              <SelectItem key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        />
                       </div>
-                    ) : null}
 
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">
-                        执行周期（秒 · 当前{" "}
-                        {formatIntervalHuman(row.interval_seconds)}）
-                      </Label>
-                      <Input
-                        type="number"
-                        min={60}
-                        className="h-8 font-mono text-xs"
-                        value={String(row.interval_seconds)}
-                        onChange={(e) =>
-                          updateRow(meta.key, {
-                            interval_seconds: Number(e.target.value || 60),
-                          })
-                        }
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">单次超时（秒）</Label>
-                      <Input
-                        type="number"
-                        min={5}
-                        className="h-8 font-mono text-xs"
-                        value={String(row.timeout_seconds)}
-                        onChange={(e) =>
-                          updateRow(meta.key, {
-                            timeout_seconds: Number(e.target.value || 30),
-                          })
-                        }
-                      />
+                      <div className="min-w-0 space-y-1.5">
+                        <Label className="text-xs">单次超时（秒）</Label>
+                        <Input
+                          type="number"
+                          min={5}
+                          className="h-8 font-mono text-xs"
+                          value={String(row.timeout_seconds)}
+                          onChange={(e) =>
+                            updateRow(meta.key, {
+                              timeout_seconds: Number(e.target.value || 30),
+                            })
+                          }
+                        />
+                      </div>
                     </div>
                   </div>
 

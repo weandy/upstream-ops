@@ -211,6 +211,136 @@ func TestServiceEnsureChannelAPIKey(t *testing.T) {
 	}
 }
 
+func TestServiceSetTargetEnabled(t *testing.T) {
+	db := openIntelTestDB(t)
+	cipher, err := crypto.NewCipher("test-secret-key-32-bytes-minimum!!")
+	if err != nil {
+		t.Fatalf("new cipher: %v", err)
+	}
+
+	svc := NewService(db, cipher, nil, &stubLLMClient{}, nil)
+	changedCount := 0
+	svc.SetOnPublicDataChanged(func() { changedCount++ })
+
+	target, err := svc.CreateTarget(TargetInput{
+		Name:         "toggle-target",
+		Family:       storage.ProbeFamilyCodex,
+		SourceKind:   storage.ProbeSourceDirect,
+		BaseURL:      "https://api.example.com",
+		APIKey:       "sk-toggle-12345678",
+		Protocol:     storage.ProbeProtocolOpenAIChat,
+		Enabled:      true,
+		EmbedVisible: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateTarget: %v", err)
+	}
+
+	cfgs, err := svc.SaveTargetDetectors(target.ID, []DetectorConfigInput{
+		{
+			DetectorKey:     DetectorKeyLiveness,
+			Enabled:         true,
+			ModelName:       "gpt-6.2-sol",
+			IntervalSeconds: 60,
+			EmbedVisible:    true,
+		},
+	})
+	if err != nil || len(cfgs) == 0 {
+		t.Fatalf("SaveTargetDetectors: cfgs=%v err=%v", cfgs, err)
+	}
+
+	// 模拟已处于退避状态，停用不应改写该退避记录。
+	futureBackoff := time.Now().UTC().Add(30 * time.Minute).Truncate(time.Second)
+	if err := svc.Configs.UpdateScheduleWithBackoff(
+		cfgs[0].ID,
+		time.Now().UTC().Add(-time.Minute),
+		futureBackoff,
+		3,
+		llmclient.ErrorClassTimeout,
+		&futureBackoff,
+	); err != nil {
+		t.Fatalf("UpdateScheduleWithBackoff: %v", err)
+	}
+
+	beforeDisableNotify := changedCount
+	disabled, err := svc.SetTargetEnabled(target.ID, false)
+	if err != nil {
+		t.Fatalf("SetTargetEnabled(false): %v", err)
+	}
+	if disabled.Enabled {
+		t.Fatal("expected target.Enabled=false after disable")
+	}
+	if disabled.APIKeyCipher != target.APIKeyCipher {
+		t.Fatal("expected disable to preserve encrypted API key")
+	}
+	if changedCount != beforeDisableNotify+1 {
+		t.Fatalf("expected public data changed callback once on disable, got delta=%d", changedCount-beforeDisableNotify)
+	}
+
+	// 重复停用保持幂等，不重复失效缓存。
+	if _, err := svc.SetTargetEnabled(target.ID, false); err != nil {
+		t.Fatalf("idempotent disable: %v", err)
+	}
+	if changedCount != beforeDisableNotify+1 {
+		t.Fatalf("expected idempotent disable not to re-trigger callback, got delta=%d", changedCount-beforeDisableNotify)
+	}
+
+	// 停用后：不进入到期调度、不对外 Embed 公开、原有退避状态不被清零。
+	due, err := svc.Configs.ListDue(futureBackoff.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("ListDue while disabled: %v", err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("expected 0 due configs for disabled target, got %d", len(due))
+	}
+	visible, err := svc.Targets.ListEmbedVisible()
+	if err != nil {
+		t.Fatalf("ListEmbedVisible while disabled: %v", err)
+	}
+	if len(visible) != 0 {
+		t.Fatalf("expected 0 embed-visible targets while disabled, got %d", len(visible))
+	}
+	cfgAfterDisable, err := svc.Configs.Find(target.ID, DetectorKeyLiveness)
+	if err != nil {
+		t.Fatalf("find config after disable: %v", err)
+	}
+	if cfgAfterDisable.ConsecutiveErrors != 3 || cfgAfterDisable.BackoffUntil == nil {
+		t.Fatalf("expected disable not to reset backoff, got errs=%d backoff=%v", cfgAfterDisable.ConsecutiveErrors, cfgAfterDisable.BackoffUntil)
+	}
+
+	// 重新启用后：恢复可见、清零退避、立即进入到期调度。
+	reEnabled, err := svc.SetTargetEnabled(target.ID, true)
+	if err != nil {
+		t.Fatalf("SetTargetEnabled(true): %v", err)
+	}
+	if !reEnabled.Enabled {
+		t.Fatal("expected target.Enabled=true after enable")
+	}
+	if changedCount != beforeDisableNotify+2 {
+		t.Fatalf("expected public data changed callback on enable, got delta=%d", changedCount-beforeDisableNotify)
+	}
+	visible, err = svc.Targets.ListEmbedVisible()
+	if err != nil || len(visible) != 1 {
+		t.Fatalf("expected target embed-visible after enable, len=%d err=%v", len(visible), err)
+	}
+	cfgAfterEnable, err := svc.Configs.Find(target.ID, DetectorKeyLiveness)
+	if err != nil {
+		t.Fatalf("find config after enable: %v", err)
+	}
+	if cfgAfterEnable.ConsecutiveErrors != 0 || cfgAfterEnable.BackoffUntil != nil {
+		t.Fatalf("expected enable to clear backoff, got errs=%d backoff=%v", cfgAfterEnable.ConsecutiveErrors, cfgAfterEnable.BackoffUntil)
+	}
+	due, err = svc.Configs.ListDue(time.Now().UTC().Add(time.Second))
+	if err != nil || len(due) != 1 {
+		t.Fatalf("expected 1 due config immediately after re-enable, len=%d err=%v", len(due), err)
+	}
+
+	// 不存在的目标应返回 gorm.ErrRecordNotFound。
+	if _, err := svc.SetTargetEnabled(99999, false); err != gorm.ErrRecordNotFound {
+		t.Fatalf("expected ErrRecordNotFound for missing target, got %v", err)
+	}
+}
+
 func TestServiceLiveLivenessEndToEnd(t *testing.T) {
 	baseURL := strings.TrimSpace(os.Getenv("LIVE_TEST_BASE_URL"))
 	apiKey := strings.TrimSpace(os.Getenv("LIVE_TEST_API_KEY"))
