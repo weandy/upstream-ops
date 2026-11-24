@@ -84,6 +84,7 @@ type EvalInput struct {
 	Auth401Consecutive int
 	Auth401CredGen     int64
 	AuthVerified       bool
+	PoolForecast       *PoolForecastResponse
 }
 
 // EventTransition 状态机单次评估产出的状态跃迁（触发告警或自动恢复）。
@@ -152,7 +153,7 @@ func (e *EventEvaluator) instanceStateLocked(instanceID uint) *instanceEvalState
 	return st
 }
 
-// Evaluate 基于本轮采集快照与域可信度评估全部 11 条 P1-A 告警规则并持久化状态跃迁。
+// Evaluate 基于本轮采集快照与域可信度评估全部 12 条 P1-A/P1-B 告警规则并持久化状态跃迁。
 func (e *EventEvaluator) Evaluate(ctx context.Context, store EventStore, in EvalInput) ([]EventTransition, error) {
 	if store == nil {
 		return nil, fmt.Errorf("%w: event store is nil", ErrInvalidInput)
@@ -253,6 +254,12 @@ func (e *EventEvaluator) Evaluate(ctx context.Context, store EventStore, in Eval
 	// 11. account_rate_limit_wave (warning, 持续 >= 5 分钟, site, [account_availability])
 	if err := apply(evalAccountRateLimitWave(st, in, cfg, fq, now)); err != nil {
 		return nil, err
+	}
+	// 12. pool_cannot_sustain_reset (warning, 连续 1 次, group:<id>, [pool_forecast])
+	for _, spec := range evalPoolCannotSustainReset(in, fq) {
+		if err := apply(spec); err != nil {
+			return nil, err
+		}
 	}
 
 	return transitions, nil
@@ -1177,4 +1184,68 @@ func evalAccountRateLimitWave(st *instanceEvalState, in EvalInput, cfg AlertConf
 		"rate_limit_ratio_pct":  math.Round(ratio*100) / 100,
 	}
 	return spec
+}
+
+func evalPoolCannotSustainReset(in EvalInput, fq FieldQualityMap) []ruleEvaluation {
+	if !domainsTrusted(fq, DomainPoolForecast) || in.PoolForecast == nil {
+		return nil
+	}
+	if in.PoolForecast.TrustState != "" && in.PoolForecast.TrustState != QualityTrusted {
+		return nil
+	}
+
+	out := make([]ruleEvaluation, 0, len(in.PoolForecast.Groups))
+	for _, g := range in.PoolForecast.Groups {
+		if g.GroupID <= 0 {
+			continue
+		}
+		groupLabel := SanitizeErrorText(g.GroupName, 80)
+		if groupLabel == "" {
+			groupLabel = fmt.Sprintf("group:%d", g.GroupID)
+		}
+		spec := ruleEvaluation{
+			ruleKey:         RulePoolCannotSustainReset,
+			resourceKey:     fmt.Sprintf("group:%d", g.GroupID),
+			severity:        SeverityWarning,
+			requiredDomains: []string{DomainPoolForecast},
+			thresholdHits:   1,
+		}
+		if g.CannotSustainRisk {
+			spec.outcome = outcomeHit
+			spec.title = fmt.Sprintf("分组号池预计难以撑到重置（%s）", groupLabel)
+			summary := fmt.Sprintf("分组 %s（ID %d）已耗尽 %d、高危提前耗尽 %d",
+				groupLabel, g.GroupID, g.ExhaustedCount, g.WillExhaustHighCount)
+			if g.HighRiskRatioPct != nil {
+				summary += fmt.Sprintf("，高危占比 %.1f%%", *g.HighRiskRatioPct)
+			}
+			if g.RiskNote != "" {
+				summary += "（" + SanitizeErrorText(g.RiskNote, 160) + "）"
+			}
+			spec.summary = summary
+			spec.detail = map[string]any{
+				"group_id":                g.GroupID,
+				"group_name":              groupLabel,
+				"platform":                SanitizeErrorText(g.Platform, 32),
+				"proven_accounts":         g.ProvenAccounts,
+				"exhausted_count":         g.ExhaustedCount,
+				"will_exhaust_high_count": g.WillExhaustHighCount,
+				"will_exhaust_count":      g.WillExhaustCount,
+				"tight_count":             g.TightCount,
+				"safe_or_idle_count":      g.SafeOrIdleCount,
+				"high_risk_ratio_pct":     g.HighRiskRatioPct,
+				"cannot_sustain_risk":     true,
+			}
+		} else {
+			spec.outcome = outcomeOK
+			spec.summary = fmt.Sprintf("分组 %s（ID %d）号池周期预测风险已恢复可控", groupLabel, g.GroupID)
+			spec.detail = map[string]any{
+				"group_id":                g.GroupID,
+				"group_name":              groupLabel,
+				"high_risk_ratio_pct":     g.HighRiskRatioPct,
+				"cannot_sustain_risk":     false,
+			}
+		}
+		out = append(out, spec)
+	}
+	return out
 }

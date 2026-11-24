@@ -233,3 +233,69 @@ func TestDailyReportNoTrustedSamples(t *testing.T) {
 		t.Fatalf("provided 24h P95 latency should be preserved: %+v", preview.Metrics)
 	}
 }
+
+func TestDailyReportPoolForecastSummaryAndLatencyFormat(t *testing.T) {
+	now := time.Date(2026, 11, 24, 9, 0, 0, 0, locUTC8)
+
+	preview := BuildDailyReport(DailyReportInput{
+		Instance: storage.SiteOpsInstance{ID: 3, Name: "portal-p1b"},
+		Now:      now,
+		PoolForecast: &PoolForecastResponse{
+			InstanceID:           3,
+			TrustState:           QualityTrusted,
+			ProvenCount:          8,
+			ExhaustedCount:       1,
+			WillExhaustHighCount: 2,
+			WillExhaustCount:     1,
+			Groups: []GroupForecastRiskView{
+				{
+					GroupID:           10,
+					GroupName:         "claude-vip ops@portal.example.com",
+					CannotSustainRisk: true,
+				},
+				{
+					GroupID:           11,
+					GroupName:         "claude-safe",
+					CannotSustainRisk: false,
+				},
+			},
+		},
+	})
+
+	// 1. 延迟缺失文案不得再出现重复双括号「缺失（缺失（...））」
+	if strings.Contains(preview.Body, "缺失（缺失（") || strings.Contains(preview.Body, "（缺失（") {
+		t.Fatalf("latency line must not contain nested double parentheses: %s", preview.Body)
+	}
+	if !strings.Contains(preview.Body, "TTFT 缺失 / 总耗时 缺失（未采集上游 24h 延迟分位统计") {
+		t.Fatalf("unexpected latency line format: %s", preview.Body)
+	}
+
+	// 2. 包含 P1-B 纯聚合号池周期预测风险摘要与高危分组名，且不含邮箱 PII
+	for _, want := range []string{
+		"号池周期预测风险（被动证实 8 号）",
+		"已耗尽 1",
+		"will_exhaust_high) 2",
+		"will_exhaust) 1",
+		"高危分组：claude-vip",
+	} {
+		if !strings.Contains(preview.Body, want) {
+			t.Fatalf("expected %q in daily report body:\n%s", want, preview.Body)
+		}
+	}
+	if strings.Contains(preview.Body, "ops@portal.example.com") {
+		t.Fatalf("daily report must redact email PII from group name: %s", preview.Body)
+	}
+	if strings.Contains(preview.Body, "claude-safe") {
+		t.Fatalf("non-risk group must not be listed as high-risk group: %s", preview.Body)
+	}
+
+	// 3. ProvenCount == 0 时不追加号池周期预测风险段
+	emptyForecastPreview := BuildDailyReport(DailyReportInput{
+		Instance:     storage.SiteOpsInstance{ID: 3, Name: "portal-p1b"},
+		Now:          now,
+		PoolForecast: &PoolForecastResponse{InstanceID: 3, ProvenCount: 0},
+	})
+	if strings.Contains(emptyForecastPreview.Body, "号池周期预测风险") {
+		t.Fatalf("zero proven accounts should not emit pool forecast section: %s", emptyForecastPreview.Body)
+	}
+}
