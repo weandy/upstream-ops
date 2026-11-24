@@ -12,6 +12,7 @@ import {
   Network,
   PanelTop,
   RefreshCw,
+  Server,
   Settings,
   Sun,
 } from "lucide-react"
@@ -214,6 +215,10 @@ export function MonitorHeader() {
                 <BrainCircuit className="size-4" />
                 智力监测
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => navigate("/site-ops")}>
+                <Server className="size-4" />
+                站点运维
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => navigate("/embed-admin")}>
                 <PanelTop className="size-4" />
                 外部嵌入
@@ -292,6 +297,26 @@ export function MonitorHeader() {
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
                 {"智力监测"}
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip delayDuration={200}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => navigate("/site-ops")}
+                  className={cn(
+                    "size-8 border-border bg-background text-foreground hover:bg-muted",
+                    location.pathname === "/site-ops" && "border-foreground/30 bg-muted",
+                  )}
+                  aria-label="站点运维"
+                >
+                  <Server className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {"站点运维"}
               </TooltipContent>
             </Tooltip>
 

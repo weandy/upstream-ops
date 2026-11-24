@@ -15,6 +15,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/intelligence"
 	"github.com/bejix/upstream-ops/backend/notify"
 	"github.com/bejix/upstream-ops/backend/scheduler"
+	"github.com/bejix/upstream-ops/backend/siteops"
 	"github.com/gin-gonic/gin"
 )
 
@@ -31,6 +32,7 @@ type Manager struct {
 	gatewaySvc       *gateway.Service
 	intelligenceSvc  *intelligence.Service
 	embedSvc         *embedsvc.Service
+	siteOpsSvc       *siteops.Service
 	schedulerFactory SchedulerFactory
 	auth             *auth.Service
 	scheduler        *scheduler.Scheduler
@@ -85,6 +87,13 @@ func (m *Manager) SetIntelligenceService(svc *intelligence.Service) {
 func (m *Manager) SetEmbedService(svc *embedsvc.Service) {
 	m.mu.Lock()
 	m.embedSvc = svc
+	m.mu.Unlock()
+}
+
+// SetSiteOpsService 绑定自有站点运维服务，用于白名单参数与鉴权开关热重载（不双跑 worker）。
+func (m *Manager) SetSiteOpsService(svc *siteops.Service) {
+	m.mu.Lock()
+	m.siteOpsSvc = svc
 	m.mu.Unlock()
 }
 
@@ -154,6 +163,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	gatewaySvc := m.gatewaySvc
 	intelligenceSvc := m.intelligenceSvc
 	embedSvc := m.embedSvc
+	siteOpsSvc := m.siteOpsSvc
 	factory := m.schedulerFactory
 	oldScheduler := m.scheduler
 	m.mu.RUnlock()
@@ -219,6 +229,9 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	if embedSvc != nil {
 		embedSvc.UpdateRuntimeConfig(cfg.Embed.WithDefaults())
 	}
+	if siteOpsSvc != nil {
+		siteOpsSvc.ApplyRuntimeConfig(authSvc != nil, cfg.SiteOps.WithDefaults(), cfg.Proxy, cfg.Upstream.WithDefaults())
+	}
 
 	m.mu.Lock()
 	m.auth = authSvc
@@ -232,7 +245,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 		oldScheduler.Stop()
 	}
 
-	sections := []string{"app", "auth", "scheduler", "notifications", "retention", "proxy", "upstream", "gateway", "pricing", "intelligence", "embed"}
+	sections := []string{"app", "auth", "scheduler", "notifications", "retention", "proxy", "upstream", "gateway", "pricing", "intelligence", "embed", "siteOps"}
 	if m.log != nil {
 		m.log.Info("runtime config applied",
 			"sections", sections,
@@ -242,7 +255,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 
 	return &ApplyResult{
 		AppliedSections: sections,
-		Message:         "app、auth、scheduler、notifications、retention、proxy、upstream、gateway、intelligence、embed 已立即生效",
+		Message:         "app、auth、scheduler、notifications、retention、proxy、upstream、gateway、intelligence、embed、siteOps 已立即生效",
 	}, nil
 }
 

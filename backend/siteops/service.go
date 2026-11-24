@@ -51,7 +51,7 @@ func NewService(deps ServiceDeps) *Service {
 	if deps.Validator != nil {
 		deps.Validator.UpdatePolicy(cfg.AllowedOrigins, cfg.AllowedCIDRs)
 	}
-	poller.SetPollingAllowed(deps.AuthActive)
+	poller.SetPollingAllowed(IsPollingAllowed(deps.AuthActive, cfg))
 	return &Service{deps: deps, poller: poller, cfg: cfg, auth: deps.AuthActive}
 }
 
@@ -90,7 +90,7 @@ func (s *Service) ApplyRuntimeConfig(authActive bool, siteCfg config.SiteOpsConf
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	siteCfg = copySiteOpsConfig(siteCfg)
-	s.poller.applyRuntimeConfig(authActive, siteCfg, proxyCfg, upstreamCfg)
+	s.poller.applyRuntimeConfig(IsPollingAllowed(authActive, siteCfg), siteCfg, proxyCfg, upstreamCfg)
 	s.cfg, s.auth = siteCfg, authActive
 }
 
@@ -101,15 +101,23 @@ func (s *Service) AccessPolicy() (authActive, allowUnauthenticatedLocalOnly bool
 	return s.auth, s.cfg.AllowUnauthenticatedLocalOnly
 }
 
+// CurrentConfig 返回当前生效的 SiteOps 配置副本（供 HTTP 鉴权中间件读取）。
+func (s *Service) CurrentConfig() config.SiteOpsConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return copySiteOpsConfig(s.cfg)
+}
+
 func (s *Service) ListInstances(ctx context.Context) ([]InstanceView, error) {
 	instances, err := s.deps.Store.ListInstances(ctx)
 	if err != nil {
 		return nil, err
 	}
 	auth, _ := s.AccessPolicy()
+	pollingAllowed := IsPollingAllowed(auth, s.CurrentConfig())
 	views := make([]InstanceView, 0, len(instances))
 	for _, inst := range instances {
-		views = append(views, s.instanceView(inst, auth))
+		views = append(views, s.instanceView(inst, pollingAllowed))
 	}
 	return views, nil
 }
@@ -365,11 +373,12 @@ func (s *Service) GetSummary(ctx context.Context) (*SummaryResponse, error) {
 		return nil, err
 	}
 	s.mu.Lock()
-	out := SummaryResponse{AuthEnabled: s.auth, PollingActive: s.auth && s.active, TotalCount: len(instances),
+	pollingAllowed := IsPollingAllowed(s.auth, s.cfg)
+	out := SummaryResponse{AuthEnabled: s.auth, PollingActive: pollingAllowed && s.active, TotalCount: len(instances),
 		Instances: make([]InstanceSummaryItem, 0, len(instances))}
 	s.mu.Unlock()
 	for _, row := range instances {
-		inst := s.instanceView(row, out.AuthEnabled)
+		inst := s.instanceView(row, pollingAllowed)
 		item := InstanceSummaryItem{ID: inst.ID, Name: inst.Name, Slug: inst.Slug, Enabled: inst.Enabled,
 			LastReachability: inst.LastReachability, LastStatus: inst.LastStatus, HealthScore: inst.LastHealthScore,
 			ConcTrustState: QualityUnavailable, LastVersion: inst.LastVersion, LastObservedAt: inst.LastObservedAt,
@@ -399,7 +408,7 @@ func (s *Service) GetOverview(ctx context.Context, id uint) (*OverviewResponse, 
 		return nil, err
 	}
 	auth, _ := s.AccessPolicy()
-	out := OverviewResponse{Instance: s.instanceView(*inst, auth), SystemMetricsResolution: SystemMetricsResolutionNote,
+	out := OverviewResponse{Instance: s.instanceView(*inst, IsPollingAllowed(auth, s.CurrentConfig())), SystemMetricsResolution: SystemMetricsResolutionNote,
 		SLADenominatorNote: SLADenominatorNote, OpsAvailabilityLabel: OpsAvailabilityLabel, ConfiguredCapacityLabel: ConfiguredCapacityLabel}
 	if inst.LastObservedAt != nil {
 		snapshot, err := s.deps.Store.GetLatestSnapshot(ctx, id)

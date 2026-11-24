@@ -762,10 +762,10 @@ func (r *collectionRound) collectAdmin(ctx context.Context, target TargetEndpoin
 		}
 		return value, meta, err
 	})
-	if w.last != nil && notModified(concurrencyMeta) {
+	if w.last != nil && notModified(concurrencyMeta) && (in.Concurrency == nil || concurrencyMeta.ObservedAt.IsZero() || r.now.Sub(concurrencyMeta.ObservedAt) > 180*time.Second) {
 		in.Concurrency, quality[DomainConcurrency] = nil, QualityStale
 	}
-	if w.last != nil && notModified(availabilityMeta) {
+	if w.last != nil && notModified(availabilityMeta) && (in.Availability == nil || availabilityMeta.ObservedAt.IsZero() || r.now.Sub(availabilityMeta.ObservedAt) > 180*time.Second) {
 		in.Availability, quality[DomainAccountAvailability] = nil, QualityStale
 	}
 	if (len(w.groupMetadata) == 0 || r.now.Sub(r.caps[EndpointGroupsAll].CheckedAt) >= metadataRefreshPeriod) &&

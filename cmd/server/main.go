@@ -26,6 +26,7 @@ import (
 	"github.com/bejix/upstream-ops/backend/notify"
 	"github.com/bejix/upstream-ops/backend/runtimeconfig"
 	"github.com/bejix/upstream-ops/backend/scheduler"
+	"github.com/bejix/upstream-ops/backend/siteops"
 	"github.com/bejix/upstream-ops/backend/storage"
 	"github.com/bejix/upstream-ops/web"
 	"github.com/gin-gonic/gin"
@@ -149,9 +150,25 @@ func main() {
 	embedSvc.UpdateRuntimeConfig(cfg.Embed.WithDefaults())
 	intelligenceSvc.SetOnPublicDataChanged(embedSvc.InvalidateSnapshots)
 
+	siteOpsSvc, siteOpsStore := siteops.NewDefaultService(
+		db,
+		cipher,
+		cfg.SiteOps.WithDefaults(),
+		cfg.Proxy,
+		cfg.Upstream.WithDefaults(),
+		authSvc != nil,
+		log,
+	)
+	if err := siteOpsSvc.Start(); err != nil {
+		log.Error("start siteops service failed", "err", err)
+		os.Exit(1)
+	}
+	defer siteOpsSvc.Stop()
+
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
 		s := scheduler.New(scfg, monitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, gatewaySvc, pcfg, log)
 		s.SetIntelligenceRepos(intelligenceSvc.Liveness, intelligenceSvc.Runs)
+		s.SetSiteOpsStore(siteOpsStore)
 		return s
 	}
 	sch := schedulerFactory(cfg.Scheduler, cfg.Proxy)
@@ -177,6 +194,7 @@ func main() {
 	defer runtimeMgr.Stop()
 	runtimeMgr.SetIntelligenceService(intelligenceSvc)
 	runtimeMgr.SetEmbedService(embedSvc)
+	runtimeMgr.SetSiteOpsService(siteOpsSvc)
 
 	gin.SetMode(cfg.Server.Mode)
 	router := gin.New()
@@ -216,6 +234,7 @@ func main() {
 		ModelPrices:   modelPrices,
 		Intelligence:  intelligenceSvc,
 		Embed:         embedSvc,
+		SiteOps:       siteOpsSvc,
 		Log:           log,
 		Frontend:      frontendFS,
 	})

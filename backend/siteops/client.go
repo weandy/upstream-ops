@@ -154,7 +154,6 @@ func (c *Client) ResetInstanceState(instanceID uint) {
 			delete(c.flights, key)
 		}
 	}
-	delete(c.budgets, instanceID)
 }
 
 func (w *auditWindow) advance(now time.Time) {

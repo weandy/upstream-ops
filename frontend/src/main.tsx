@@ -19,6 +19,7 @@ const SettingsPage = lazy(() => import('@/app/settings-page'))
 const GatewayPage = lazy(() => import('@/app/gateway-page'))
 const IntelligencePage = lazy(() => import('@/app/intelligence-page'))
 const EmbedAdminPage = lazy(() => import('@/app/embed-admin-page'))
+const SiteOpsPage = lazy(() => import('@/app/site-ops-page'))
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -34,6 +35,7 @@ createRoot(document.getElementById('root')!).render(
                     <Route path="captcha" element={<CaptchaPage />} />
                     <Route path="notifications" element={<NotificationsPage />} />
                     <Route path="intelligence" element={<IntelligencePage />} />
+                    <Route path="site-ops" element={<SiteOpsPage />} />
                     <Route path="embed-admin" element={<EmbedAdminPage />} />
                     <Route path="gateway" element={<GatewayPage />} />
                     <Route path="settings" element={<SettingsPage />} />

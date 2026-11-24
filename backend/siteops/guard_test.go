@@ -53,8 +53,8 @@ func TestSiteOpsAccessGate(t *testing.T) {
 					t.Fatalf("unexpected forbidden response: %v", body)
 				}
 			}
-			if got := IsPollingAllowed(auth, cfg); got != (tc.auth || tc.local) {
-				t.Fatalf("IsPollingAllowed = %v", got)
+			if got := IsPollingAllowed(auth, cfg); got != tc.auth {
+				t.Fatalf("IsPollingAllowed = %v, want %v", got, tc.auth)
 			}
 		})
 	}

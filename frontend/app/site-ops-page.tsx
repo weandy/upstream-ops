@@ -331,7 +331,7 @@ export default function SiteOpsPage() {
                   instance={selected}
                   report={report?.instance_id === selected.id ? report : undefined}
                   busy={activeAction?.id === selected.id && activeAction.action === "probe"}
-                  probeDisabled={activeAction !== null}
+                  probeDisabled={readOnly || activeAction !== null}
                   error={currentNotice?.action === "probe" ? currentNotice.message : undefined}
                   onClose={() => setDrawerId(null)}
                   onProbe={() => { void runAction("probe") }}

@@ -123,8 +123,13 @@ func TestConditionalObservationAndAuditBudget(t *testing.T) {
 		t.Fatalf("usage = %+v", usage)
 	}
 	client.ResetInstanceState(inst.InstanceID)
+	// ResetInstanceState must clear ETag cache while preserving daily audit budget accounting.
+	if _, _, err := client.FetchSystemVersion(ctx, inst); !errors.Is(err, ErrBudgetExceeded) || hits.Load() != 3 {
+		t.Fatalf("reset should preserve daily budget: err = %v; hits = %d", err, hits.Load())
+	}
+	inst.AuditBudgetPerDay = 4
 	if _, _, err := client.FetchSystemVersion(ctx, inst); err != nil || hits.Load() != 4 {
-		t.Fatalf("fetch after reset = %v; hits = %d", err, hits.Load())
+		t.Fatalf("fetch after reset with raised budget = %v; hits = %d", err, hits.Load())
 	}
 }
 

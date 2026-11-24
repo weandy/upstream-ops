@@ -23,8 +23,8 @@ func IsLoopbackRemoteAddr(remoteAddr string) bool {
 	return err == nil && (host == "127.0.0.1" || host == "::1")
 }
 
-func IsPollingAllowed(authActive bool, cfg config.SiteOpsConfig) bool {
-	return authActive || cfg.AllowUnauthenticatedLocalOnly
+func IsPollingAllowed(authActive bool, _ config.SiteOpsConfig) bool {
+	return authActive
 }
 
 func RequireAccessMiddleware(authActive func() bool, cfgProvider func() config.SiteOpsConfig) gin.HandlerFunc {
