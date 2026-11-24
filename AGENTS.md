@@ -1,10 +1,12 @@
 # AGENTS.md
 
-后续接手先读这份说明。用户可见的说明、计划和提交说明用中文。不要把密钥、Cookie、`APP_SECRET` 或数据库内容写进仓库、提交或这份文件。
+协作方式见 `C:\Users\123\.agents\AGENTS.md`。本文件只记这个仓库里代码看不出来的事实。当天的运行现象写到 `docs/plans/`，不要继续堆在这里。
+
+用户可见的说明、计划和提交说明用中文。不要把密钥、Cookie、`APP_SECRET` 或数据库内容写进仓库、提交或这份文件。
 
 ## 仓库
 
-- 本地路径：`E:\ai\jz`。分支：`main`。
+- 本地路径：`D:\AI\upstream-ops`。旧路径 `E:\ai\jz` 已作废。分支：`main`。
 - 这是上游仓库的二次开发。发布镜像记录在 `weandy/upstream-ops`。**不要 push 到 `bejix/upstream-ops`。用户没有明确说 push 时，也不要 push 自己的远程。**
 - 不要提交：`config.yaml`、`data/`、`*.exe`、`.vite/`、`frontend/node_modules/`、`web/dist/` 里的构建产物、`.env`。`config.yaml` 和 `data/` 已被 gitignore，不要删。
 - 代码和文档里不要出现 `ooioo`、`bothyouandme`。对外示例用 `portal` / `portal.example.com`。
@@ -14,9 +16,8 @@
 - 测活默认 60 秒。`candy`、`lmfpd`、`pelican`、`custom_prompt` 默认 3600 秒。调度 tick 5 秒。调度按锚点加间隔，不是整点。
 - 可用率条固定 60 格。一格的长度等于该目标的测活间隔：1 分钟一测时整条约 60 分钟，5 分钟一测时整条约 300 分钟。文案用「近 N 分钟」，不要写死 60，也不要改回 90 分钟或 3 分钟一格。
 - 热力条保持紧凑、单行、等高胶囊。不要恢复高低差矮柱，不要在每行重复「60 分钟前 / 现在」，不要做成占半屏的大盒子。
-- 不要把画鹈鹕改成 3 小时。内置题必须仍是「完整 HTML + 内联 SVG 动画」，不要改成纯 SVG。
-- 不要做收入、`/api/log/stat`、销售或大客户分析。
 - 不要改 Sub2API 登录，不要重做凭证加密。
+- 收入、消耗、大客户与用户缓存率分析仅限自有站点独立模块 `siteops`（`backend/siteops/`）；既有外部上游监控模块依然不涉及 `/api/log/stat` 或外部站销售分析。`siteops` 对缓存、数据库、日志、API、通知五个输出面必须执行字段级隐私白名单。
 - 不要改流必须有结束标记的判断，也不要改 2MiB 捕获上限，除非用户再次要求。结束标记是 `[DONE]`、`finish_reason` 为 `stop`/`end_turn`、`response.completed` 或 `message_stop`。
 - `reasoning_effort` 可以省略。不要再做一套自定义题目占位符；`custom_prompt` 已经存在。
 
@@ -25,7 +26,7 @@
 - 后端 `http://localhost:8418`，二进制是仓库根目录的 `upstream-ops.exe`。公开页：`http://localhost:8418/embed?site=default`。鹈鹕画廊：`http://localhost:8418/embed/pelican?site=default&target=codex`。
 - 管理台开发地址是 `http://localhost:3010/`。Vite 只绑 IPv6 的 localhost，`http://127.0.0.1:3010/` 会连接失败。代理目标在 `frontend/vite.config.ts`。
 - 启动后端前，把 `config.yaml` 里 `security.appSecret` 读进环境变量 `APP_SECRET`。不要打印这个值。
-- 本机默认 Go 不够新。编译用：`$env:GOTOOLCHAIN='go1.23.0'`，`$env:CGO_ENABLED='0'`，`go build -o E:\ai\jz\upstream-ops.exe ./cmd/server`。
+- 本机 Go 是 1.26.1，已满足 `go.mod` 的 `go 1.23`。不要再设 `GOTOOLCHAIN=go1.23.0`。编译：`$env:CGO_ENABLED='0'; go build -o D:\AI\upstream-ops\upstream-ops.exe ./cmd/server`。
 - Windows 上 exe 被占用时，先结束监听 8418 的进程再编译。用能留住后台进程的方式启动，并确认日志里有 `http server listening`。
 - 改 Go（包括 `backend/embed/templates.go`）后必须重新编译并重启。Vite 热更新看不到服务端渲染。exe 里嵌的是 `web/dist`；只改前端源码时，用 3010 看新界面，不要误以为 8418 里的管理台已经更新。
 - `auth.enabled` 默认关闭，密码为空。`/api/auth/me` 只有 401 才进登录页；网络失败或 5xx 应显示后端没连上。
@@ -64,17 +65,13 @@
 
 `ComputeNextSchedule` 在完成时刻仍落在当前锚点的一个间隔内时，保持原来的锚点。例如间隔 1 小时、12:49 左右结束，下一轮靠近 13:49，而不是 13:00。手动测一次不会把自动档改到刚才。
 
-## 2026-11-22 16:30 左右的本地现象
+## 运行现象
 
-这些是库里的运行结果，不是还没做完的代码。不要据此去改提示词或结束标记判断。
-
-- Codex 目标的画鹈鹕大约 95–100 秒可以正常完成。
-- 名为 sskiro 的目标，测活、Candy、数字指纹是正常的，用的也是 `gpt-6.2-sol`。画鹈鹕先连续立刻 `HTTP 429`，之后能发出去，但跑满 180 秒和后来的 300 秒超时；最近一次约 297 秒，上游把流掐掉，错误是 `stream ended before terminal event`。这是这条上游对长 HTML 生成太慢或中途断流。
-- 不要在任何提交或文档里写下这个目标的密钥。
+2026-11-22 的测活和画鹈鹕耗时记在 [docs/plans/2026-11-22-upstream-runtime.md](docs/plans/2026-11-22-upstream-runtime.md)。那是当时库里的结果，不是待改代码。不要据此去改提示词或结束标记判断，也不要把目标密钥写进提交或文档。
 
 ## 验证
 
-- Go 测试按改动范围跑，例如 `go test ./backend/intelligence/ ./backend/embed/`。环境同样要设 `GOTOOLCHAIN=go1.23.0`。
+- Go 测试按改动范围跑，例如 `go test ./backend/intelligence/ ./backend/embed/`。不要设 `GOTOOLCHAIN=go1.23.0`。
 - 前端 ESLint 要在 `frontend/` 目录里跑。仓库根目录没有 ESLint 配置，在根目录跑会报找不到配置。
 
 ## 接手时不要做
