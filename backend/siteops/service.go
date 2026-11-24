@@ -19,6 +19,10 @@ import (
 )
 
 type ServiceDeps struct {
+	MailStore      MailStore
+	MailClient     MailAudienceClient
+	MailSender     MailSMTPSender
+	mailEvidence   func(context.Context, storage.MailScopeKey, uint, *MailTestResult) error
 	AnalyticsStore AnalyticsStore
 	Store          Store
 	EventStore     EventStore
@@ -38,6 +42,8 @@ type ServiceDeps struct {
 }
 
 type Service struct {
+	lifecycle  sync.Mutex
+	mailWorker *mailWorker
 	analytics  *AnalyticsCache
 	deps       ServiceDeps
 	poller     *Poller
@@ -61,6 +67,17 @@ func NewService(deps ServiceDeps) *Service {
 	}
 	if deps.AnalyticsStore == nil {
 		deps.AnalyticsStore, _ = deps.Store.(AnalyticsStore)
+	}
+	if deps.MailStore == nil {
+		deps.MailStore, _ = deps.Store.(MailStore)
+	}
+	if deps.MailClient == nil {
+		deps.MailClient, _ = deps.Client.(MailAudienceClient)
+	}
+	if deps.MailSender == nil {
+		if guard, ok := deps.Validator.(SMTPOutboundValidator); ok {
+			deps.MailSender = NewMailSMTPSender(guard)
+		}
 	}
 	cache := newAnalyticsCache(deps.Now)
 	if c, ok := deps.Client.(*Client); ok {
@@ -93,6 +110,8 @@ func copySiteOpsConfig(cfg config.SiteOpsConfig) config.SiteOpsConfig {
 }
 
 func (s *Service) Start() error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.active {
@@ -108,18 +127,33 @@ func (s *Service) Start() error {
 	s.analytics.stopped = false
 	s.analytics.mu.Unlock()
 	s.poller.SyncInstances(instances)
+	if s.deps.MailStore != nil {
+		w := newMailWorker(s)
+		if err := w.RecoverStaleMailWork(ctx); err != nil {
+			return err
+		}
+		s.mailWorker = w
+		go w.run()
+	}
 	s.poller.Start()
 	s.active = true
 	return nil
 }
 
 func (s *Service) Stop() {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.active = false
+	w := s.mailWorker
+	s.mailWorker = nil
+	s.mu.Unlock()
+	if w != nil {
+		w.Stop(8 * time.Second)
+	}
 	s.invalidateAnalytics(0, "stop")
 	s.analytics.stop()
 	s.poller.Stop()
-	s.active = false
 }
 
 func (s *Service) ApplyRuntimeConfig(authActive bool, siteCfg config.SiteOpsConfig, proxyCfg config.ProxyConfig, upstreamCfg config.UpstreamConfig) {
@@ -129,6 +163,9 @@ func (s *Service) ApplyRuntimeConfig(authActive bool, siteCfg config.SiteOpsConf
 	s.poller.applyRuntimeConfig(IsPollingAllowed(authActive, siteCfg), siteCfg, proxyCfg, upstreamCfg)
 	s.invalidateAnalytics(0, "policy")
 	s.cfg, s.auth = siteCfg, authActive
+	if s.mailWorker != nil {
+		s.mailWorker.interrupt(0, 0)
+	}
 }
 
 // AccessPolicy supplies the current auth policy to the HTTP access guard.
@@ -227,6 +264,9 @@ func (s *Service) UpdateInstance(ctx context.Context, id uint, input UpdateInsta
 	}
 	if err := s.deps.Store.UpdateInstance(ctx, &inst); err != nil {
 		return nil, err
+	}
+	if s.mailWorker != nil {
+		s.mailWorker.interrupt(id, 0)
 	}
 	reason := "update"
 	if previous.BaseURL != inst.BaseURL || previous.CredGen != inst.CredGen {
@@ -378,6 +418,9 @@ func (s *Service) DeleteInstance(ctx context.Context, id uint) error {
 			s.poller.ReconcileInstance(*inst)
 		}
 		return err
+	}
+	if s.mailWorker != nil {
+		s.mailWorker.interrupt(id, 0)
 	}
 	return nil
 }

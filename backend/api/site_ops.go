@@ -17,6 +17,7 @@ func registerSiteOps(g *gin.RouterGroup, d *Deps) {
 
 	// P0–P2 鉴权统一跟随全局 AuthMiddleware；P3 高危写操作端点将单独挂载强制鉴权守卫。
 	sg := g.Group("/site-ops")
+	registerSiteOpsMail(sg, d)
 
 	sg.GET("/summary", func(c *gin.Context) {
 		res, err := d.SiteOps.GetSummary(c.Request.Context())
