@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-> 本仓库是 [bejix/upstream-ops](https://github.com/bejix/upstream-ops) 的 fork，上游又基于 [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub)。当前版本 **v0.3.0**，仓库与更新检测地址为 [weandy/upstream-ops](https://github.com/weandy/upstream-ops)。
+> 本仓库是 [bejix/upstream-ops](https://github.com/bejix/upstream-ops) 的 fork，上游又基于 [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub)。当前版本 **v0.4.1**，仓库与更新检测地址为 [weandy/upstream-ops](https://github.com/weandy/upstream-ops)。
 
 > UpstreamOps 是一个面向 NewAPI / Sub2API 上游站点的集中监控与运维面板，用来统一管理上游账号、查看余额与消费、同步模型倍率、追踪倍率变化、维护上游 API Key、发起充值/兑换，并通过多种通知渠道推送余额告警、倍率变更、登录异常、监控异常和上游公告。
 同时内置 OpenAI / Claude / Responses 兼容的请求转发网关：可创建网关密钥、绑定同步渠道或直连上游、按倍率与权重调度、协议互转、故障自动切换，并记录每次请求的用量与费用参考。
@@ -49,7 +49,7 @@ GET /api/public/status?site=<slug>
 
 ### 其他行为差异
 
-- 认证默认关闭。后端进程不在或 `/auth/me` 返回 5xx、网络错误时，管理台显示「后端没有连上」，只有真正的 401 才进入登录页。
+- 认证默认开启，初始账号密码为 `admin` / `admin_ops`；首次登录后强制要求重设账号密码后方可使用。后端进程不在或 `/auth/me` 返回 5xx、网络错误时，管理台显示「后端没有连上」，只有真正的 401 才进入登录页。
 - 更新检测读取 `https://github.com/weandy/upstream-ops` 的最新 Release。Docker 镜像是 `ghcr.io/weandy/upstream-ops`。
 
 ## 为什么使用？
@@ -289,9 +289,43 @@ UpstreamOps 主要解决这些痛点：
 
 保存配置会写入配置文件；应用配置后，鉴权、调度、通知策略、代理、上游 HTTP 与网关运行时配置会立即生效。通知渠道和验证码服务本身是实时写库生效。
 
-## 快速启动
+## 一键 Docker 部署（快速启动）
 
-### Docker Compose（SQLite）
+支持 `linux/amd64` 与 `linux/arm64` 双架构镜像（`ghcr.io/weandy/upstream-ops:latest`）。
+
+### 方式一：一键脚本部署（推荐，自动配置与持久化）
+
+无需提前克隆仓库，在服务器执行一条命令即可自动下载编排文件、生成随机 `APP_SECRET`、创建 `data/` 持久化目录并拉起容器（重复执行可安全升级，保留已有密钥与数据）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash
+```
+
+支持通过参数自定义安装目录、端口、镜像标签或数据库（例如使用 9090 端口 + MySQL）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash -s -- --dir /opt/upstream-ops --port 9090 --tag latest --db sqlite
+```
+
+可选 `--db`：`sqlite`（默认）、`mysql`、`postgres`。
+
+### 方式二：单条 `docker run` 命令直跑
+
+```bash
+docker run -d \
+  --name upstream-ops \
+  --restart unless-stopped \
+  -p 8080:8418 \
+  -v "$(pwd)/data:/app/data" \
+  -e TZ=Asia/Shanghai \
+  -e APP_SECRET="$(openssl rand -hex 32)" \
+  ghcr.io/weandy/upstream-ops:latest \
+  -config /app/data/config.yaml
+```
+
+> 务必妥善保存你生成的 `APP_SECRET`（重建容器时需传入同一个值，否则既有加密凭据无法解密）。
+
+### 方式三：手动 Docker Compose（SQLite）
 
 默认使用 SQLite 单文件数据库，推荐直接用 Docker Compose：
 
@@ -299,7 +333,7 @@ UpstreamOps 主要解决这些痛点：
 cp .env.example .env
 ```
 
-编辑 `.env`，至少设置：
+编辑 `.env`，至少将 `APP_SECRET` 替换为随机密钥：
 
 ```env
 APP_SECRET=请替换为 32 字节以上随机字符串
@@ -307,13 +341,15 @@ APP_SECRET=请替换为 32 字节以上随机字符串
 
 `APP_SECRET` 用于 AES-GCM 加密敏感字段，包括上游密码、Token、Cookie、通知渠道密钥、验证码平台 API Key 等。修改后既有加密数据将无法解密，请务必妥善保存。
 
-公网访问建议开启后台登录：
+系统默认开启后台登录鉴权（`AUTH_ENABLED=true`）：
 
 ```env
 AUTH_ENABLED=true
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=请替换为强密码
+ADMIN_PASSWORD=admin_ops
 ```
+
+> 若使用默认 `admin` / `admin_ops` 首次登录，管理台会强制要求重新设置管理员账号和密码后才可进入系统；如在首次启动前就在 `.env` 里指定了自定义强密码，则可直接登录使用。
 
 Docker 默认拉取 `ghcr.io/weandy/upstream-ops:${IMAGE_TAG:-latest}`，不会在本机编译镜像。配置和数据都会写入宿主机项目目录下的 `data/`。
 
@@ -350,7 +386,7 @@ IMAGE_TAG=latest
 生产环境建议锁定具体版本，例如：
 
 ```env
-IMAGE_TAG=v0.3.0
+IMAGE_TAG=v0.4.1
 ```
 
 ## MySQL 部署

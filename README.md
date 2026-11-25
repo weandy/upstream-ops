@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-> This repository is a fork of [bejix/upstream-ops](https://github.com/bejix/upstream-ops), which is itself based on [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub). The current release is **v0.3.0**. Update checks and the repository URL point to [weandy/upstream-ops](https://github.com/weandy/upstream-ops).
+> This repository is a fork of [bejix/upstream-ops](https://github.com/bejix/upstream-ops), which is itself based on [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub). The current release is **v0.4.1**. Update checks and the repository URL point to [weandy/upstream-ops](https://github.com/weandy/upstream-ops).
 
 > UpstreamOps is a centralized monitoring and operations dashboard for NewAPI and Sub2API upstream sites. It helps manage upstream accounts, balances, spending, model or group rates, rate changes, upstream API keys, recharge and redeem workflows, subscriptions, announcements, and notification alerts.
 
@@ -50,7 +50,7 @@ A column, history page, or gallery appears only when that detector is marked vis
 
 ### Other differences
 
-- Authentication is off by default. If the backend is down, or `/auth/me` fails with a network error or 5xx, the admin UI says the backend is unreachable. Only HTTP 401 opens the login form.
+- Authentication is enabled by default with initial credentials `admin` / `admin_ops`, and first login forces resetting the username and password before accessing the dashboard. If the backend is down, or `/auth/me` fails with a network error or 5xx, the admin UI says the backend is unreachable. Only HTTP 401 opens the login form.
 - Update checks read the latest Release from `https://github.com/weandy/upstream-ops`. The Docker image is `ghcr.io/weandy/upstream-ops`.
 
 ## Why Use UpstreamOps
@@ -278,9 +278,41 @@ The system settings page manages:
 
 Saving writes the configuration file. Applying settings hot-reloads authentication, scheduler, notification policy, proxy, upstream HTTP, and gateway runtime settings. Notification channels and captcha providers take effect immediately after database writes.
 
-## Quick Start
+## One-Click Docker Deployment (Quick Start)
 
-### Docker Compose with SQLite
+Multi-arch images (`linux/amd64` and `linux/arm64`) are published at `ghcr.io/weandy/upstream-ops:latest`.
+
+### Option 1: One-Click Install Script (Recommended)
+
+Run a single command on a fresh server without cloning the repository first. It downloads the Compose files, generates a random `APP_SECRET`, prepares `data/`, and starts the service (re-running upgrades cleanly without overwriting an existing `APP_SECRET`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash
+```
+
+Optional flags (`--dir`, `--port`, `--tag`, `--db sqlite|mysql|postgres`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash -s -- --dir /opt/upstream-ops --port 9090 --tag latest --db sqlite
+```
+
+### Option 2: Single `docker run` Command
+
+```bash
+docker run -d \
+  --name upstream-ops \
+  --restart unless-stopped \
+  -p 8080:8418 \
+  -v "$(pwd)/data:/app/data" \
+  -e TZ=Asia/Shanghai \
+  -e APP_SECRET="$(openssl rand -hex 32)" \
+  ghcr.io/weandy/upstream-ops:latest \
+  -config /app/data/config.yaml
+```
+
+> Keep your generated `APP_SECRET` safe; recreating the container with a different secret makes previously encrypted credentials unreadable.
+
+### Option 3: Manual Docker Compose with SQLite
 
 SQLite is the default deployment mode.
 
@@ -288,7 +320,7 @@ SQLite is the default deployment mode.
 cp .env.example .env
 ```
 
-Edit `.env` and set at least:
+Edit `.env` and replace `APP_SECRET` with a random secret:
 
 ```env
 APP_SECRET=replace-with-a-random-string-at-least-32-bytes
@@ -296,13 +328,15 @@ APP_SECRET=replace-with-a-random-string-at-least-32-bytes
 
 `APP_SECRET` is used to encrypt sensitive fields with AES-GCM, including upstream passwords, tokens, cookies, notification channel secrets, and captcha provider API keys. If you change it later, existing encrypted data cannot be decrypted.
 
-For public access, enable admin login:
+Admin login is enabled by default (`AUTH_ENABLED=true`):
 
 ```env
 AUTH_ENABLED=true
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=replace-with-a-strong-password
+ADMIN_PASSWORD=admin_ops
 ```
+
+> Logging in with the default `admin` / `admin_ops` credentials forces setting a new username and password before accessing the dashboard. If you set a custom strong `ADMIN_PASSWORD` in `.env` before the first boot, you can use it right away.
 
 Docker pulls `ghcr.io/weandy/upstream-ops:${IMAGE_TAG:-latest}` by default. Configuration and data are stored in the host `data/` directory.
 
@@ -339,7 +373,7 @@ IMAGE_TAG=latest
 For production, pin a specific version:
 
 ```env
-IMAGE_TAG=v0.3.0
+IMAGE_TAG=v0.4.1
 ```
 
 ## MySQL Deployment
