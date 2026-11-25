@@ -110,6 +110,58 @@ func TestSubscriptionForecastSummaryVerdicts(t *testing.T) {
 	}
 }
 
+func TestSubscriptionForecastCycleCapBounds(t *testing.T) {
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, locUTC8)
+	cfg := DefaultAnalyticsConfig()
+
+	mkSub := func(cycleDays int, daily, weekly, monthly *float64) AnalyticsSubscriptionRow {
+		start := now.Add(-10 * 24 * time.Hour)
+		end := start.Add(time.Duration(cycleDays) * 24 * time.Hour)
+		return AnalyticsSubscriptionRow{
+			SubscriptionID: 1,
+			UserID:         1,
+			CycleState:     "active",
+			StartsAt:       &start,
+			ExpiresAt:      &end,
+			SubCycleStart:  &start,
+			SubCycleEnd:    &end,
+			DailyWindow:    RollingWindowView{LimitUSD: daily, UsedUSD: ptr(10.0), Quality: QualityTrusted},
+			WeeklyWindow:   RollingWindowView{LimitUSD: weekly, UsedUSD: ptr(50.0), Quality: QualityTrusted},
+			MonthlyWindow:  RollingWindowView{LimitUSD: monthly, UsedUSD: ptr(200.0), Quality: QualityTrusted},
+		}
+	}
+
+	cases := []struct {
+		name      string
+		cycleDays int
+		daily     *float64
+		weekly    *float64
+		monthly   *float64
+		wantCap   float64
+		wantUnlim bool
+	}{
+		{"weekly_500_daily_100_30d", 30, ptr(100.0), ptr(500.0), nil, 2200, false},
+		{"weekly_500_daily_300_30d", 30, ptr(300.0), ptr(500.0), nil, 2500, false},
+		{"weekly_500_daily_50_30d", 30, ptr(50.0), ptr(500.0), nil, 1500, false},
+		{"weekly_only_500_30d", 30, nil, ptr(500.0), nil, 2500, false},
+		{"daily_only_100_30d", 30, ptr(100.0), nil, nil, 3000, false},
+		{"monthly_2500_capped_by_weekly_daily", 30, ptr(100.0), ptr(500.0), ptr(2500.0), 2200, false},
+		{"monthly_1800_tighter_than_weekly_daily", 30, ptr(100.0), ptr(500.0), ptr(1800.0), 1800, false},
+		{"exact_4_weeks_28d", 28, ptr(100.0), ptr(500.0), nil, 2000, false},
+		{"short_cycle_3d", 3, ptr(100.0), ptr(500.0), nil, 300, false},
+		{"unlimited_fallback", 30, nil, nil, nil, 400, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := subscriptionForecastSummary(mkSub(tc.cycleDays, tc.daily, tc.weekly, tc.monthly), cfg, now)
+			if f == nil || f.QuotaCapUSD == nil || *f.QuotaCapUSD != tc.wantCap || f.IsUnlimited != tc.wantUnlim {
+				t.Fatalf("%s: got %+v, want cap=%v unlim=%v", tc.name, f, tc.wantCap, tc.wantUnlim)
+			}
+		})
+	}
+}
+
 func TestUserActivityStates(t *testing.T) {
 	drop := userActivityState(AnalyticsUserRow{}, []OperationalTagView{{Key: "high_value_at_risk"}})
 	if drop != "drop" {

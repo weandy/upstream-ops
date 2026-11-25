@@ -252,6 +252,41 @@ func subscriptionLayer(row AnalyticsSubscriptionRow, a, z, now, progAt time.Time
 	return v
 }
 
+// forecastCycleCapUSD 计算订阅在当前周期（cycleDays 天）内理论上最多可消耗的额度上限。
+// 取所有已配置限额约束的最小值；同时存在周限额与日限额时，按「整周数 * min(周限, 7*日限) + min(周限, 剩余天数*日限)」收敛余数天数。
+func forecastCycleCapUSD(row AnalyticsSubscriptionRow, cycleDays float64, cfg AnalyticsConfig) (float64, bool) {
+	best := math.Inf(1)
+	if row.MonthlyWindow.LimitUSD != nil && *row.MonthlyWindow.LimitUSD > 0 {
+		best = *row.MonthlyWindow.LimitUSD
+	}
+	hasWeekly := row.WeeklyWindow.LimitUSD != nil && *row.WeeklyWindow.LimitUSD > 0
+	hasDaily := row.DailyWindow.LimitUSD != nil && *row.DailyWindow.LimitUSD > 0
+	switch {
+	case hasWeekly && hasDaily:
+		w, d := *row.WeeklyWindow.LimitUSD, *row.DailyWindow.LimitUSD
+		fullWeeks := math.Floor((cycleDays + 1e-9) / 7)
+		remDays := math.Ceil(math.Max(0, cycleDays-fullWeeks*7-1e-9))
+		combined := fullWeeks*math.Min(w, 7*d) + math.Min(w, remDays*d)
+		if combined < best {
+			best = combined
+		}
+	case hasWeekly:
+		weeks := math.Ceil(math.Max(0, cycleDays-1e-9) / 7)
+		if v := *row.WeeklyWindow.LimitUSD * weeks; v < best {
+			best = v
+		}
+	case hasDaily:
+		days := math.Ceil(math.Max(0, cycleDays-1e-9))
+		if v := *row.DailyWindow.LimitUSD * days; v < best {
+			best = v
+		}
+	}
+	if !math.IsInf(best, 1) && best > 0 {
+		return best, false
+	}
+	return cfg.UnlimitedTargetUSD, true
+}
+
 // subscriptionForecastSummary 基于订阅周期、已用量、可用总量和当前日均速率计算周期期望与预测结论。
 func subscriptionForecastSummary(row AnalyticsSubscriptionRow, cfg AnalyticsConfig, now time.Time) *SubscriptionForecastSummary {
 	cfg = cfg.withForecastDefaults()
@@ -273,32 +308,8 @@ func subscriptionForecastSummary(row AnalyticsSubscriptionRow, cfg AnalyticsConf
 	remaining := max(0.0, cycleDays-elapsed)
 	timePct := math.Min(100, math.Round(elapsed/cycleDays*1000)/10)
 
-	// 1. 确定周期可用总量（优先月限额，其次周/日限额周期封顶，均未设则按不限额期望上限）
-	var capUSD float64
-	isUnlimited := false
-	switch {
-	case row.MonthlyWindow.LimitUSD != nil && *row.MonthlyWindow.LimitUSD > 0:
-		capUSD = *row.MonthlyWindow.LimitUSD
-	default:
-		best := math.Inf(1)
-		if row.WeeklyWindow.LimitUSD != nil && *row.WeeklyWindow.LimitUSD > 0 {
-			weeks := math.Ceil(cycleDays / 7)
-			if v := *row.WeeklyWindow.LimitUSD * weeks; v < best {
-				best = v
-			}
-		}
-		if row.DailyWindow.LimitUSD != nil && *row.DailyWindow.LimitUSD > 0 {
-			if v := *row.DailyWindow.LimitUSD * math.Ceil(cycleDays); v < best {
-				best = v
-			}
-		}
-		if !math.IsInf(best, 1) && best > 0 {
-			capUSD = best
-		} else {
-			isUnlimited = true
-			capUSD = cfg.UnlimitedTargetUSD
-		}
-	}
+	// 1. 确定周期可用总量（取月限额与周/日限额组合周期上限的最小值，均未设则按不限额期望上限）
+	capUSD, isUnlimited := forecastCycleCapUSD(row, cycleDays, cfg)
 
 	// 2. 当前本期已用量（优先月窗快照，退回周/日窗）
 	var usedPtr *float64
