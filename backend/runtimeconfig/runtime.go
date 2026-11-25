@@ -173,7 +173,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 		return nil, err
 	}
 
-	authSvc, err := buildAuth(cfg.Auth, secret)
+	authSvc, err := BuildAuth(cfg.Auth, secret)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +274,53 @@ func (m *Manager) Stop() {
 	}
 }
 
-func buildAuth(cfg config.AuthConfig, securitySecret string) (*auth.Service, error) {
+// UpdateAuthCredentials 更新配置文件中的管理员账号密码并立即热切换当前认证服务。
+func (m *Manager) UpdateAuthCredentials(username, password string) (*auth.Service, error) {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+
+	m.mu.RLock()
+	path := m.configPath
+	secret := m.securitySecret
+	siteOpsSvc := m.siteOpsSvc
+	proxyCfg := m.proxyConfig
+	upstreamCfg := m.upstreamConfig
+	m.mu.RUnlock()
+
+	cfg, err := config.LoadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Auth.Enabled = true
+	cfg.Auth.Username = username
+	cfg.Auth.Password = password
+	if cfg.Auth.SessionTTLHours <= 0 {
+		cfg.Auth.SessionTTLHours = 168
+	}
+
+	authSvc, err := BuildAuth(cfg.Auth, secret)
+	if err != nil {
+		return nil, err
+	}
+	if err := config.Save(path, cfg); err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	m.auth = authSvc
+	m.mu.Unlock()
+
+	if siteOpsSvc != nil {
+		siteOpsSvc.ApplyRuntimeConfig(authSvc != nil, cfg.SiteOps.WithDefaults(), proxyCfg, upstreamCfg)
+	}
+	if m.log != nil {
+		m.log.Info("admin credentials initialized", "username", username)
+	}
+	return authSvc, nil
+}
+
+// BuildAuth 根据 AuthConfig 与回退密钥构建认证服务；关闭鉴权时返回 nil, nil。
+func BuildAuth(cfg config.AuthConfig, securitySecret string) (*auth.Service, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -282,11 +328,12 @@ func buildAuth(cfg config.AuthConfig, securitySecret string) (*auth.Service, err
 	if tokenSecret == "" {
 		tokenSecret = securitySecret
 	}
-	svc, err := auth.New(
+	svc, err := auth.NewWithOptions(
 		cfg.Username,
 		cfg.Password,
 		tokenSecret,
 		time.Duration(cfg.SessionTTLHours)*time.Hour,
+		cfg.IsDefaultPassword(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("init auth: %w", err)

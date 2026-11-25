@@ -80,19 +80,29 @@ type SecurityConfig struct {
 	AppSecret string `mapstructure:"appSecret" yaml:"appSecret" json:"appSecret"`
 }
 
+const (
+	DefaultAuthUsername = "admin"
+	DefaultAuthPassword = "admin_ops"
+)
+
 // AuthConfig 后台单用户登录配置。
 //
-// Enabled = false（默认）时整套鉴权被关掉：/api/* 全部免 token，前端检测后跳过登录页。
-// 适合纯内网 / 反代后面的部署。需要公网暴露时必须显式 Enabled=true 并设强密码。
+// Enabled 默认开启（true），默认初始化账号密码为 admin / admin_ops。
+// 首次使用默认密码登录后，前端与中间件会强制要求重新设置账号密码后方可使用。
+// 如确需纯内网免鉴权运行，可显式设置 AUTH_ENABLED=false 或在 config.yaml 中将 auth.enabled 设为 false。
 //
-// Enabled=true 时 Username/Password 是写死的管理员凭据，TokenSecret 用于签发 HMAC token。
-// 如果 TokenSecret 为空，会回退使用 Security.AppSecret，保证有合理默认。
+// TokenSecret 用于签发 HMAC token；为空时回退使用 Security.AppSecret。
 type AuthConfig struct {
 	Enabled         bool   `mapstructure:"enabled" yaml:"enabled" json:"enabled"`
 	Username        string `mapstructure:"username" yaml:"username" json:"username"`
 	Password        string `mapstructure:"password" yaml:"password" json:"password"`
 	TokenSecret     string `mapstructure:"tokenSecret" yaml:"tokenSecret" json:"tokenSecret"`
 	SessionTTLHours int    `mapstructure:"sessionTTLHours" yaml:"sessionTTLHours" json:"sessionTTLHours"`
+}
+
+// IsDefaultPassword 判断当前配置是否仍在使用默认初始密码 admin_ops。
+func (a AuthConfig) IsDefaultPassword() bool {
+	return a.Enabled && a.Password == DefaultAuthPassword
 }
 
 type SchedulerConfig struct {
@@ -609,6 +619,15 @@ func load(path string, withEnv bool) (*Config, string, error) {
 	if err := v.Unmarshal(cfg); err != nil {
 		return nil, "", fmt.Errorf("unmarshal config: %w", err)
 	}
+	// 若旧 .env 将 ADMIN_USERNAME / ADMIN_PASSWORD 留空，首次引导且开启鉴权时回落默认初始凭据。
+	if withEnv && !fileLoaded && cfg.Auth.Enabled {
+		if strings.TrimSpace(cfg.Auth.Username) == "" {
+			cfg.Auth.Username = DefaultAuthUsername
+		}
+		if cfg.Auth.Password == "" {
+			cfg.Auth.Password = DefaultAuthPassword
+		}
+	}
 	cfg.Upstream = cfg.Upstream.WithDefaults()
 	cfg.Gateway = cfg.Gateway.WithDefaults()
 	cfg.Pricing = cfg.Pricing.WithDefaults()
@@ -730,8 +749,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("scheduler.retention.siteOpsAccountWindowSamplesDays", 7)
 	v.SetDefault("scheduler.retention.siteOpsMailBatchesDays", 30)
 
-	v.SetDefault("auth.enabled", false)
-	v.SetDefault("auth.username", "admin")
+	v.SetDefault("auth.enabled", true)
+	v.SetDefault("auth.username", DefaultAuthUsername)
+	v.SetDefault("auth.password", DefaultAuthPassword)
 	v.SetDefault("auth.sessionTTLHours", 168) // 7 天
 
 	// 通知去抖：不过滤涨跌幅、balance_low 1h 内不重复、失败重试 3 次。

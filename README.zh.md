@@ -412,16 +412,16 @@ DATABASE_NAME=upstreamops
 
 ```env
 APP_SECRET=please-change-me-to-a-long-random-secret-32bytes-min
-AUTH_ENABLED=false
+AUTH_ENABLED=true
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=
+ADMIN_PASSWORD=admin_ops
 AUTH_TOKEN_SECRET=
 ```
 
 - `APP_SECRET`：主密钥，必填。
-- `AUTH_ENABLED`：是否启用后台登录。
-- `ADMIN_USERNAME`：后台管理员账号。
-- `ADMIN_PASSWORD`：后台管理员密码。
+- `AUTH_ENABLED`：是否启用后台登录（默认开启）。
+- `ADMIN_USERNAME`：后台初始管理员账号（默认 `admin`）。
+- `ADMIN_PASSWORD`：后台初始管理员密码（默认 `admin_ops`，首次登录后强制重设账号密码方可使用）。
 - `AUTH_TOKEN_SECRET`：登录 Token 签名密钥；留空时使用 `APP_SECRET`。
 
 ## 本地开发

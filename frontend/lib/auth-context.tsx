@@ -16,16 +16,24 @@ import {
   type ApiError,
 } from "@/lib/api"
 
-type AuthStatus = "loading" | "anonymous" | "authenticated" | "unreachable"
+type AuthStatus =
+  | "loading"
+  | "anonymous"
+  | "setup_required"
+  | "authenticated"
+  | "unreachable"
 
 interface AuthContextValue {
   status: AuthStatus
   username: string | null
   /** 后端关闭了鉴权（AUTH_ENABLED=false），整套 UI 当作"已登录"渲染。 */
   authDisabled: boolean
+  /** 当前是否必须完成首次登录后的账号密码重设。 */
+  mustChangeCredentials: boolean
   /** 重新探测 /auth/me。后端暂时连不上时用，不要把它当成登录。 */
   retry: () => void
   login: (username: string, password: string) => Promise<void>
+  completeCredentialSetup: (username: string, password: string) => Promise<void>
   logout: () => void
 }
 
@@ -36,11 +44,13 @@ interface LoginResponse {
   expires_at?: number
   username: string
   auth_disabled?: boolean
+  must_change_credentials?: boolean
 }
 
 interface MeResponse {
   username: string
   auth_disabled?: boolean
+  must_change_credentials?: boolean
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -48,6 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading")
   const [username, setUsername] = useState<string | null>(null)
   const [authDisabled, setAuthDisabled] = useState(false)
+  const [mustChangeCredentials, setMustChangeCredentials] = useState(false)
   const [probeGeneration, setProbeGeneration] = useState(0)
 
   useEffect(() => {
@@ -59,6 +70,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 后端关了鉴权：清掉本地任何遗留 token，避免下次开启时困惑
           setToken(null)
           setAuthDisabled(true)
+          setMustChangeCredentials(false)
           setUsername(me.username)
           setStatus("authenticated")
           return
@@ -66,7 +78,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // 后端开启鉴权：me 成功说明现有 token 仍有效
         setAuthDisabled(false)
         setUsername(me.username)
-        setStatus("authenticated")
+        const needSetup = Boolean(me.must_change_credentials)
+        setMustChangeCredentials(needSetup)
+        setStatus(needSetup ? "setup_required" : "authenticated")
       })
       .catch((err: unknown) => {
         if (cancelled) return
@@ -75,6 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (statusCode === 401) {
           setToken(null)
           setAuthDisabled(false)
+          setMustChangeCredentials(false)
           setUsername(null)
           setStatus("anonymous")
           return
@@ -90,6 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // 鉴权关闭时不可能拿到 401，这里也无害。
   useEffect(() => {
     setUnauthorizedHandler(() => {
+      setMustChangeCredentials(false)
       setUsername(null)
       setStatus("anonymous")
     })
@@ -110,24 +126,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (res.token) {
       setToken(res.token)
     }
-    if (res.auth_disabled) {
-      setAuthDisabled(true)
-    }
+    const disabled = Boolean(res.auth_disabled)
+    const needSetup = !disabled && Boolean(res.must_change_credentials)
+    setAuthDisabled(disabled)
+    setMustChangeCredentials(needSetup)
     setUsername(res.username)
-    setStatus("authenticated")
+    setStatus(needSetup ? "setup_required" : "authenticated")
+  }, [])
+
+  const completeCredentialSetup = useCallback(async (u: string, p: string) => {
+    const res = await apiFetch<LoginResponse>("/auth/setup", {
+      method: "POST",
+      body: JSON.stringify({ username: u, password: p }),
+      skipAuthErrorHandler: true,
+    })
+    if (res.token) {
+      setToken(res.token)
+    }
+    setAuthDisabled(false)
+    setMustChangeCredentials(Boolean(res.must_change_credentials))
+    setUsername(res.username)
+    setStatus(res.must_change_credentials ? "setup_required" : "authenticated")
   }, [])
 
   const logout = useCallback(() => {
     // 鉴权关闭时 logout 按钮在 UI 上不会展示，这里仍保留兜底逻辑
     apiFetch("/auth/logout", { method: "POST" }).catch(() => {})
     setToken(null)
+    setMustChangeCredentials(false)
     setUsername(null)
     setStatus("anonymous")
   }, [])
 
   const value = useMemo(
-    () => ({ status, username, authDisabled, retry, login, logout }),
-    [status, username, authDisabled, retry, login, logout],
+    () => ({
+      status,
+      username,
+      authDisabled,
+      mustChangeCredentials,
+      retry,
+      login,
+      completeCredentialSetup,
+      logout,
+    }),
+    [
+      status,
+      username,
+      authDisabled,
+      mustChangeCredentials,
+      retry,
+      login,
+      completeCredentialSetup,
+      logout,
+    ],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

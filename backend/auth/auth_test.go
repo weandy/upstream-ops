@@ -84,3 +84,57 @@ func TestLoginRateLimiterBlocksBruteForceAndResetsOnSuccess(t *testing.T) {
 		t.Fatalf("expected reset failure count after success")
 	}
 }
+
+func TestMiddlewareEnforcesMustChangeCredentialsAndTokenCredVersion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	secret := "secret-key-32-bytes-long!!!!!!!!"
+	svc, err := NewWithOptions("admin", "admin_ops", secret, time.Hour, true)
+	if err != nil {
+		t.Fatalf("new auth service: %v", err)
+	}
+	tok, _, err := svc.Login("admin", "admin_ops")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	r := gin.New()
+	r.Use(svc.Middleware())
+	r.GET("/api/auth/me", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+	r.POST("/api/auth/setup", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+	r.GET("/api/channels", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+
+	// 1. 携带默认凭据 token 访问 /api/auth/me 和 /api/auth/setup 允许通过。
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/auth/me"},
+		{http.MethodPost, "/api/auth/setup"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s expected 200 during setup, got %d body=%s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+
+	// 2. 业务接口必须返回 403，禁止绕过初始化。
+	reqBiz := httptest.NewRequest(http.MethodGet, "/api/channels", nil)
+	reqBiz.Header.Set("Authorization", "Bearer "+tok)
+	recBiz := httptest.NewRecorder()
+	r.ServeHTTP(recBiz, reqBiz)
+	if recBiz.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for /api/channels before setup, got %d body=%s", recBiz.Code, recBiz.Body.String())
+	}
+
+	// 3. 即使保留同一用户名 admin 仅修改密码，旧 token 也必须因凭据版本变化而失效。
+	svcUpdated, err := NewWithOptions("admin", "new-strong-pass", secret, time.Hour, false)
+	if err != nil {
+		t.Fatalf("new updated service: %v", err)
+	}
+	if _, err := svcUpdated.Verify(tok); err == nil {
+		t.Fatalf("expected old token to be rejected after password change")
+	}
+}

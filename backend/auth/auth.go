@@ -23,15 +23,22 @@ import (
 
 // Service 单管理员登录服务。
 type Service struct {
-	username string
-	password string
-	secret   []byte
-	tokenTTL time.Duration
+	username              string
+	password              string
+	credVer               string
+	mustChangeCredentials bool
+	secret                []byte
+	tokenTTL              time.Duration
 }
 
 // New 构造 Service。secret 推荐 32 字节以上；若为空报错。
 // 调用方应在 secret 为空时回退到 APP_SECRET。
 func New(username, password, secret string, ttl time.Duration) (*Service, error) {
+	return NewWithOptions(username, password, secret, ttl, false)
+}
+
+// NewWithOptions 构造 Service，并指定是否要求首次登录后强制修改账号密码。
+func NewWithOptions(username, password, secret string, ttl time.Duration, mustChangeCredentials bool) (*Service, error) {
 	if username == "" || password == "" {
 		return nil, errors.New("auth username / password are required")
 	}
@@ -41,11 +48,14 @@ func New(username, password, secret string, ttl time.Duration) (*Service, error)
 	if ttl <= 0 {
 		ttl = 7 * 24 * time.Hour
 	}
+	sum := sha256.Sum256([]byte("auth-cred:" + username + "\x00" + password))
 	return &Service{
-		username: username,
-		password: password,
-		secret:   []byte(secret),
-		tokenTTL: ttl,
+		username:              username,
+		password:              password,
+		credVer:               fmt.Sprintf("%x", sum[:8]),
+		mustChangeCredentials: mustChangeCredentials,
+		secret:                []byte(secret),
+		tokenTTL:              ttl,
 	}, nil
 }
 
@@ -53,6 +63,7 @@ func New(username, password, secret string, ttl time.Duration) (*Service, error)
 type claims struct {
 	Sub string `json:"sub"`
 	Exp int64  `json:"exp"`
+	Ver string `json:"ver,omitempty"`
 }
 
 // Login 校验账号密码，返回新的 token 与过期时间。
@@ -62,7 +73,7 @@ func (s *Service) Login(username, password string) (string, time.Time, error) {
 		return "", time.Time{}, errors.New("invalid username or password")
 	}
 	expiresAt := time.Now().Add(s.tokenTTL)
-	c := claims{Sub: s.username, Exp: expiresAt.Unix()}
+	c := claims{Sub: s.username, Exp: expiresAt.Unix(), Ver: s.credVer}
 	tok, err := s.sign(c)
 	if err != nil {
 		return "", time.Time{}, err
@@ -98,6 +109,9 @@ func (s *Service) Verify(token string) (string, error) {
 	if c.Sub != s.username {
 		return "", errors.New("unknown subject")
 	}
+	if subtle.ConstantTimeCompare([]byte(c.Ver), []byte(s.credVer)) != 1 {
+		return "", errors.New("credentials changed")
+	}
 	return c.Sub, nil
 }
 
@@ -119,10 +133,14 @@ func (s *Service) mac(payload []byte) []byte {
 // Username 返回当前 Service 绑定的管理员账号（前端展示用）。
 func (s *Service) Username() string { return s.username }
 
+// MustChangeCredentials 返回当前是否仍处于必须重设账号密码的初始状态。
+func (s *Service) MustChangeCredentials() bool { return s.mustChangeCredentials }
+
 // TokenTTL 返回登录 token 的有效期。
 func (s *Service) TokenTTL() time.Duration { return s.tokenTTL }
 
-// Middleware 校验 Authorization 头。不通过返回 401。
+// Middleware 校验 Authorization 头。不通过返回 401；
+// 若仍在使用初始凭据，除认证状态与初始化接口外全部返回 403。
 //
 // 路径白名单（不需要鉴权）：
 //   - "/healthz"
@@ -133,6 +151,11 @@ func (s *Service) Middleware() gin.HandlerFunc {
 		"/healthz":        {},
 		"/api/version":    {},
 		"/api/auth/login": {},
+	}
+	setupAllowed := map[string]struct{}{
+		"/api/auth/me":     {},
+		"/api/auth/logout": {},
+		"/api/auth/setup":  {},
 	}
 	return func(c *gin.Context) {
 		if _, ok := whitelist[c.FullPath()]; ok {
@@ -152,6 +175,17 @@ func (s *Service) Middleware() gin.HandlerFunc {
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
+		}
+		if s.mustChangeCredentials {
+			_, okFull := setupAllowed[c.FullPath()]
+			_, okPath := setupAllowed[c.Request.URL.Path]
+			if !okFull && !okPath {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"error": "首次登录必须先重新设置账号和密码",
+					"code":  "must_change_credentials",
+				})
+				return
+			}
 		}
 		c.Set("authSubject", sub)
 		c.Next()

@@ -401,16 +401,16 @@ DATABASE_NAME=upstreamops
 
 ```env
 APP_SECRET=please-change-me-to-a-long-random-secret-32bytes-min
-AUTH_ENABLED=false
+AUTH_ENABLED=true
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=
+ADMIN_PASSWORD=admin_ops
 AUTH_TOKEN_SECRET=
 ```
 
 - `APP_SECRET`: required master secret.
-- `AUTH_ENABLED`: enables admin login.
-- `ADMIN_USERNAME`: admin username.
-- `ADMIN_PASSWORD`: admin password.
+- `AUTH_ENABLED`: enables admin login (enabled by default).
+- `ADMIN_USERNAME`: initial admin username (defaults to `admin`).
+- `ADMIN_PASSWORD`: initial admin password (defaults to `admin_ops`; first login forces resetting credentials before using the dashboard).
 - `AUTH_TOKEN_SECRET`: token signing secret. Falls back to `APP_SECRET` when empty.
 
 ## Local Development

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/bejix/upstream-ops/backend/api"
-	"github.com/bejix/upstream-ops/backend/auth"
 	"github.com/bejix/upstream-ops/backend/channel"
 	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/bejix/upstream-ops/backend/crypto"
@@ -66,25 +65,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Auth：默认禁用（AUTH_ENABLED=false），所有 /api/* 免 token；
-	// 显式开启时账号/密码必填，token secret 缺省回退到 AppSecret。
-	var authSvc *auth.Service
-	if cfg.Auth.Enabled {
-		tokenSecret := cfg.Auth.TokenSecret
-		if tokenSecret == "" {
-			tokenSecret = cfg.Security.AppSecret
+	// Auth：默认开启（admin / admin_ops），首次登录后强制要求修改账号密码；
+	// 显式关闭（AUTH_ENABLED=false 或 config.yaml 中 auth.enabled: false）时免 token。
+	authSvc, err := runtimeconfig.BuildAuth(cfg.Auth, cfg.Security.AppSecret)
+	if err != nil {
+		log.Error("init auth failed (set ADMIN_USERNAME / ADMIN_PASSWORD or AUTH_ENABLED=false)", "err", err)
+		os.Exit(1)
+	}
+	if authSvc != nil {
+		if authSvc.MustChangeCredentials() {
+			log.Warn("auth enabled with default credentials; credential change required on first login", "username", cfg.Auth.Username)
+		} else {
+			log.Info("auth enabled", "username", cfg.Auth.Username)
 		}
-		authSvc, err = auth.New(
-			cfg.Auth.Username,
-			cfg.Auth.Password,
-			tokenSecret,
-			time.Duration(cfg.Auth.SessionTTLHours)*time.Hour,
-		)
-		if err != nil {
-			log.Error("init auth failed (set ADMIN_USERNAME / ADMIN_PASSWORD or AUTH_ENABLED=false)", "err", err)
-			os.Exit(1)
-		}
-		log.Info("auth enabled", "username", cfg.Auth.Username)
 	} else {
 		log.Warn("auth disabled — all /api/* endpoints are open; set AUTH_ENABLED=true for production exposure")
 	}

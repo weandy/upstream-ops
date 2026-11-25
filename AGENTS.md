@@ -29,7 +29,7 @@
 - 本机 Go 是 1.26.1，已满足 `go.mod` 的 `go 1.23`。不要再设 `GOTOOLCHAIN=go1.23.0`。编译：`$env:CGO_ENABLED='0'; go build -o D:\AI\upstream-ops\upstream-ops.exe ./cmd/server`。
 - Windows 上 exe 被占用时，先结束监听 8418 的进程再编译。用能留住后台进程的方式启动，并确认日志里有 `http server listening`。
 - 改 Go（包括 `backend/embed/templates.go`）后必须重新编译并重启。Vite 热更新看不到服务端渲染。exe 里嵌的是 `web/dist`；只改前端源码时，用 3010 看新界面，不要误以为 8418 里的管理台已经更新。
-- `auth.enabled` 默认关闭，密码为空。`/api/auth/me` 只有 401 才进登录页；网络失败或 5xx 应显示后端没连上。
+- `auth.enabled` 默认开启（默认初始凭据 `admin` / `admin_ops`，首次登录后强制重设账号密码）；本地 `config.yaml` 如显式设为 `false` 则免登录。`/api/auth/me` 只有 401 才进登录页；网络失败或 5xx 应显示后端没连上。
 - 界面时间是 UTC+8，库里的时间是 UTC。重启会打断正在跑的探测，但不要删库。
 
 ## 已经落地的行为

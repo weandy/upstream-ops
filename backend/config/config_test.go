@@ -19,6 +19,22 @@ func TestLoadAppliesUpstreamDefaults(t *testing.T) {
 	if !cfg.Pricing.Enabled || cfg.Pricing.RemoteURL != DefaultPricingRemoteURL {
 		t.Fatalf("pricing = %#v", cfg.Pricing)
 	}
+	if !cfg.Auth.Enabled || cfg.Auth.Username != DefaultAuthUsername || cfg.Auth.Password != DefaultAuthPassword || !cfg.Auth.IsDefaultPassword() {
+		t.Fatalf("expected default auth enabled with admin/admin_ops, got %+v", cfg.Auth)
+	}
+}
+
+func TestBootstrapEmptyAdminEnvFallsBackToDefaultCredentials(t *testing.T) {
+	t.Setenv("ADMIN_USERNAME", "")
+	t.Setenv("ADMIN_PASSWORD", "")
+
+	cfg, _, err := LoadWithPath(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("LoadWithPath: %v", err)
+	}
+	if !cfg.Auth.Enabled || cfg.Auth.Username != DefaultAuthUsername || cfg.Auth.Password != DefaultAuthPassword {
+		t.Fatalf("expected empty env bootstrap fallback to admin/admin_ops, got %+v", cfg.Auth)
+	}
 }
 
 func TestUpstreamConfigWithDefaultsKeepsCustomUserAgent(t *testing.T) {
