@@ -315,7 +315,7 @@ curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/in
 docker run -d \
   --name upstream-ops \
   --restart unless-stopped \
-  -p 8080:8418 \
+  -p 8418:8418 \
   -v "$(pwd)/data:/app/data" \
   -e TZ=Asia/Shanghai \
   -e APP_SECRET="$(openssl rand -hex 32)" \
@@ -362,7 +362,7 @@ docker compose up -d
 默认访问地址：
 
 ```text
-http://localhost:8080
+http://localhost:8418
 ```
 
 默认数据文件在容器内：
@@ -413,7 +413,7 @@ MYSQL_PORT=33069
 ### 基础配置
 
 ```env
-HTTP_PORT=8080
+HTTP_PORT=8418
 IMAGE_TAG=latest
 SERVER_MODE=release
 LOG_LEVEL=info
@@ -917,7 +917,7 @@ POST /api/channels/:id/clear-login-info
 5. **创建网关密钥**
    把明文 `sk-...` 交给客户端（只显示一次，之后需用「揭示」）。
 6. **客户端**
-   Base URL 指向本服务（如 `http://host:8080`），路径用 `/v1/...`，鉴权见下。
+   Base URL 指向本服务（如 `http://host:8418`），路径用 `/v1/...`，鉴权见下。
 
 ### 客户端鉴权
 
@@ -1072,7 +1072,7 @@ x-api-key: sk-...
 **Chat 客户端 → Claude 上游（路由协议 anthropic）**
 
 ```bash
-curl -s http://127.0.0.1:8080/v1/chat/completions \
+curl -s http://127.0.0.1:8418/v1/chat/completions \
   -H "Authorization: Bearer sk-你的网关密钥" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1085,7 +1085,7 @@ curl -s http://127.0.0.1:8080/v1/chat/completions \
 **Anthropic 客户端**
 
 ```bash
-curl -s http://127.0.0.1:8080/v1/messages \
+curl -s http://127.0.0.1:8418/v1/messages \
   -H "x-api-key: sk-你的网关密钥" \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
@@ -1099,7 +1099,7 @@ curl -s http://127.0.0.1:8080/v1/messages \
 **Responses 客户端（流式）**
 
 ```bash
-curl -sN http://127.0.0.1:8080/v1/responses \
+curl -sN http://127.0.0.1:8418/v1/responses \
   -H "Authorization: Bearer sk-你的网关密钥" \
   -H "Content-Type: application/json" \
   -d '{

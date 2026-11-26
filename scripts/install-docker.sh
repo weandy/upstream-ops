@@ -4,7 +4,7 @@ set -euo pipefail
 # UpstreamOps 一键 Docker 部署 / 升级脚本
 # 支持直接通过 curl | bash 运行，也可带参数：
 #   curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash -s -- --port 8080 --tag latest
+#   curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash -s -- --port 8418 --tag latest
 
 REPO_RAW_BASE="${UPSTREAM_OPS_RAW_BASE:-https://raw.githubusercontent.com/weandy/upstream-ops/main}"
 DEFAULT_DIR="/opt/upstream-ops"
@@ -27,7 +27,7 @@ UpstreamOps 一键 Docker 部署脚本
 
 选项:
   --dir <路径>       安装与数据目录（root 默认 /opt/upstream-ops，普通用户默认 ~/upstream-ops）
-  --port <端口>      宿主机对外 HTTP 端口（新安装默认 8080）
+  --port <端口>      宿主机对外 HTTP 端口（新安装默认 8418）
   --tag <标签>       Docker 镜像标签（如 latest、v0.4.1、edge；新安装默认 latest）
   --db <类型>        数据库类型：sqlite（默认）| mysql | postgres
   --no-pull          跳过 docker compose pull，直接启动/重建容器
@@ -166,7 +166,7 @@ if [[ ! -f "$INSTALL_DIR/.env" ]]; then
   chmod 600 "$INSTALL_DIR/.env" || true
   SECRET="$(gen_secret)"
   set_env_kv "$INSTALL_DIR/.env" "APP_SECRET" "$SECRET"
-  set_env_kv "$INSTALL_DIR/.env" "HTTP_PORT" "${HTTP_PORT:-8080}"
+  set_env_kv "$INSTALL_DIR/.env" "HTTP_PORT" "${HTTP_PORT:-8418}"
   set_env_kv "$INSTALL_DIR/.env" "IMAGE_TAG" "${IMAGE_TAG:-latest}"
   log "已生成 .env 并自动创建随机 APP_SECRET。"
 else
@@ -216,8 +216,8 @@ fi
 log "启动容器..."
 "${COMPOSE_CMD[@]}" "${COMPOSE_FILES[@]}" up -d
 
-FINAL_PORT="$(get_env_val "$INSTALL_DIR/.env" "HTTP_PORT" || echo 8080)"
-FINAL_PORT="${FINAL_PORT:-8080}"
+FINAL_PORT="$(get_env_val "$INSTALL_DIR/.env" "HTTP_PORT" || echo 8418)"
+FINAL_PORT="${FINAL_PORT:-8418}"
 
 log "等待服务健康检查就绪 (http://127.0.0.1:${FINAL_PORT}/healthz)..."
 READY="false"
