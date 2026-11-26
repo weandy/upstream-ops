@@ -238,6 +238,10 @@ func (g *OutboundGuard) ValidateBaseURL(rawURL string) (string, error) {
 }
 
 func (g *OutboundGuard) resolveTarget(ctx context.Context, network, addr string) ([]string, error) {
+	return g.resolveTargetForScheme(ctx, "", network, addr)
+}
+
+func (g *OutboundGuard) resolveTargetForScheme(ctx context.Context, scheme, network, addr string) ([]string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, ErrOriginNotAllowed
@@ -256,9 +260,19 @@ func (g *OutboundGuard) resolveTarget(ctx context.Context, network, addr string)
 		isLoopbackHost = isLocalhostName(host)
 	}
 	p := g.currentPolicy()
-	_, httpAllowed := p.origins[origin{"http", host, port}]
-	_, httpsAllowed := p.origins[origin{"https", host, port}]
-	originAllowed := httpAllowed || httpsAllowed
+	var originAllowed bool
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "http":
+		_, originAllowed = p.origins[origin{"http", host, port}]
+	case "https":
+		_, originAllowed = p.origins[origin{"https", host, port}]
+	case "":
+		_, httpAllowed := p.origins[origin{"http", host, port}]
+		_, httpsAllowed := p.origins[origin{"https", host, port}]
+		originAllowed = httpAllowed || httpsAllowed
+	default:
+		return nil, ErrOriginNotAllowed
+	}
 	if literalErr != nil {
 		if isLoopbackHost && !p.allowLoopback && !originAllowed {
 			return nil, ErrOriginNotAllowed
@@ -291,7 +305,11 @@ func (g *OutboundGuard) resolveTarget(ctx context.Context, network, addr string)
 }
 
 func (g *OutboundGuard) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	targets, err := g.resolveTarget(ctx, network, addr)
+	return g.DialContextForScheme(ctx, "", network, addr)
+}
+
+func (g *OutboundGuard) DialContextForScheme(ctx context.Context, scheme, network, addr string) (net.Conn, error) {
+	targets, err := g.resolveTargetForScheme(ctx, scheme, network, addr)
 	if err != nil {
 		return nil, err
 	}

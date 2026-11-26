@@ -199,3 +199,17 @@ func TestOutboundDialChecksResolvedAddresses(t *testing.T) {
 	g.UpdatePolicy(false, nil, []string{"127.0.0.1/32"})
 	dial("portal.example.com:" + port)
 }
+
+func TestOutboundSchemeSpecificOriginExemption(t *testing.T) {
+	g := NewOutboundGuard(false, []string{"http://sub2api:8080"}, nil)
+	g.lookupIP = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("172.18.0.3")}, nil
+	}
+	targets, err := g.resolveTargetForScheme(context.Background(), "http", "tcp", "sub2api:8080")
+	if err != nil || len(targets) != 1 || targets[0] != "172.18.0.3:8080" {
+		t.Fatalf("http scheme should be permitted: targets=%v err=%v", targets, err)
+	}
+	if _, err := g.resolveTargetForScheme(context.Background(), "https", "tcp", "sub2api:8080"); !errors.Is(err, ErrOriginNotAllowed) {
+		t.Fatalf("http exemption must not permit https scheme: got %v", err)
+	}
+}

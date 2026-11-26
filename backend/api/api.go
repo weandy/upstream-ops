@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/bejix/upstream-ops/backend/channel"
 	"github.com/bejix/upstream-ops/backend/connector"
@@ -87,11 +88,19 @@ func Register(r *gin.Engine, d *Deps) {
 	r.GET("/healthz", func(c *gin.Context) {
 		sqlDB, err := d.DB.DB()
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"status": "down", "err": err.Error()})
+			if d.Log != nil {
+				d.Log.Warn("healthz db handle failed", "err", err)
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"status": "down"})
 			return
 		}
-		if err := sqlDB.Ping(); err != nil {
-			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "db_down", "err": err.Error()})
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		if err := sqlDB.PingContext(ctx); err != nil {
+			if d.Log != nil {
+				d.Log.Warn("healthz db ping failed", "err", err)
+			}
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "db_down"})
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})

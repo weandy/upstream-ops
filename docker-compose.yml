@@ -12,20 +12,25 @@ services:
       DATABASE_DRIVER: sqlite
       DATABASE_PATH: /app/data/upstream-ops.db
       SERVER_MODE: ${SERVER_MODE:-release}
+      SERVER_TRUSTED_PROXIES: ${SERVER_TRUSTED_PROXIES:-}
+      SERVER_REQUIRE_SECURE_AUTH: ${SERVER_REQUIRE_SECURE_AUTH:-true}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       APP_SECRET: ${APP_SECRET:?APP_SECRET is required, set it in .env}
       # 2. 首次启动初始化种子（仅当 /app/data/config.yaml 尚不存在时生效；
       #    文件生成后，鉴权等动态业务配置一律以 /app/data/config.yaml 为唯一真相源，页面修改重启不丢失）
       AUTH_ENABLED: ${AUTH_ENABLED:-true}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin_ops}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-}
     ports:
-      - "${HTTP_PORT:-8418}:8418"
+      - target: 8418
+        published: "${HTTP_PORT:-8418}"
+        host_ip: "${HTTP_BIND_IP:-0.0.0.0}"
+        protocol: tcp
     volumes:
       - ./data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8418/healthz >/dev/null"]
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8418/healthz >/dev/null"]
       interval: 15s
       timeout: 5s
       retries: 5

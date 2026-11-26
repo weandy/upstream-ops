@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,8 +50,20 @@ func main() {
 	log := logger.New(cfg.Log.Level, cfg.Log.Format)
 	log.Info("starting UpstreamOps", "port", cfg.Server.Port, "mode", cfg.Server.Mode)
 
+	if cfg.Server.RequireSecureAuth {
+		if err := config.ValidateSecureAuth(cfg.Auth, cfg.Security.AppSecret); err != nil {
+			log.Error("secure auth check failed", "err", err)
+			os.Exit(1)
+		}
+	}
+
 	if _, err := os.Stat(resolvedConfigPath); errors.Is(err, os.ErrNotExist) {
-		if err := config.Save(resolvedConfigPath, cfg); err != nil {
+		bootstrapCfg := *cfg
+		bootstrapCfg.Server.RequireSecureAuth = false
+		if strings.TrimSpace(os.Getenv("SERVER_TRUSTED_PROXIES")) != "" {
+			bootstrapCfg.Server.TrustedProxies = nil
+		}
+		if err := config.Save(resolvedConfigPath, &bootstrapCfg); err != nil {
 			log.Error("create config failed", "path", resolvedConfigPath, "err", err)
 			os.Exit(1)
 		}
@@ -191,12 +204,12 @@ func main() {
 	runtimeMgr.SetIntelligenceService(intelligenceSvc)
 	runtimeMgr.SetEmbedService(embedSvc)
 	runtimeMgr.SetSiteOpsService(siteOpsSvc)
+	runtimeMgr.SetRequireSecureAuth(cfg.Server.RequireSecureAuth)
 
-	gin.SetMode(cfg.Server.Mode)
-	router := gin.New()
-	router.Use(gin.Recovery())
-	if len(cfg.Server.TrustedProxies) > 0 {
-		_ = router.SetTrustedProxies(cfg.Server.TrustedProxies)
+	router, err := newRouter(cfg.Server)
+	if err != nil {
+		log.Error("init http router failed", "err", err)
+		os.Exit(1)
 	}
 
 	// 仅在嵌入了真实前端产物时挂载静态 handler。
@@ -260,4 +273,30 @@ func main() {
 		log.Error("http shutdown error", "err", err)
 	}
 	log.Info("bye")
+}
+
+func newRouter(cfg config.ServerConfig) (*gin.Engine, error) {
+	if strings.TrimSpace(cfg.Mode) != "" {
+		gin.SetMode(cfg.Mode)
+	}
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.TrustedPlatform = ""
+	if len(cfg.TrustedProxies) == 0 {
+		router.ForwardedByClientIP = false
+		if err := router.SetTrustedProxies(nil); err != nil {
+			return nil, fmt.Errorf("disable trusted proxies: %w", err)
+		}
+		return router, nil
+	}
+	proxies, err := config.ValidateTrustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	router.ForwardedByClientIP = true
+	router.RemoteIPHeaders = []string{"X-Forwarded-For"}
+	if err := router.SetTrustedProxies(proxies); err != nil {
+		return nil, fmt.Errorf("set trusted proxies: %w", err)
+	}
+	return router, nil
 }

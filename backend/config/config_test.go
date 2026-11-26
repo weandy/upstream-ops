@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -291,5 +293,102 @@ func TestLayeredConfigFileWinsForDynamicSectionsWhenFileExists(t *testing.T) {
 	}
 	if cold.Auth != hot.Auth || cold.App != hot.App || cold.Scheduler != hot.Scheduler || cold.SiteOps.AllowLoopback != hot.SiteOps.AllowLoopback {
 		t.Fatalf("cold start and hot reload diverged on dynamic sections:\ncold=%+v\nhot=%+v", cold, hot)
+	}
+}
+
+func TestTrustedProxiesEnvAndYAMLPrecedence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := Save(path, &Config{
+		Server: ServerConfig{
+			Port:           8418,
+			Mode:           "release",
+			TrustedProxies: []string{"172.18.0.1"},
+		},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// 1. SERVER_TRUSTED_PROXIES 未设置或为空时，保留 YAML 里的配置。
+	t.Setenv("SERVER_TRUSTED_PROXIES", "")
+	cfgYAML, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load with empty env: %v", err)
+	}
+	if len(cfgYAML.Server.TrustedProxies) != 1 || cfgYAML.Server.TrustedProxies[0] != "172.18.0.1" {
+		t.Fatalf("expected YAML trustedProxies preserved, got %#v", cfgYAML.Server.TrustedProxies)
+	}
+
+	// 2. SERVER_TRUSTED_PROXIES 非空时覆盖 YAML，并规范化 IPv4/IPv6/CIDR。
+	t.Setenv("SERVER_TRUSTED_PROXIES", " 127.0.0.1, 2001:db8::/32 , ::ffff:192.0.2.10, 127.0.0.1 ")
+	cfgEnv, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load with env override: %v", err)
+	}
+	want := []string{"127.0.0.1", "2001:db8::/32", "192.0.2.10"}
+	if len(cfgEnv.Server.TrustedProxies) != len(want) {
+		t.Fatalf("got %#v, want %#v", cfgEnv.Server.TrustedProxies, want)
+	}
+	for i := range want {
+		if cfgEnv.Server.TrustedProxies[i] != want[i] {
+			t.Fatalf("proxy[%d] = %q, want %q", i, cfgEnv.Server.TrustedProxies[i], want[i])
+		}
+	}
+
+	// 3. 拒绝非法项、带 zone 地址与 0.0.0.0/0 / ::/0 全地址段。
+	for _, bad := range []string{"bad-ip", "fe80::1%eth0", "0.0.0.0", "::", "0.0.0.0/0", "::/0", ","} {
+		t.Setenv("SERVER_TRUSTED_PROXIES", bad)
+		if _, err := Load(path); err == nil {
+			t.Fatalf("expected error for SERVER_TRUSTED_PROXIES=%q", bad)
+		}
+	}
+
+	// 4. YAML 显式清空为 [] 时结果为空。
+	if err := Save(path, &Config{Server: ServerConfig{Port: 8418, TrustedProxies: nil}}); err != nil {
+		t.Fatalf("Save empty: %v", err)
+	}
+	t.Setenv("SERVER_TRUSTED_PROXIES", "")
+	cfgEmpty, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load empty yaml: %v", err)
+	}
+	if len(cfgEmpty.Server.TrustedProxies) != 0 {
+		t.Fatalf("expected empty trustedProxies, got %#v", cfgEmpty.Server.TrustedProxies)
+	}
+}
+
+func TestRequireSecureAuthEnvAndValidation(t *testing.T) {
+	t.Setenv("SERVER_REQUIRE_SECURE_AUTH", "true")
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Server.RequireSecureAuth {
+		t.Fatalf("expected Server.RequireSecureAuth=true from env")
+	}
+
+	goodSecret := strings.Repeat("a1", 16)
+	validAuth := AuthConfig{Enabled: true, Username: "admin", Password: "StrongPassword123"}
+	if err := ValidateSecureAuth(validAuth, goodSecret); err != nil {
+		t.Fatalf("unexpected error for valid config: %v", err)
+	}
+
+	cases := []struct {
+		name   string
+		auth   AuthConfig
+		secret string
+	}{
+		{"auth disabled", AuthConfig{Enabled: false, Username: "admin", Password: "StrongPassword123"}, goodSecret},
+		{"empty username", AuthConfig{Enabled: true, Username: "   ", Password: "StrongPassword123"}, goodSecret},
+		{"empty password", AuthConfig{Enabled: true, Username: "admin", Password: ""}, goodSecret},
+		{"default password", AuthConfig{Enabled: true, Username: "admin", Password: DefaultAuthPassword}, goodSecret},
+		{"short password", AuthConfig{Enabled: true, Username: "admin", Password: "12345"}, goodSecret},
+		{"empty secret", validAuth, ""},
+		{"short secret", validAuth, "too-short-secret"},
+		{"placeholder secret", validAuth, "please-change-me-to-a-long-random-secret-32bytes-min"},
+	}
+	for _, tc := range cases {
+		if err := ValidateSecureAuth(tc.auth, tc.secret); !errors.Is(err, ErrInsecureAuth) {
+			t.Fatalf("%s: got err=%v, want ErrInsecureAuth", tc.name, err)
+		}
 	}
 }

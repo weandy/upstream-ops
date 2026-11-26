@@ -1,0 +1,16 @@
+# 可选 override：与同机 Sub2API 容器通过共享外部 Docker 网络直连互通。
+# 使用前请先创建外部网络并把 Sub2API 容器（别名为 sub2api）也加入该网络：
+#   docker network create sub2api-net
+#   docker network connect --alias sub2api sub2api-net <你的_sub2api_容器名>
+# 同时必须在 data/config.yaml 中显式配置 siteOps.allowedOrigins（例如 ["http://sub2api:8080"]，端口以对方容器监听端口为准）。
+# 启动示例：
+#   docker compose -f docker-compose.yml -f deploy/docker/compose.sub2api-network.yml up -d
+services:
+  app:
+    networks:
+      - default
+      - sub2api-net
+
+networks:
+  sub2api-net:
+    external: true

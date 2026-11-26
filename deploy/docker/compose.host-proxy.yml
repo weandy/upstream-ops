@@ -1,0 +1,8 @@
+# 可选 override：允许容器通过 host.docker.internal 访问宿主机上的代理或本地服务。
+# 注意：宿主机代理需要监听 Docker 网桥可达地址（不能仅监听 127.0.0.1），并做好来源网段与账号密码限制。
+# 启动示例：
+#   docker compose -f docker-compose.yml -f deploy/docker/compose.host-proxy.yml up -d
+services:
+  app:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -1,6 +1,7 @@
 package runtimeconfig
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -295,4 +296,60 @@ func TestApplyFromFileFailureDoesNotMutateLiveConfigAndStopStopsLatestScheduler(
 	mgr.Stop()
 	// 再次 Stop 必须幂等不 panic。
 	mgr.Stop()
+}
+
+func TestRequireSecureAuthBlocksInsecureApplyAndCredentialsUpdate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	secret := "0123456789abcdef0123456789abcdef"
+
+	validCfg := &config.Config{
+		Auth: config.AuthConfig{
+			Enabled:         true,
+			Username:        "owner",
+			Password:        "StrongPass#2026",
+			SessionTTLHours: 168,
+		},
+	}
+	if err := config.Save(path, validCfg); err != nil {
+		t.Fatalf("save valid config: %v", err)
+	}
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	authSvc, err := BuildAuth(validCfg.Auth, secret)
+	if err != nil {
+		t.Fatalf("BuildAuth: %v", err)
+	}
+	mgr := New(
+		path, secret, log, nil, nil, nil, authSvc, nil,
+		config.ProxyConfig{}, config.UpstreamConfig{}, config.GatewayConfig{},
+		func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
+			return scheduler.New(scfg, nil, nil, nil, nil, nil, nil, nil, nil, pcfg, log)
+		},
+	)
+	mgr.SetRequireSecureAuth(true)
+
+	if _, err := mgr.UpdateAuthCredentials("admin", config.DefaultAuthPassword); !errors.Is(err, config.ErrInsecureAuth) {
+		t.Fatalf("expected ErrInsecureAuth on default password setup, got %v", err)
+	}
+	if mgr.CurrentAuth().Username() != "owner" {
+		t.Fatalf("live auth mutated after failed UpdateAuthCredentials")
+	}
+
+	insecureCfg := &config.Config{
+		Auth: config.AuthConfig{
+			Enabled:  false,
+			Username: "owner",
+			Password: "StrongPass#2026",
+		},
+	}
+	if err := config.Save(path, insecureCfg); err != nil {
+		t.Fatalf("save insecure config: %v", err)
+	}
+	if _, err := mgr.ApplyFromFile(); !errors.Is(err, config.ErrInsecureAuth) {
+		t.Fatalf("expected ErrInsecureAuth on ApplyFromFile with auth disabled, got %v", err)
+	}
+	if mgr.CurrentAuth() == nil || mgr.CurrentAuth().Username() != "owner" {
+		t.Fatalf("live auth should remain intact after rejected ApplyFromFile")
+	}
 }

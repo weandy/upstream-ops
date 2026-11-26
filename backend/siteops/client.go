@@ -15,7 +15,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
-	"net/netip"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -688,7 +687,16 @@ func (c *Client) transport(req *http.Request, enabled bool, proxyCfg config.Prox
 			return dial(req.Context(), network, addr)
 		}
 	}
-	t := &http.Transport{DialContext: dialWith(c.guard.DialContext), DisableKeepAlives: true}
+	directDial := c.guard.DialContext
+	if sd, ok := c.guard.(interface {
+		DialContextForScheme(context.Context, string, string, string) (net.Conn, error)
+	}); ok {
+		scheme := req.URL.Scheme
+		directDial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return sd.DialContextForScheme(ctx, scheme, network, addr)
+		}
+	}
+	t := &http.Transport{DialContext: dialWith(directDial), DisableKeepAlives: true}
 	if !enabled || !proxyCfg.Enabled {
 		return t, nil
 	}
@@ -700,26 +708,31 @@ func (c *Client) transport(req *http.Request, enabled bool, proxyCfg config.Prox
 	if err != nil {
 		return nil, errProxyConfig
 	}
-	_, target, err := parseBaseURL(req.URL.String())
+	baseForCheck := (&url.URL{Scheme: req.URL.Scheme, Host: req.URL.Host}).String()
+	_, target, err := parseBaseURL(baseForCheck)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := netip.ParseAddr(target.host); err == nil {
-		t.DialContext, t.Proxy = dialWith((&net.Dialer{}).DialContext), http.ProxyURL(proxy)
-		return t, nil
-	}
-	resolver, ok := c.guard.(interface {
+	var targets []string
+	if resolver, ok := c.guard.(interface {
+		resolveTargetForScheme(context.Context, string, string, string) ([]string, error)
+	}); ok {
+		targets, err = resolver.resolveTargetForScheme(req.Context(), target.scheme, "tcp", net.JoinHostPort(target.host, target.port))
+	} else if resolver, ok := c.guard.(interface {
 		resolveTarget(context.Context, string, string) ([]string, error)
-	})
-	if !ok {
+	}); ok {
+		targets, err = resolver.resolveTarget(req.Context(), "tcp", net.JoinHostPort(target.host, target.port))
+	} else {
 		return nil, ErrOriginNotAllowed
 	}
-	targets, err := resolver.resolveTarget(req.Context(), "tcp", net.JoinHostPort(target.host, target.port))
 	if err != nil {
 		return nil, err
 	}
 	if proxy.Scheme == "socks5" {
 		// SOCKS uses the URL authority for the destination and the request Host for HTTP.
+		if req.Host == "" {
+			req.Host = req.URL.Host
+		}
 		req.URL.Host = targets[0]
 		t.DialContext, t.Proxy = dialWith((&net.Dialer{}).DialContext), http.ProxyURL(proxy)
 		t.TLSClientConfig = &tls.Config{ServerName: target.host}

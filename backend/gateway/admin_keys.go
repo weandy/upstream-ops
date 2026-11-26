@@ -35,6 +35,14 @@ func (a *AdminService) CreateKey(in CreateKeyInput) (*CreateKeyResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	whitelistJSON, err := ValidateIPRuleListJSON(in.IPWhitelistJSON)
+	if err != nil {
+		return nil, err
+	}
+	blacklistJSON, err := ValidateIPRuleListJSON(in.IPBlacklistJSON)
+	if err != nil {
+		return nil, err
+	}
 	item := &storage.GatewayKey{
 		GroupID:         in.GroupID,
 		Name:            name,
@@ -43,8 +51,8 @@ func (a *AdminService) CreateKey(in CreateKeyInput) (*CreateKeyResult, error) {
 		KeyCipher:       cipherText,
 		Status:          storage.GatewayKeyStatusActive,
 		Quota:           in.Quota,
-		IPWhitelistJSON: strings.TrimSpace(in.IPWhitelistJSON),
-		IPBlacklistJSON: strings.TrimSpace(in.IPBlacklistJSON),
+		IPWhitelistJSON: whitelistJSON,
+		IPBlacklistJSON: blacklistJSON,
 	}
 	if err := a.Keys.Create(item); err != nil {
 		return nil, err
@@ -79,10 +87,18 @@ func (a *AdminService) UpdateKey(id uint, in UpdateKeyInput) (*storage.GatewayKe
 		item.Quota = *in.Quota
 	}
 	if in.IPWhitelistJSON != nil {
-		item.IPWhitelistJSON = strings.TrimSpace(*in.IPWhitelistJSON)
+		whitelistJSON, err := ValidateIPRuleListJSON(*in.IPWhitelistJSON)
+		if err != nil {
+			return nil, err
+		}
+		item.IPWhitelistJSON = whitelistJSON
 	}
 	if in.IPBlacklistJSON != nil {
-		item.IPBlacklistJSON = strings.TrimSpace(*in.IPBlacklistJSON)
+		blacklistJSON, err := ValidateIPRuleListJSON(*in.IPBlacklistJSON)
+		if err != nil {
+			return nil, err
+		}
+		item.IPBlacklistJSON = blacklistJSON
 	}
 	if in.ResetQuotaUsed != nil && *in.ResetQuotaUsed {
 		item.QuotaUsed = 0

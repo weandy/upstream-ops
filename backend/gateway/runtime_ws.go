@@ -17,6 +17,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+var (
+	wsFirstFrameTimeout = 30 * time.Second
+	wsHandshakeTimeout  = 30 * time.Second
+)
+
 // HandleResponsesWebSocket forwards native Responses WebSocket sessions. A
 // WebSocket session cannot safely change protocol mid-flight, so only routes
 // whose resolved upstream protocol is Responses are eligible.
@@ -41,15 +46,17 @@ func (rt *Runtime) HandleResponsesWebSocket(c *gin.Context) {
 		return
 	}
 
-	client, err := websocket.Accept(c.Writer, c.Request, &websocket.AcceptOptions{InsecureSkipVerify: true})
+	client, err := websocket.Accept(c.Writer, c.Request, nil)
 	if err != nil {
 		return
 	}
 	defer client.CloseNow()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(c.Request.Context())
 	defer cancel()
-	msgType, first, err := client.Read(ctx)
+	firstCtx, firstCancel := context.WithTimeout(ctx, wsFirstFrameTimeout)
+	msgType, first, err := client.Read(firstCtx)
+	firstCancel()
 	if err != nil {
 		return
 	}
@@ -121,7 +128,9 @@ func (rt *Runtime) HandleResponsesWebSocket(c *gin.Context) {
 	}
 	upHTTP := rt.httpClientForTarget(selected.target.Channel, selected.target.Provider)
 	upHTTP.Timeout = 0
-	upstream, _, err := websocket.Dial(ctx, upURL, &websocket.DialOptions{HTTPClient: upHTTP, HTTPHeader: handshake.Header})
+	dialCtx, dialCancel := context.WithTimeout(ctx, wsHandshakeTimeout)
+	upstream, _, err := websocket.Dial(dialCtx, upURL, &websocket.DialOptions{HTTPClient: upHTTP, HTTPHeader: handshake.Header})
+	dialCancel()
 	if err != nil {
 		rt.writeWSResponsesFailed(ctx, client, "upstream_error", "failed to connect upstream: "+err.Error())
 		return

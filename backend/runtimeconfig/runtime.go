@@ -22,23 +22,24 @@ import (
 type SchedulerFactory func(config.SchedulerConfig, config.ProxyConfig) *scheduler.Scheduler
 
 type Manager struct {
-	mu               sync.RWMutex
-	applyMu          sync.Mutex
-	configPath       string
-	securitySecret   string
-	log              *slog.Logger
-	dispatcher       *notify.Dispatcher
-	channelSvc       *channel.Service
-	gatewaySvc       *gateway.Service
-	intelligenceSvc  *intelligence.Service
-	embedSvc         *embedsvc.Service
-	siteOpsSvc       *siteops.Service
-	schedulerFactory SchedulerFactory
-	auth             *auth.Service
-	scheduler        *scheduler.Scheduler
-	proxyConfig      config.ProxyConfig
-	upstreamConfig   config.UpstreamConfig
-	gatewayConfig    config.GatewayConfig
+	mu                sync.RWMutex
+	applyMu           sync.Mutex
+	configPath        string
+	securitySecret    string
+	requireSecureAuth bool
+	log               *slog.Logger
+	dispatcher        *notify.Dispatcher
+	channelSvc        *channel.Service
+	gatewaySvc        *gateway.Service
+	intelligenceSvc   *intelligence.Service
+	embedSvc          *embedsvc.Service
+	siteOpsSvc        *siteops.Service
+	schedulerFactory  SchedulerFactory
+	auth              *auth.Service
+	scheduler         *scheduler.Scheduler
+	proxyConfig       config.ProxyConfig
+	upstreamConfig    config.UpstreamConfig
+	gatewayConfig     config.GatewayConfig
 }
 
 type ApplyResult struct {
@@ -95,6 +96,31 @@ func (m *Manager) SetSiteOpsService(svc *siteops.Service) {
 	m.mu.Lock()
 	m.siteOpsSvc = svc
 	m.mu.Unlock()
+}
+
+// SetRequireSecureAuth 设置是否启用生产级强鉴权校验（禁止关闭鉴权、弱密码、默认密码或占位主密钥）。
+func (m *Manager) SetRequireSecureAuth(enabled bool) {
+	m.mu.Lock()
+	m.requireSecureAuth = enabled
+	m.mu.Unlock()
+}
+
+// RequireSecureAuth 返回当前是否开启了生产级强鉴权校验。
+func (m *Manager) RequireSecureAuth() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.requireSecureAuth
+}
+
+// ValidateAuthConfig 在开启生产强鉴权校验时，拒绝关闭鉴权、默认/弱密码或占位主密钥。
+func (m *Manager) ValidateAuthConfig(authCfg config.AuthConfig) error {
+	if !m.RequireSecureAuth() {
+		return nil
+	}
+	m.mu.RLock()
+	secret := m.securitySecret
+	m.mu.RUnlock()
+	return config.ValidateSecureAuth(authCfg, secret)
 }
 
 func (m *Manager) ConfigPath() string {
@@ -170,6 +196,9 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 
 	cfg, err := config.LoadFile(path)
 	if err != nil {
+		return nil, err
+	}
+	if err := m.ValidateAuthConfig(cfg.Auth); err != nil {
 		return nil, err
 	}
 
@@ -296,6 +325,9 @@ func (m *Manager) UpdateAuthCredentials(username, password string) (*auth.Servic
 	cfg.Auth.Password = password
 	if cfg.Auth.SessionTTLHours <= 0 {
 		cfg.Auth.SessionTTLHours = 168
+	}
+	if err := m.ValidateAuthConfig(cfg.Auth); err != nil {
+		return nil, err
 	}
 
 	authSvc, err := BuildAuth(cfg.Auth, secret)

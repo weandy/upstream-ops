@@ -1,0 +1,16 @@
+# 可选 override：仅在宿主机本机回环（127.0.0.1）临时暴露 MySQL / PostgreSQL 端口供本地客户端/SSH 隧道调试。
+# 请按所用数据库按需保留对应 service 段，避免把未启用的数据库服务拉起。
+services:
+  mysql:
+    ports:
+      - target: 3306
+        published: "${MYSQL_PORT:-33069}"
+        host_ip: "127.0.0.1"
+        protocol: tcp
+
+  postgres:
+    ports:
+      - target: 5432
+        published: "${POSTGRES_PORT:-54329}"
+        host_ip: "127.0.0.1"
+        protocol: tcp

@@ -9,6 +9,7 @@ import (
 
 	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/bejix/upstream-ops/backend/runtimeconfig"
+	"github.com/bejix/upstream-ops/backend/storage"
 	"github.com/gin-gonic/gin"
 )
 
@@ -235,5 +236,112 @@ func TestGetSettingsRedactsSecretsAndPutEmptyPreservesExisting(t *testing.T) {
 	cleared, _ := config.LoadFile(path)
 	if cleared.Auth.Password != "super-secret-admin-pass" || cleared.Auth.TokenSecret != "" || cleared.Proxy.Password != "" {
 		t.Fatalf("expected explicit clear flags to clear only specified secrets, got auth=%+v proxy=%+v", cleared.Auth, cleared.Proxy)
+	}
+}
+
+func TestSaveAndApplySettingsBlockedWhenRequireSecureAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	initCfg := &config.Config{
+		App: config.AppConfig{Title: "Ops", NotificationPrefix: "[Ops] "},
+		Auth: config.AuthConfig{
+			Enabled:         true,
+			Username:        "admin",
+			Password:        "StrongInitialPass!2026",
+			SessionTTLHours: 168,
+		},
+	}
+	if err := config.Save(path, initCfg); err != nil {
+		t.Fatalf("save init config: %v", err)
+	}
+
+	secret := "0123456789abcdef0123456789abcdef"
+	rt := runtimeconfig.New(path, secret, nil, nil, nil, nil, nil, nil, config.ProxyConfig{}, config.UpstreamConfig{}, config.GatewayConfig{}, nil)
+	rt.SetRequireSecureAuth(true)
+
+	r := gin.New()
+	apiGroup := r.Group("/api")
+	registerSettings(apiGroup, &Deps{Runtime: rt})
+
+	// 1. PUT 尝试关闭鉴权必须被拒绝且返回 400。
+	disableBody := `{
+		"app":{"title":"Ops","notificationPrefix":"[Ops] "},
+		"auth":{"enabled":false,"username":"admin","password":"","tokenSecret":"","sessionTTLHours":168},
+		"scheduler":{"balanceCron":"","rateCron":"","concurrency":4},
+		"notifications":{"minChangePct":0,"balanceLowCooldownMinutes":60,"sendMaxAttempts":3}
+	}`
+	req1 := httptest.NewRequest(http.MethodPut, "/api/settings/config", strings.NewReader(disableBody))
+	req1.Header.Set("Content-Type", "application/json")
+	rec1 := httptest.NewRecorder()
+	r.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when disabling auth under RequireSecureAuth, got %d body=%s", rec1.Code, rec1.Body.String())
+	}
+
+	// 2. PUT 尝试改回默认弱密码必须被拒绝且返回 400。
+	weakPassBody := `{
+		"app":{"title":"Ops","notificationPrefix":"[Ops] "},
+		"auth":{"enabled":true,"username":"admin","password":"admin_ops","tokenSecret":"","sessionTTLHours":168},
+		"scheduler":{"balanceCron":"","rateCron":"","concurrency":4},
+		"notifications":{"minChangePct":0,"balanceLowCooldownMinutes":60,"sendMaxAttempts":3}
+	}`
+	req2 := httptest.NewRequest(http.MethodPut, "/api/settings/config", strings.NewReader(weakPassBody))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	r.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when setting default password under RequireSecureAuth, got %d body=%s", rec2.Code, rec2.Body.String())
+	}
+
+	saved, err := config.LoadFile(path)
+	if err != nil || !saved.Auth.Enabled || saved.Auth.Password != "StrongInitialPass!2026" {
+		t.Fatalf("config file should remain unchanged after rejected PUTs: err=%v auth=%+v", err, saved.Auth)
+	}
+
+	// 3. 磁盘上若被改写为不安全配置，POST /api/settings/apply 返回 400。
+	initCfg.Auth.Enabled = false
+	if err := config.Save(path, initCfg); err != nil {
+		t.Fatalf("save tampered config: %v", err)
+	}
+	recApply := httptest.NewRecorder()
+	r.ServeHTTP(recApply, httptest.NewRequest(http.MethodPost, "/api/settings/apply", nil))
+	if recApply.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on apply insecure config, got %d body=%s", recApply.Code, recApply.Body.String())
+	}
+}
+
+func TestHealthzDoesNotLeakInternalDBError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db, err := storage.Open(storage.DBConfig{
+		Driver: storage.DBDriverSQLite,
+		Path:   filepath.Join(t.TempDir(), "healthz.db"),
+	})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB: %v", err)
+	}
+
+	r := gin.New()
+	Register(r, &Deps{DB: db})
+
+	recOK := httptest.NewRecorder()
+	r.ServeHTTP(recOK, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if recOK.Code != http.StatusOK || !strings.Contains(recOK.Body.String(), `"status":"ok"`) {
+		t.Fatalf("expected 200 ok, got %d body=%s", recOK.Code, recOK.Body.String())
+	}
+
+	_ = sqlDB.Close()
+	recDown := httptest.NewRecorder()
+	r.ServeHTTP(recDown, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if recDown.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when db closed, got %d body=%s", recDown.Code, recDown.Body.String())
+	}
+	if strings.Contains(recDown.Body.String(), `"err"`) || strings.Contains(recDown.Body.String(), "database is closed") {
+		t.Fatalf("/healthz leaked internal error details: %s", recDown.Body.String())
 	}
 }

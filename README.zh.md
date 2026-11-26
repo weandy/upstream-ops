@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-> 本仓库是 [bejix/upstream-ops](https://github.com/bejix/upstream-ops) 的 fork，上游又基于 [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub)。当前版本 **v0.4.1**，仓库与更新检测地址为 [weandy/upstream-ops](https://github.com/weandy/upstream-ops)。
+> 本仓库是 [bejix/upstream-ops](https://github.com/bejix/upstream-ops) 的 fork，上游又基于 [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub)。当前版本 **v0.4.2**，仓库与更新检测地址为 [weandy/upstream-ops](https://github.com/weandy/upstream-ops)。
 
 > UpstreamOps 是一个面向 NewAPI / Sub2API 上游站点的集中监控与运维面板，用来统一管理上游账号、查看余额与消费、同步模型倍率、追踪倍率变化、维护上游 API Key、发起充值/兑换，并通过多种通知渠道推送余额告警、倍率变更、登录异常、监控异常和上游公告。
 同时内置 OpenAI / Claude / Responses 兼容的请求转发网关：可创建网关密钥、绑定同步渠道或直连上游、按倍率与权重调度、协议互转、故障自动切换，并记录每次请求的用量与费用参考。
@@ -293,23 +293,35 @@ UpstreamOps 主要解决这些痛点：
 
 支持 `linux/amd64` 与 `linux/arm64` 双架构镜像（`ghcr.io/weandy/upstream-ops:latest`）。
 
-### 方式一：一键脚本部署（推荐，自动配置与持久化）
+### 方式一：一键脚本部署（推荐，自动生成随机密钥与密码）
 
-无需提前克隆仓库，在服务器执行一条命令即可自动下载编排文件、生成随机 `APP_SECRET`、创建 `data/` 持久化目录并拉起容器（重复执行可安全升级，保留已有密钥与数据）：
+无需提前克隆仓库，在服务器执行一条命令即可自动下载编排文件、生成随机 `APP_SECRET` 与独立随机 `ADMIN_PASSWORD`（写入权限 `0600` 的 `.env`）、创建 `data/` 持久化目录并拉起容器（重复执行可安全升级，自动沿用既有 `.env` 与数据库模式）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash
 ```
 
-支持通过参数自定义安装目录、端口、镜像标签或数据库（例如使用 9090 端口 + MySQL）：
+查看初次生成的随机管理员密码（用户名默认为 `admin`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash -s -- --dir /opt/upstream-ops --port 9090 --tag latest --db sqlite
+grep '^ADMIN_PASSWORD=' /opt/upstream-ops/.env
 ```
 
-可选 `--db`：`sqlite`（默认）、`mysql`、`postgres`。
+> 默认绑定 `0.0.0.0:8418` 便于服务器公网直连；如果前面要套 Nginx / Caddy 提供 HTTPS，建议改为仅监听本机回环并显式指定受信代理（示例含自定义端口与数据库）：
+
+```bash
+# 反代回环模式（仅监听 127.0.0.1:8418）
+curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash -s -- --mode reverse-proxy --port 8418 --trusted-proxies 172.17.0.1
+
+# 直连自定义目录 / 端口 / 版本 / 数据库
+curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash -s -- --dir /opt/upstream-ops --port 8418 --tag latest --db sqlite
+```
+
+可选 `--db`：`sqlite`（新安装默认）、`mysql`、`postgres`。
 
 ### 方式二：单条 `docker run` 命令直跑
+
+生产模式默认开启 `SERVER_REQUIRE_SECURE_AUTH` 时，首次启动需提供至少 32 字节的 `APP_SECRET` 与 6 位以上非默认 `ADMIN_PASSWORD`：
 
 ```bash
 docker run -d \
@@ -318,12 +330,14 @@ docker run -d \
   -p 8418:8418 \
   -v "$(pwd)/data:/app/data" \
   -e TZ=Asia/Shanghai \
+  -e SERVER_REQUIRE_SECURE_AUTH=true \
   -e APP_SECRET="$(openssl rand -hex 32)" \
+  -e ADMIN_PASSWORD="$(openssl rand -hex 12)" \
   ghcr.io/weandy/upstream-ops:latest \
   -config /app/data/config.yaml
 ```
 
-> 务必妥善保存你生成的 `APP_SECRET`（重建容器时需传入同一个值，否则既有加密凭据无法解密）。
+> 务必妥善保存生成的 `APP_SECRET`（重建容器时需传入同一个值，否则既有加密凭据无法解密）。
 
 ### 方式三：手动 Docker Compose（SQLite）
 
@@ -331,25 +345,28 @@ docker run -d \
 
 ```bash
 cp .env.example .env
+chmod 600 .env
 ```
 
-编辑 `.env`，至少将 `APP_SECRET` 替换为随机密钥：
+编辑 `.env`，至少填入随机生成的 `APP_SECRET`（`openssl rand -hex 32`）与强密码 `ADMIN_PASSWORD`（6 位以上，禁止留空或填默认密码）：
 
 ```env
-APP_SECRET=请替换为 32 字节以上随机字符串
+APP_SECRET=请替换为_openssl_rand_-hex_32_生成的随机串
+ADMIN_PASSWORD=请替换为强管理员密码
 ```
 
 `APP_SECRET` 用于 AES-GCM 加密敏感字段，包括上游密码、Token、Cookie、通知渠道密钥、验证码平台 API Key 等。修改后既有加密数据将无法解密，请务必妥善保存。
 
-系统默认开启后台登录鉴权（`AUTH_ENABLED=true`）：
+系统默认开启后台登录鉴权（`AUTH_ENABLED=true`）与生产强鉴权校验（`SERVER_REQUIRE_SECURE_AUTH=true`）：
 
 ```env
 AUTH_ENABLED=true
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=admin_ops
+ADMIN_PASSWORD=你的强管理员密码
+SERVER_REQUIRE_SECURE_AUTH=true
 ```
 
-> 若使用默认 `admin` / `admin_ops` 首次登录，管理台会强制要求重新设置管理员账号和密码后才可进入系统；如在首次启动前就在 `.env` 里指定了自定义强密码，则可直接登录使用。
+> 生产编排默认禁止关闭鉴权、禁止使用 `admin_ops` 或空/占位 `APP_SECRET`。纯本机内网开发若确需关闭，需在非生产环境显式设 `SERVER_REQUIRE_SECURE_AUTH=false`。
 
 Docker 默认拉取 `ghcr.io/weandy/upstream-ops:${IMAGE_TAG:-latest}`，不会在本机编译镜像。配置和数据都会写入宿主机项目目录下的 `data/`。
 
@@ -386,42 +403,103 @@ IMAGE_TAG=latest
 生产环境建议锁定具体版本，例如：
 
 ```env
-IMAGE_TAG=v0.4.1
+IMAGE_TAG=v0.4.2
 ```
 
-## MySQL 部署
+## MySQL / PostgreSQL 部署
 
-如果不想使用 SQLite，可以叠加 MySQL 配置：
+如果不想使用 SQLite，可以叠加 MySQL 或 PostgreSQL 配置。数据库默认仅接入内部隔离网络 `db-internal`，**不对外暴露宿主机端口**：
 
 ```bash
+# MySQL
 docker compose -f docker-compose.yml -f docker-compose.mysql.yml up -d
+
+# PostgreSQL
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 ```
 
-`.env` 至少设置：
+`.env` 至少设置（MySQL 示例，PostgreSQL 同理设置 `POSTGRES_PASSWORD`）：
 
 ```env
-APP_SECRET=请替换为 32 字节以上随机字符串
+APP_SECRET=请替换为_openssl_rand_-hex_32_生成的随机串
+ADMIN_PASSWORD=请替换为强管理员密码
 MYSQL_DATABASE=upstreamops
 MYSQL_USER=upstreamops
-MYSQL_PASSWORD=请替换为数据库密码
-MYSQL_ROOT_PASSWORD=请替换为 root 密码
-MYSQL_PORT=33069
+MYSQL_PASSWORD=请替换为强数据库密码
+MYSQL_ROOT_PASSWORD=请替换为强_root_密码
 ```
+
+如需在宿主机本机回环（`127.0.0.1`）临时调试数据库端口，可按需叠加 [`deploy/docker/compose.db-local-ports.yml`](deploy/docker/compose.db-local-ports.yml) 中的对应端口段。
+
+## 反代（HTTPS）与同机容器互通
+
+### 反向代理与客户端真实 IP（`SERVER_TRUSTED_PROXIES`）
+
+后端默认显式关闭所有代理头信任（`SetTrustedProxies(nil)`），直连时彻底免疫 `X-Forwarded-For` / `X-Real-IP` 伪造绕过。若前面挂了 Nginx / Caddy：
+
+1. 将 `.env` 中 `HTTP_BIND_IP=127.0.0.1`；
+2. 观察容器内实际收到的反代对端 IP（宿主机反代直连 Docker 发布端口时，Go 看到的对端通常是 Docker 网桥网关如 `172.17.0.1`，可在 Nginx 配置后发起一次请求查看容器日志或临时 `docker network inspect bridge` 核对），将其写入 `SERVER_TRUSTED_PROXIES=172.17.0.1`（多个用逗号分隔，支持 CIDR）；
+3. Nginx 关键配置（覆写 `X-Forwarded-For`、关闭 SSE 缓冲并设置长流超时、支持 `/v1/responses` WebSocket）：
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name ops.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8418;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 660s;
+    }
+}
+```
+
+> 若前置还有 CDN / Cloudflare，请在入口层先校验 CDN 来源 IP 恢复真实客户端 IP，再向后端写入唯一可信的 `X-Forwarded-For`。
+
+### 可选 Compose 扩展模板（`deploy/docker/`）
+
+- **同机 Sub2API 容器内网互通**：使用 [`deploy/docker/compose.sub2api-network.yml`](deploy/docker/compose.sub2api-network.yml) 接入共享外部网络 `sub2api-net`，并在 `data/config.yaml` 中显式配置精确的 `siteOps.allowedOrigins`（例如 `["http://sub2api:8080"]`）。
+- **容器访问宿主机代理**：使用 [`deploy/docker/compose.host-proxy.yml`](deploy/docker/compose.host-proxy.yml) 注入 `host.docker.internal:host-gateway`（宿主机代理需监听 Docker 网桥可达地址并做好认证与来源限制）。
+
+### 从 `<= v0.4.1` 升级检查清单
+
+1. 升级前先备份 `.env`、`data/config.yaml` 与数据库文件/卷；
+2. 确认 `.env` 中 `APP_SECRET` 非占位值（切勿对已有加密数据直接更换 `APP_SECRET`）；
+3. 若 `data/config.yaml` 早已存在且里面仍是 `auth.enabled: false` 或 `admin_ops` 弱密码，开启 `SERVER_REQUIRE_SECURE_AUTH=true` 启动前需先在 `data/config.yaml` 中改为强密码并开启 `auth.enabled: true`；
+4. 若旧部署依赖宿主机直接暴露的 `33069` / `54329` 数据库端口，需确认客户端迁移为容器内网或本地 `127.0.0.1` 调试端口。
 
 ## 环境变量
 
 ### 基础配置
 
 ```env
+HTTP_BIND_IP=0.0.0.0
 HTTP_PORT=8418
 IMAGE_TAG=latest
 SERVER_MODE=release
+SERVER_TRUSTED_PROXIES=
+SERVER_REQUIRE_SECURE_AUTH=true
 LOG_LEVEL=info
 ```
 
-- `HTTP_PORT`：宿主机暴露端口。
+- `HTTP_BIND_IP`：宿主机绑定 IP（默认 `0.0.0.0` 支持公网直连；挂反代建议设为 `127.0.0.1`）。
+- `HTTP_PORT`：宿主机暴露端口（默认 `8418`）。
 - `IMAGE_TAG`：镜像版本。
 - `SERVER_MODE`：Gin 运行模式，通常为 `release`。
+- `SERVER_TRUSTED_PROXIES`：逗号分隔的受信反代 IP / CIDR 列表；留空则忽略一切代理 IP 头。
+- `SERVER_REQUIRE_SECURE_AUTH`：是否强制开启强鉴权门槛（生产 Compose 默认 `true`）。
 - `LOG_LEVEL`：日志等级。
 
 ### 数据库配置
@@ -440,24 +518,24 @@ DATABASE_DRIVER=mysql
 DATABASE_HOST=mysql
 DATABASE_PORT=3306
 DATABASE_USER=upstreamops
-DATABASE_PASSWORD=change-me
+DATABASE_PASSWORD=请替换为强数据库密码
 DATABASE_NAME=upstreamops
 ```
 
 ### 安全与登录
 
 ```env
-APP_SECRET=please-change-me-to-a-long-random-secret-32bytes-min
+APP_SECRET=
 AUTH_ENABLED=true
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=admin_ops
+ADMIN_PASSWORD=
 AUTH_TOKEN_SECRET=
 ```
 
-- `APP_SECRET`：主密钥，必填。
+- `APP_SECRET`：主密钥，必填（至少 32 字节随机串）。
 - `AUTH_ENABLED`：是否启用后台登录（默认开启）。
 - `ADMIN_USERNAME`：后台初始管理员账号（默认 `admin`）。
-- `ADMIN_PASSWORD`：后台初始管理员密码（默认 `admin_ops`，首次登录后强制重设账号密码方可使用）。
+- `ADMIN_PASSWORD`：后台初始管理员密码；一键部署自动生成随机强密码写入 `.env`，手工部署必填 6 位以上强密码（如忘记密码需解锁，编辑 `data/config.yaml` 修改 `auth.password` 后重启容器即可）。
 - `AUTH_TOKEN_SECRET`：登录 Token 签名密钥；留空时使用 `APP_SECRET`。
 
 ## 本地开发

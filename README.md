@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh.md)
 
-> This repository is a fork of [bejix/upstream-ops](https://github.com/bejix/upstream-ops), which is itself based on [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub). The current release is **v0.4.1**. Update checks and the repository URL point to [weandy/upstream-ops](https://github.com/weandy/upstream-ops).
+> This repository is a fork of [bejix/upstream-ops](https://github.com/bejix/upstream-ops), which is itself based on [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub). The current release is **v0.4.2**. Update checks and the repository URL point to [weandy/upstream-ops](https://github.com/weandy/upstream-ops).
 
 > UpstreamOps is a centralized monitoring and operations dashboard for NewAPI and Sub2API upstream sites. It helps manage upstream accounts, balances, spending, model or group rates, rate changes, upstream API keys, recharge and redeem workflows, subscriptions, announcements, and notification alerts.
 
@@ -284,19 +284,33 @@ Multi-arch images (`linux/amd64` and `linux/arm64`) are published at `ghcr.io/we
 
 ### Option 1: One-Click Install Script (Recommended)
 
-Run a single command on a fresh server without cloning the repository first. It downloads the Compose files, generates a random `APP_SECRET`, prepares `data/`, and starts the service (re-running upgrades cleanly without overwriting an existing `APP_SECRET`):
+Run a single command on a fresh server without cloning the repository first. It downloads and validates the Compose files, generates a random `APP_SECRET` and an independent random `ADMIN_PASSWORD` into a `0600` `.env`, prepares `data/`, and starts the service (re-running upgrades cleanly without overwriting an existing `APP_SECRET` or database mode):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash
 ```
 
-Optional flags (`--dir`, `--port`, `--tag`, `--db sqlite|mysql|postgres`):
+Read the generated initial admin password (username defaults to `admin`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash -s -- --dir /opt/upstream-ops --port 9090 --tag latest --db sqlite
+grep '^ADMIN_PASSWORD=' /opt/upstream-ops/.env
 ```
 
+> By default it binds `0.0.0.0:8418` for direct public access. When placing Nginx/Caddy in front for HTTPS, switch to loopback mode and pass your trusted proxy peer IP:
+
+```bash
+# Reverse-proxy loopback mode (binds 127.0.0.1:8418 only)
+curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash -s -- --mode reverse-proxy --port 8418 --trusted-proxies 172.17.0.1
+
+# Direct mode with custom directory / port / tag / database
+curl -fsSL https://raw.githubusercontent.com/weandy/upstream-ops/main/scripts/install-docker.sh | bash -s -- --dir /opt/upstream-ops --port 8418 --tag latest --db sqlite
+```
+
+Optional `--db`: `sqlite` (default for fresh installs), `mysql`, `postgres`.
+
 ### Option 2: Single `docker run` Command
+
+When `SERVER_REQUIRE_SECURE_AUTH=true` is enabled, provide a >=32-byte `APP_SECRET` and a strong `ADMIN_PASSWORD` (>=6 chars, not `admin_ops`):
 
 ```bash
 docker run -d \
@@ -305,7 +319,9 @@ docker run -d \
   -p 8418:8418 \
   -v "$(pwd)/data:/app/data" \
   -e TZ=Asia/Shanghai \
+  -e SERVER_REQUIRE_SECURE_AUTH=true \
   -e APP_SECRET="$(openssl rand -hex 32)" \
+  -e ADMIN_PASSWORD="$(openssl rand -hex 12)" \
   ghcr.io/weandy/upstream-ops:latest \
   -config /app/data/config.yaml
 ```
@@ -318,25 +334,28 @@ SQLite is the default deployment mode.
 
 ```bash
 cp .env.example .env
+chmod 600 .env
 ```
 
-Edit `.env` and replace `APP_SECRET` with a random secret:
+Edit `.env` and set a random `APP_SECRET` (`openssl rand -hex 32`) plus a strong `ADMIN_PASSWORD`:
 
 ```env
-APP_SECRET=replace-with-a-random-string-at-least-32-bytes
+APP_SECRET=replace-with-openssl-rand-hex-32-output
+ADMIN_PASSWORD=replace-with-strong-admin-password
 ```
 
 `APP_SECRET` is used to encrypt sensitive fields with AES-GCM, including upstream passwords, tokens, cookies, notification channel secrets, and captcha provider API keys. If you change it later, existing encrypted data cannot be decrypted.
 
-Admin login is enabled by default (`AUTH_ENABLED=true`):
+Admin login (`AUTH_ENABLED=true`) and production secure-auth enforcement (`SERVER_REQUIRE_SECURE_AUTH=true`) are enabled by default in Compose:
 
 ```env
 AUTH_ENABLED=true
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=admin_ops
+ADMIN_PASSWORD=your-strong-password
+SERVER_REQUIRE_SECURE_AUTH=true
 ```
 
-> Logging in with the default `admin` / `admin_ops` credentials forces setting a new username and password before accessing the dashboard. If you set a custom strong `ADMIN_PASSWORD` in `.env` before the first boot, you can use it right away.
+> Production Compose rejects disabling authentication, using `admin_ops`, or empty/placeholder `APP_SECRET`.
 
 Docker pulls `ghcr.io/weandy/upstream-ops:${IMAGE_TAG:-latest}` by default. Configuration and data are stored in the host `data/` directory.
 
@@ -373,42 +392,101 @@ IMAGE_TAG=latest
 For production, pin a specific version:
 
 ```env
-IMAGE_TAG=v0.4.1
+IMAGE_TAG=v0.4.2
 ```
 
-## MySQL Deployment
+## MySQL / PostgreSQL Deployment
 
-Use the MySQL compose file together with the base compose file:
+Use the MySQL or PostgreSQL compose overlay together with the base compose file. Databases are isolated on an internal network (`db-internal`) and **do not expose host ports by default**:
 
 ```bash
+# MySQL
 docker compose -f docker-compose.yml -f docker-compose.mysql.yml up -d
+
+# PostgreSQL
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 ```
 
-Required `.env` values:
+Required `.env` values (MySQL example; use `POSTGRES_PASSWORD` for PostgreSQL):
 
 ```env
-APP_SECRET=replace-with-a-random-string-at-least-32-bytes
+APP_SECRET=replace-with-openssl-rand-hex-32-output
+ADMIN_PASSWORD=replace-with-strong-admin-password
 MYSQL_DATABASE=upstreamops
 MYSQL_USER=upstreamops
-MYSQL_PASSWORD=replace-with-database-password
-MYSQL_ROOT_PASSWORD=replace-with-root-password
-MYSQL_PORT=33069
+MYSQL_PASSWORD=replace-with-strong-database-password
+MYSQL_ROOT_PASSWORD=replace-with-strong-root-password
 ```
+
+If host loopback (`127.0.0.1`) DB access is needed for local inspection, see [`deploy/docker/compose.db-local-ports.yml`](deploy/docker/compose.db-local-ports.yml).
+
+## Reverse Proxy (HTTPS) & Optional Docker Overrides
+
+### Reverse Proxy & Trusted Client IP (`SERVER_TRUSTED_PROXIES`)
+
+The backend disables trusting proxy headers by default (`SetTrustedProxies(nil)`), preventing `X-Forwarded-For` / `X-Real-IP` spoofing in direct deployments. When placing Nginx/Caddy in front:
+
+1. Set `HTTP_BIND_IP=127.0.0.1` in `.env`;
+2. Check the peer IP seen by the container (when host Nginx connects to Docker's published loopback port, the peer is often the Docker bridge gateway such as `172.17.0.1`) and set `SERVER_TRUSTED_PROXIES=172.17.0.1`;
+3. Configure Nginx to overwrite `X-Forwarded-For`, disable SSE buffering, allow long streams (`660s`), and pass WebSocket upgrades for `/v1/responses`:
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name ops.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8418;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 660s;
+    }
+}
+```
+
+### Optional Overrides (`deploy/docker/`)
+
+- **Same-host Sub2API network**: [`deploy/docker/compose.sub2api-network.yml`](deploy/docker/compose.sub2api-network.yml) joins `sub2api-net` (also configure exact `siteOps.allowedOrigins` in `data/config.yaml`, e.g. `["http://sub2api:8080"]`).
+- **Host proxy access**: [`deploy/docker/compose.host-proxy.yml`](deploy/docker/compose.host-proxy.yml) adds `host.docker.internal:host-gateway`.
+
+### Upgrading from `<= v0.4.1`
+
+1. Back up `.env`, `data/config.yaml`, and your database before upgrading.
+2. Verify `APP_SECRET` in `.env` is your real secret (never overwrite it on existing encrypted data).
+3. Ensure `data/config.yaml` has `auth.enabled: true` and a non-default password if `SERVER_REQUIRE_SECURE_AUTH=true`.
+4. Note that MySQL/PostgreSQL no longer publish `33069`/`54329` on `0.0.0.0` by default.
 
 ## Environment Variables
 
 ### Basic
 
 ```env
+HTTP_BIND_IP=0.0.0.0
 HTTP_PORT=8418
 IMAGE_TAG=latest
 SERVER_MODE=release
+SERVER_TRUSTED_PROXIES=
+SERVER_REQUIRE_SECURE_AUTH=true
 LOG_LEVEL=info
 ```
 
-- `HTTP_PORT`: host port.
+- `HTTP_BIND_IP`: host bind IP (`0.0.0.0` by default for direct access; use `127.0.0.1` behind a reverse proxy).
+- `HTTP_PORT`: host port (`8418` by default).
 - `IMAGE_TAG`: Docker image tag.
 - `SERVER_MODE`: Gin mode, usually `release`.
+- `SERVER_TRUSTED_PROXIES`: comma-separated trusted proxy IPs/CIDRs; empty disables all proxy IP headers.
+- `SERVER_REQUIRE_SECURE_AUTH`: enforces enabled auth, strong non-default admin password, and valid `APP_SECRET` (`true` in Compose).
 - `LOG_LEVEL`: log level.
 
 ### Database
@@ -427,24 +505,24 @@ DATABASE_DRIVER=mysql
 DATABASE_HOST=mysql
 DATABASE_PORT=3306
 DATABASE_USER=upstreamops
-DATABASE_PASSWORD=change-me
+DATABASE_PASSWORD=replace-with-strong-database-password
 DATABASE_NAME=upstreamops
 ```
 
 ### Security and Login
 
 ```env
-APP_SECRET=please-change-me-to-a-long-random-secret-32bytes-min
+APP_SECRET=
 AUTH_ENABLED=true
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=admin_ops
+ADMIN_PASSWORD=
 AUTH_TOKEN_SECRET=
 ```
 
-- `APP_SECRET`: required master secret.
+- `APP_SECRET`: required master secret (>=32 bytes).
 - `AUTH_ENABLED`: enables admin login (enabled by default).
 - `ADMIN_USERNAME`: initial admin username (defaults to `admin`).
-- `ADMIN_PASSWORD`: initial admin password (defaults to `admin_ops`; first login forces resetting credentials before using the dashboard).
+- `ADMIN_PASSWORD`: initial admin password (auto-generated into `.env` by `install-docker.sh`; required non-default >=6 chars for manual Compose; edit `data/config.yaml` `auth.password` and restart to recover a lost password).
 - `AUTH_TOKEN_SECRET`: token signing secret. Falls back to `APP_SECRET` when empty.
 
 ## Local Development

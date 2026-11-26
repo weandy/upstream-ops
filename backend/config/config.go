@@ -2,7 +2,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,10 +39,116 @@ type AppConfig struct {
 }
 
 type ServerConfig struct {
-	Port           int      `mapstructure:"port" yaml:"port" json:"port"`
-	Mode           string   `mapstructure:"mode" yaml:"mode" json:"mode"`
-	TrustedProxies []string `mapstructure:"trustedProxies" yaml:"trustedProxies" json:"trustedProxies"`
-	BaseURL        string   `mapstructure:"baseURL" yaml:"baseURL" json:"baseURL"`
+	Port              int      `mapstructure:"port" yaml:"port" json:"port"`
+	Mode              string   `mapstructure:"mode" yaml:"mode" json:"mode"`
+	TrustedProxies    []string `mapstructure:"trustedProxies" yaml:"trustedProxies,omitempty" json:"trustedProxies"`
+	RequireSecureAuth bool     `mapstructure:"requireSecureAuth" yaml:"requireSecureAuth,omitempty" json:"requireSecureAuth"`
+	BaseURL           string   `mapstructure:"baseURL" yaml:"baseURL" json:"baseURL"`
+}
+
+var ErrInsecureAuth = errors.New("insecure auth configuration")
+
+// IsPlaceholderAppSecret 判断主密钥是否为空、过短或仍为示例占位值。
+func IsPlaceholderAppSecret(secret string) bool {
+	trimmed := strings.TrimSpace(secret)
+	if len(trimmed) < 32 {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.Contains(lower, "please-change-me") ||
+		strings.Contains(lower, "replace-with-") ||
+		strings.Contains(lower, "change-me")
+}
+
+// ValidateSecureAuth 校验生产环境强制鉴权门槛（禁止关闭鉴权、弱密码、默认密码或占位主密钥）。
+func ValidateSecureAuth(authCfg AuthConfig, appSecret string) error {
+	if !authCfg.Enabled {
+		return fmt.Errorf("%w: 生产环境禁止关闭后台登录鉴权（auth.enabled 必须为 true）", ErrInsecureAuth)
+	}
+	if strings.TrimSpace(authCfg.Username) == "" {
+		return fmt.Errorf("%w: 管理员账号不能为空", ErrInsecureAuth)
+	}
+	if strings.TrimSpace(authCfg.Password) == "" {
+		return fmt.Errorf("%w: 管理员密码不能为空", ErrInsecureAuth)
+	}
+	if authCfg.Password == DefaultAuthPassword {
+		return fmt.Errorf("%w: 禁止在生产环境使用默认初始密码 %s", ErrInsecureAuth, DefaultAuthPassword)
+	}
+	if len(authCfg.Password) < 6 {
+		return fmt.Errorf("%w: 管理员密码长度不能少于 6 位", ErrInsecureAuth)
+	}
+	if IsPlaceholderAppSecret(appSecret) {
+		return fmt.Errorf("%w: APP_SECRET 不能为空、少于 32 字节或使用示例占位值", ErrInsecureAuth)
+	}
+	return nil
+}
+
+// ParseTrustedProxies 解析逗号分隔的受信代理 IP / CIDR 列表并执行严格校验。
+func ParseTrustedProxies(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	list := make([]string, 0, len(parts))
+	for _, part := range parts {
+		s := strings.TrimSpace(part)
+		if s != "" {
+			list = append(list, s)
+		}
+	}
+	if len(list) == 0 {
+		return nil, errors.New("trusted proxies contains no valid entries")
+	}
+	return ValidateTrustedProxies(list)
+}
+
+// ValidateTrustedProxies 校验并规范化受信代理列表（支持 IPv4/IPv6 与 CIDR，拒绝非法项、zone 与全地址段）。
+func ValidateTrustedProxies(list []string) ([]string, error) {
+	if len(list) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]struct{}, len(list))
+	out := make([]string, 0, len(list))
+	for _, raw := range list {
+		item := strings.TrimSpace(raw)
+		if item == "" {
+			continue
+		}
+		var norm string
+		if strings.Contains(item, "/") {
+			prefix, err := netip.ParsePrefix(item)
+			if err != nil || prefix.Addr().Zone() != "" {
+				return nil, fmt.Errorf("invalid trusted proxy CIDR %q", raw)
+			}
+			if prefix.Addr().Is4In6() && prefix.Bits() >= 96 {
+				prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
+			}
+			prefix = prefix.Masked()
+			if prefix.Bits() == 0 {
+				return nil, fmt.Errorf("trusted proxy CIDR %q cannot match all addresses", raw)
+			}
+			norm = prefix.String()
+		} else {
+			addr, err := netip.ParseAddr(item)
+			if err != nil || addr.Zone() != "" {
+				return nil, fmt.Errorf("invalid trusted proxy IP %q", raw)
+			}
+			addr = addr.Unmap()
+			if addr.IsUnspecified() {
+				return nil, fmt.Errorf("trusted proxy IP %q cannot be unspecified", raw)
+			}
+			norm = addr.String()
+		}
+		if _, ok := seen[norm]; ok {
+			continue
+		}
+		seen[norm] = struct{}{}
+		out = append(out, norm)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 type DatabaseConfig struct {
@@ -561,6 +669,7 @@ func bindInfraEnv(v *viper.Viper) {
 	_ = v.BindEnv("database.maxIdleConns", "DATABASE_MAXIDLECONNS")
 	_ = v.BindEnv("server.port", "SERVER_PORT")
 	_ = v.BindEnv("server.mode", "SERVER_MODE")
+	_ = v.BindEnv("server.requireSecureAuth", "SERVER_REQUIRE_SECURE_AUTH")
 	_ = v.BindEnv("server.baseURL", "SERVER_BASEURL")
 	_ = v.BindEnv("log.level", "LOG_LEVEL")
 	_ = v.BindEnv("log.format", "LOG_FORMAT")
@@ -618,6 +727,22 @@ func load(path string, withEnv bool) (*Config, string, error) {
 	cfg := &Config{}
 	if err := v.Unmarshal(cfg); err != nil {
 		return nil, "", fmt.Errorf("unmarshal config: %w", err)
+	}
+	if withEnv {
+		if rawProxies, ok := os.LookupEnv("SERVER_TRUSTED_PROXIES"); ok && strings.TrimSpace(rawProxies) != "" {
+			proxies, err := ParseTrustedProxies(rawProxies)
+			if err != nil {
+				return nil, "", fmt.Errorf("parse SERVER_TRUSTED_PROXIES: %w", err)
+			}
+			cfg.Server.TrustedProxies = proxies
+		}
+	}
+	if len(cfg.Server.TrustedProxies) > 0 {
+		proxies, err := ValidateTrustedProxies(cfg.Server.TrustedProxies)
+		if err != nil {
+			return nil, "", fmt.Errorf("validate server.trustedProxies: %w", err)
+		}
+		cfg.Server.TrustedProxies = proxies
 	}
 	// 若旧 .env 将 ADMIN_USERNAME / ADMIN_PASSWORD 留空，首次引导且开启鉴权时回落默认初始凭据。
 	if withEnv && !fileLoaded && cfg.Auth.Enabled {
@@ -716,6 +841,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("server.port", 8418)
 	v.SetDefault("server.mode", "debug")
+	v.SetDefault("server.requireSecureAuth", false)
 	v.SetDefault("server.baseURL", "http://localhost:8418")
 
 	v.SetDefault("database.driver", "sqlite")

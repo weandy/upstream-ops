@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/bejix/upstream-ops/backend/config"
@@ -139,6 +140,13 @@ func saveSettingsConfig(c *gin.Context, d *Deps) {
 		cfg.Embed = in.Embed.WithDefaults()
 	}
 
+	if d.Runtime != nil {
+		if err := d.Runtime.ValidateAuthConfig(cfg.Auth); err != nil {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
+	}
+
 	if err := config.Save(path, cfg); err != nil {
 		fail(c, http.StatusInternalServerError, err)
 		return
@@ -155,6 +163,10 @@ func saveSettingsConfig(c *gin.Context, d *Deps) {
 func applySettingsConfig(c *gin.Context, d *Deps) {
 	result, err := d.Runtime.ApplyFromFile()
 	if err != nil {
+		if errors.Is(err, config.ErrInsecureAuth) {
+			fail(c, http.StatusBadRequest, err)
+			return
+		}
 		fail(c, http.StatusInternalServerError, err)
 		return
 	}

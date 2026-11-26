@@ -461,4 +461,15 @@ func TestProxyPinsResolvedTarget(t *testing.T) {
 	if _, _, err := client.FetchSystemVersion(context.Background(), dockerInst); !errors.Is(err, ErrOriginNotAllowed) || hits.Load() != 2 {
 		t.Fatalf("revoked internal target = %v, %d proxy hits", err, hits.Load())
 	}
+
+	// Literal private IP in proxy mode also respects live policy and blocks when not exempted.
+	literalInst := TargetEndpoint{InstanceID: 3, APIKey: testAdminKey, BaseURL: "http://172.18.0.3:8080", ProxyEnabled: true}
+	if _, _, err := client.FetchSystemVersion(context.Background(), literalInst); !errors.Is(err, ErrOriginNotAllowed) || hits.Load() != 2 {
+		t.Fatalf("unexempted literal private IP proxy target = %v, %d proxy hits", err, hits.Load())
+	}
+	expectedConnect, expectedHost = "172.18.0.3:8080", "172.18.0.3:8080"
+	client.UpdateRuntimeConfig(config.SiteOpsConfig{AllowedOrigins: []string{"http://172.18.0.3:8080"}}, proxyCfg, config.UpstreamConfig{})
+	if result, _, err := client.FetchSystemVersion(context.Background(), literalInst); err != nil || result.Version != "v0.2.24" || hits.Load() != 3 {
+		t.Fatalf("exempted literal private IP proxy target = %+v, %v, %d proxy hits", result, err, hits.Load())
+	}
 }
